@@ -8,7 +8,7 @@
 
 That is `examples/explode.rs` at its own 0.4× playback. The subject is intact, then it *is* its own fragments — the "break" is one despawn and a spawn, because the fracture was computed long before. **The red is not a colour choice, it is the whole idea:** every fragment comes back as two meshes, the subject's own surface and the faces this cut just created, so the inside can take a different material. Render both with the skin material and the same fragments stop looking broken and start looking disassembled.
 
-> **This repo is the source of truth.** It owns the crate; changes are made here and nowhere else. [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop) consumes it as a git dependency pinned to a rev, the same way any other consumer would. It was the other way round — a read-only `git subtree split` mirror — until recently, and that inversion is a known stale-read hazard: a `subtree split` carries only *commits*, so anything living uncommitted in the monorepo working tree could never arrive by that route. If you find a `crates/bevy_autogib/` in a monorepo checkout, it is a corpse.
+> **This repo is a read-only mirror; the monorepo is the source of truth.** The crate is developed at `crates/bevy_autogib/` in [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which lists it as a workspace member and depends on it by `path`; this repository is a `git subtree split` history mirror of that directory, pushed by `scripts/mirror_crates.sh` and never pulled back from. An earlier revision of this banner said the reverse, and AG-021 corrected it. **The stale-read hazard it named is real, and it cuts this way:** a `subtree split` carries only *commits*, so anything living uncommitted in the monorepo working tree cannot arrive here at all — which is exactly how a research agent once read this mirror, found no `isomesh` in the manifest, and reported an absence that was true of what it read and false of the crate.
 
 ## Features
 
@@ -247,7 +247,10 @@ Known limitations are listed under "What it deliberately does not do" rather tha
 
 ## Contributing
 
-Issues and PRs here, on this repo — it is the source of truth, not a mirror.
+This repository is a **read-only history mirror**, re-derived by `git subtree split` from
+`crates/bevy_autogib/` in [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop),
+which is where the crate is developed. Nothing is ever edited here and nothing is pulled back, so a PR
+opened against this repo cannot be merged — open issues and PRs on the monorepo instead.
 
 Before opening a PR:
 
@@ -255,7 +258,7 @@ Before opening a PR:
 cargo test                  # unit + tests/leaf.rs + doctests
 cargo build --release       # NOT redundant with `cargo test` — see below
 cargo build --examples
-cargo clippy --all-targets  # three warnings pre-exist; add none
+cargo clippy --all-targets  # 12 warnings pre-exist; add none. See BACKLOG.md's definition of done
 ```
 
 **`cargo build --release` is load-bearing.** `cargo test` compiles dev-dependencies, and the dev-dependency here is the *full* `bevy` umbrella. Cargo unifies features, so under `cargo test` this crate silently gets every `bevy` feature there is and a missing entry in its own `[dependencies]` cannot fail. That is not hypothetical — `WorldAsset` was reached for while only `bevy_scene` was declared, and every test passed on a crate that did not build.

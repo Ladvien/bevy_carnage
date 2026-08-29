@@ -147,6 +147,10 @@ that predated the Tier A/B split.
 
 ## `fracture_cube` — the numbers, in a terminal
 
+> Captured against `isomesh` at `aa82b0b` (`0.0.10`+), the rev `Cargo.toml` pins. Every number in the
+> SOLID block is that validator's answer, so a pin bump is the one change that can move them without
+> any geometry moving.
+
 No window, no GPU, no `App`. A GIF of it would be a still image of text, so here is the text — it is
 the fastest way to see what a settings change does. It keeps the older torso-and-head fixture on
 purpose: it is the smallest subject that is still honestly non-manifold where two shells meet.
@@ -214,6 +218,9 @@ code. Both recorders write one PNG per frame; `tools/gif.sh` does the encode, wi
 palette so two GIFs a week apart are actually comparable.
 
 ```sh
+export FONT=/usr/share/fonts/liberation/LiberationSans-Regular.ttf
+export BOLD=/usr/share/fonts/liberation/LiberationSans-Bold.ttf
+
 cargo run --release --example capture       -- --out frames-demo  --tint demo  --width 720 --height 512 --soften 0.5
 cargo run --release --example capture       -- --out frames-audit --tint audit --width 720 --height 512 --soften 0.25
 cargo run --release --example capture_sever -- --out frames-sever
@@ -222,6 +229,11 @@ WIDTH=560 LEGEND=none  tools/gif.sh frames-demo  docs/explode.gif ""
 WIDTH=560 LEGEND=audit tools/gif.sh frames-audit docs/fracture-tier-ab.gif "Tier A/B — every fragment audited as a solid"
 WIDTH=560 LEGEND=none  tools/gif.sh frames-sever docs/sever.gif ""
 ```
+
+`gif.sh` has no default font path and refuses without one: `FONT` and `BOLD` must both name an
+existing `.ttf`, and it checks before ffmpeg spends the two-pass encode rather than after. The paths
+above are this host's (Linux); Liberation Sans is metrically compatible with the Arial the earlier
+clips were captioned in, so substituting it does not move the caption or the legend.
 
 `LEGEND=none` omits the green/amber/magenta key, which belongs only on the audit-tinted clip: a key
 naming colours that are not in the picture is worse than no key at all. `--width`/`--height` set the

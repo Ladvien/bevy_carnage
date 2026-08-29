@@ -1,19 +1,21 @@
 # What `bevy_autogib` needs from `isomesh`
 
-Written from the consuming side, against `isomesh` at `4369e3c` — the rev `Cargo.toml` pins. Each ask
+Written from the consuming side. The asks were first written against `isomesh` at `4369e3c`; the rev
+`Cargo.toml` pins today is `aa82b0b` (`0.0.10`+), and every verdict below has been re-checked there. Each ask
 says what autogib does with it and what stays blocked without it, so the priority argument is legible
 rather than asserted.
 
-> **Status. Updated by AG-013, which moved the pin to `22c3b35` (`origin/main`).** Three of these five
-> have been answered upstream. Current state, verified at both revs:
+> **Status. Updated by AG-021, which moved the pin to `aa82b0b` (`origin/main`, `0.0.10` plus the
+> unreleased `mass` work); AG-013 before it moved the pin to `22c3b35`.** Three of these five have been
+> answered upstream. Current state, verified at all three revs:
 >
-> | Ask | At `4369e3c` (the old pin) | At `22c3b35` (pinned now) |
-> |---|---|---|
-> | 1 — `TriangleGrid` public | `pub(crate)` | **still `pub(crate)`** — not granted as written |
-> | 2 — mesh field | absent | **`MeshField` exists**, but pseudonormal-signed, not winding-signed |
-> | 3 — attribute-aware weld | absent | **granted** — `weld_split_by` (`weld.rs:338`) |
-> | 4 — convex decomposition | absent | still absent, and still declined |
-> | 5 — fold inside a fan | absent | still absent |
+> | Ask | At `4369e3c` (first pin) | At `22c3b35` (previous pin) | At `aa82b0b` (pinned now) |
+> |---|---|---|---|
+> | 1 — `TriangleGrid` public | `pub(crate)` | **still `pub(crate)`** — not granted as written | **still not granted** — `TriangleGrid` at `validate/tri_grid.rs:141` and `point_triangle_distance_squared` at `:82` are both still `pub(crate)`, as is `nearest_distance_squared` at `:298` |
+> | 2 — mesh field | absent | **`MeshField` exists**, but pseudonormal-signed, not winding-signed | **unchanged** — still pseudonormal-signed; `construct/from_mesh.rs` changed exactly one line across the bump, an `as_chunks` idiom |
+> | 3 — attribute-aware weld | absent | **granted** — `weld_split_by` (`weld.rs:338`) | **still granted** — `weld_split_by` at `weld.rs:338`, `epsilon_for` at `:220`, and `weld.rs` is byte-identical across the bump |
+> | 4 — convex decomposition | absent | still absent, and still declined | **still absent, still declined** — isomesh `README.md:69` ("not here — export the mesh and decompose downstream") and `:182` ("Not yet") |
+> | 5 — fold inside a fan | absent | still absent | **still absent** — `shares_a_vertex` still skips every vertex-sharing pair, `validate/self_intersection.rs:266-267`; the file's only change is the `as_chunks` idiom at `:166` |
 >
 > Also new and not an ask: a public `predicates` module with `orient2d` and `incircle` — Shewchuk's
 > robust predicates, which is the floor AG-008's constrained Delaunay triangulator stands on. isomesh's
@@ -223,6 +225,50 @@ So `MeshReport` detects *one common class* of fan fold topologically, tolerance-
 phase, as long as the caller welds first. That is worth a line in the `validate` docs. **It also means
 ask 5 is worth more to us than this document previously implied**, not less: the topological route
 cannot see a doubly-wound fold, and a narrow-phase check inside a fan is the only thing that can.
+
+---
+
+## What arrived between `22c3b35` and `aa82b0b`, and what it is worth here
+
+291 commits, `0.0.7` → `0.0.10` plus the unreleased `mass` work. Four modules and two `MeshReport`
+fields are new. None is adopted by AG-021, and each refusal has a reason rather than an omission.
+
+- **`validate::sealing` / `SealingReport` — inapplicable, and not a near miss.**
+  `sealing(field, shape, origin, cell_size, positions, indices)` takes `field: &S where S: Sdf` plus a
+  `Shape3` grid: it asks whether the mesh partitions a sample lattice the same way the field's sign
+  does. This crate has no field — it plane-cuts a caller-supplied convex proxy — so there is nothing to
+  pass. It also does **not** answer ask 5: a fan fold is a narrow-phase question about two triangles
+  sharing a vertex, and `sealing` never looks at triangle pairs. **Ask 5 stays open.**
+- **`validate::mesh_hash` — applicable in principle, declined.** `mesh_hash(&MeshBuffer<f64>) -> u64`
+  is a hand-rolled FNV-1a over the three buffer lengths, then position and normal components as raw
+  IEEE bits, then indices — deliberately not `std`'s `DefaultHasher`, so it is stable across toolchain
+  releases. Two reasons it is not adopted: it is `f64`-only and the audit's buffer is
+  `MeshBuffer<f32>`, so it would need a conversion pass whose only consumer is a hash; and
+  `fracture_output_is_bit_identical_across_runs` already compares the fragments themselves, which is
+  strictly stronger than comparing two hashes of them. Revisit only if a *committed golden* hash is
+  ever wanted.
+- **`connectivity::{Air, AirWorld}` — inapplicable.** Incremental connected components of a voxel air
+  sublevel set (`value >= 0`) under dig and fill. This crate's `islands(graph, broken)` runs over a
+  bond graph of convex cells, which is not a lattice. Same word, different problem. Note in passing
+  that 0.0.9's only breaking changes (`Repair::unions` → `relabels`) live in this module, which did not
+  exist at the previously pinned rev — so they are not a break for us at all.
+- **`mass::mass_properties` — applicable, deliberately not adopted here, and worth its own ticket.**
+  Divergence-theorem volume, centre of mass and inertia straight off the triangle surface, plus
+  `asymmetry` = `maxᵢ<ⱼ |Θᵢⱼ − Θⱼᵢ|` before symmetrisation, which sits at the round-off floor for a
+  watertight mesh and rises to the scale of the hole otherwise. **It is not a replacement for
+  `SolidAudit::signed_volume`**: `mass_properties` returns `Err(MassPropertiesUndefined)` on a
+  non-positive volume, which is exactly the inconsistently-oriented fragment whose number that field's
+  doc comment (`audit.rs:101-125`) exists to report and to qualify. It would be an additional field,
+  and `asymmetry` would be this crate's first defect measure that is not a topological count.
+- **`MeshReport::mean_ratio` and `MeshReport::irregular_vertices` — already computed, not surfaced.**
+  Both fall out of the `validate_indexed` call `audit.rs:337` already makes, so exposing them costs no
+  compute — but it is a public API addition to `bevy_autogib` (the audit types are re-exported at
+  `src/lib.rs:13`) and belongs in a ticket of its own. `mean_ratio` is the Grosso & Zint mean-ratio
+  quality `q = 4√3·A / Σᵢlᵢ²`, 1 for equilateral and 0 for degenerate, which is a real question about
+  cap and fan triangles. `irregular_vertices` counts referenced vertices with edge valence ≠ 6, a
+  definition written for **closed** volumes — so on the open render surface every boundary vertex
+  counts as irregular for reasons that have nothing to do with quality. Read it on the proxy cell or
+  not at all, and that caveat has to travel with the field.
 
 ---
 

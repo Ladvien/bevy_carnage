@@ -1,11 +1,11 @@
 # bevy_autogib — BACKLOG
 
-**Updated:** 2026-08-17
+**Updated:** 2026-08-28
 **Companions:** `CLAUDE.md` (rules), `README.md` (what the crate promises),
 `docs/research-brief.md` (the open problems), `docs/isomesh-upstream-asks.md` (what we need from the
 validator).
 
-**15 tickets archived, 6 landed this phase (AG-015 … AG-020), 0 open.** The architectural change this backlog opened with
+**15 tickets archived, 7 landed this phase (AG-015 … AG-021), 0 open.** The architectural change this backlog opened with
 has landed: the crate no longer cuts the triangle soup. It cuts a caller-supplied convex proxy and
 carries the render triangles along as a payload.
 
@@ -17,12 +17,19 @@ argument, and the two corrections carried in from research — are kept because 
 crate is shaped as it is, and because both corrections turned out to need corrections of their own.
 Every ticket, with what it cost and what it falsified, is in `BACKLOG_ARCHIVE.md`.
 
-**One piece of history worth keeping at the top.** This crate is now an independent repository and
-`foundation_vs_slop` consumes it as a pinned git dependency — the reverse of the arrangement most of
-these tickets were written under. Everything they called "Stage 1" (the audit harness, the `isomesh`
-dependency, both research docs, this file) had **never been committed anywhere**; it lived untracked in
-the monorepo working tree, which is why nine of the original eleven tickets named files that did not
-exist in the published crate. See `BACKLOG_ARCHIVE.md`, A-1.
+**One piece of history worth keeping at the top, and it needed a correction of its own.** The monorepo
+is the source of truth: this crate is a `foundation_vs_slop` workspace member at `crates/bevy_autogib/`,
+depended on by `path`, and [`Ladvien/bevy_autogib`](https://github.com/Ladvien/bevy_autogib) is a
+`git subtree split` **history mirror** of that directory, resynced by `scripts/mirror_crates.sh` — which
+says in as many words that "the monorepo is the source of truth; nothing is ever edited on the far side
+and nothing is ever pulled back". An earlier revision of this section claimed the reverse: that the
+mirror was an independent repository the monorepo consumed as a pinned git dependency, and that a
+`crates/bevy_autogib/` in a monorepo checkout "is a corpse". AG-021 corrected it. What survives from
+that note is the *reading* hazard, which is real and cost a session: a `subtree split` carries only
+commits, so everything these tickets called "Stage 1" (the audit harness, the `isomesh` dependency,
+both research docs, this file) was invisible on the mirror for as long as it lived untracked in the
+monorepo working tree — which is why nine of the original eleven tickets named files that did not exist
+there. See `BACKLOG_ARCHIVE.md`, A-1.
 
 ---
 
@@ -40,9 +47,16 @@ exist in the published crate. See `BACKLOG_ARCHIVE.md`, A-1.
 
 ### Definition of done — applies to every ticket
 
-- `cargo test` green. `cargo clippy --all-targets` introduces no new warnings (three pre-exist in
-  `bake.rs`, `soup.rs` and `mesh.rs`). *No `-p` flag: this is a standalone repository now, not a
-  workspace member.*
+- `cargo test` green. `cargo clippy --all-targets` introduces no new warnings. **The baseline is 12, not
+  the "three in `bake.rs`, `soup.rs` and `mesh.rs`" this line claimed until AG-021 measured it:** 6 ×
+  `chunks_exact` with a constant chunk size (`audit.rs:134,632`, `mesh.rs:28,33,838`,
+  `examples/fracture_cube.rs:51`), 2 × `too_many_arguments` (`bake.rs:256`, `examples/explode.rs:198`),
+  and one each of `type_complexity` (`bake.rs:322`), `empty_line_after_doc_comments`
+  (`audit.rs:425`), `items_after_test_module` (`mesh.rs:578`) and `unusual_byte_groupings`
+  (`bond.rs:588`). Nothing in `soup.rs` at all. A stale baseline is where a real new warning hides.
+  *The bare, `-p`-less form of every command in this section is the
+  **mirror's**, where this crate is the whole repository. In a `foundation_vs_slop` checkout it is a
+  workspace member, so each one takes `-p bevy_autogib`.*
 - **`cargo build --release` passes.** Not redundant with `cargo test`: the dev-dependency pulls the full
   `bevy` umbrella and enables features the trimmed `[dependencies]` set does not. A missing feature is
   only visible in the release build.
@@ -121,8 +135,9 @@ them is not.
    `[dependencies]` entry pinned to `rev = "4369e3c"`, with `ALLOWED_DEPS` widened in the same commit —
    but at the time that entry existed only in the monorepo's *working tree*. It was in no commit, in
    either repository, so an agent reading published history could not have found it. **This is now
-   fixed at the root**: `Ladvien/bevy_autogib` is the source of truth and everything is committed here.
-   See `BACKLOG_ARCHIVE.md` A-1, and AG-009 for retiring the monorepo copy.
+   fixed at the root, though not the way this line used to claim:** the monorepo is the source of truth
+   and everything is committed *there*, which the mirror then carries. AG-021 corrected the earlier
+   wording, which had it backwards. See `BACKLOG_ARCHIVE.md` A-1.
 2. **"`signed_distance_from_mesh_winding → SampledField::new → ManifoldDualContouring` works end to end
    today, roughly three lines."** False **at the rev we pin**, which is the only rev that can affect a
    build: none of those symbols exist at `4369e3c`.<br><br>
@@ -323,6 +338,81 @@ the wrong node, so it is now total — a piece that draws nothing keeps its slot
 `None`, bounded by its cell, which is still a perfectly good convex collider. And `fracture_mesh`
 now returns `Fracture { fragments, tree }` rather than a flat `Vec`, because the flat `Vec` no longer
 has a single meaning: `into_leaves()` is the old one.
+
+| [x] | **AG-021 — move the `isomesh` pin to `aa82b0b`, re-record the GIFs, resync the mirror.** 291 commits, `0.0.7` → `0.0.10` plus the unreleased `mass` work. Both lockfiles, the pin-rationale comment, the `fracture_cube` transcript, a re-triage of `docs/isomesh-upstream-asks.md` against the four modules that landed, all three demo GIFs re-recorded on Linux/Vulkan, `tools/gif.sh` freed of its macOS-only font defaults, and two false claims this file, `CLAUDE.md` and `README.md` all carried — which repository owns the crate, and how many clippy warnings pre-exist. | M |
+
+### AG-021, as landed
+
+**Pre-registered prediction: zero numbers move and no test needs re-blessing** — because `weld.rs` and
+`mesh.rs` are byte-identical across the two revs, every counter-producing pass in `validate.rs` is
+line-for-line identical, `collider.rs`'s three predicates and `from_report` are byte-identical, and the
+one behaviour change `0.0.10` advertises loudly (vertex placement on the default extraction path, 135 of
+216 golden hashes rebaselined) sits on a code path this crate never calls — it has no extractor. Contrast
+AG-013, which cost one re-blessed number.
+
+**Confirmed, digit for digit.** `fracture_cube` at `aa82b0b` reproduces the committed transcript
+exactly: `12 of 12` watertight, manifold, χ = 2 and collider-ready; `volume enclosed 0.2493`; `total
+volume 0.2493` at all five granularities; the whole `soften` table unmoved; `adjacency — 31 bonds over
+12 finest fragments`; `2 island(s) of sizes [11, 1]`; `bit-identical: true`. Not one line of
+`docs/DEMOS.md`'s fenced block needed editing. It gained only a provenance stamp naming the rev it was
+captured against — which is what makes the claim re-checkable next time rather than argued.
+
+**Second pre-registered prediction: the re-recorded GIFs differ from the committed ones in pixels but
+not in verdict. Confirmed, and measured.** Frame for frame against the committed
+`fracture-tier-ab.gif`, 0.8% of pixels differ and the tint census does not: zero amber and zero magenta
+pixels outside the burnt-in legend, in the old clip and the new one alike, so every fragment is still
+green. The pixel difference has two host causes and no code cause — the committed clips were encoded on
+macOS against Metal and these on Linux against Vulkan, where anti-aliasing and gamma differ; and the
+captions are set in Liberation Sans, metrically compatible with Arial but not the same glyph outlines,
+so the text fills the same box with different edges. Read that diff as a change of machine, not a change
+of geometry.
+
+**`docs/fracture-baseline.gif` was deliberately not re-recorded.** It is the *before* picture from the
+soup cutter that predated the Tier A/B split, and that code no longer exists, so there is nothing left
+to record it from. Regenerating it would have replaced a historical contrast with a duplicate of the
+current clip.
+
+**`tools/gif.sh` had a second path, and it was deleted rather than doubled.** `FONT` and `BOLD`
+defaulted to `/System/Library/Fonts/Supplemental/Arial.ttf` and its bold twin — paths that exist on one
+of the machines this repo is built on, with the failure landing in `magick` *after* ffmpeg had spent the
+entire two-pass encode. A Linux default would have been two paths to one output; instead both variables
+are now `${…:?}` with an explicit existence check placed before ffmpeg runs, and `docs/DEMOS.md` carries
+the paths for the host it was last run on.
+
+**Nothing new was adopted from upstream, and every refusal is written down** rather than left as an
+omission: `validate::sealing` (there is no field to pass it — this crate plane-cuts a caller-supplied
+proxy — and it does not answer ask 5 either, since it never looks at triangle pairs, so **ask 5 stays
+open**), `validate::mesh_hash` (`f64`-only against an `f32` buffer, and
+`fracture_output_is_bit_identical_across_runs` already compares the fragments themselves, which is
+strictly stronger than comparing two hashes of them), `connectivity` (incremental components over a
+voxel lattice, not a bond graph of convex cells — same word, different problem), and
+`mass::mass_properties` plus `MeshReport`'s `mean_ratio` and `irregular_vertices`, all three applicable
+and all three public API additions that deserve their own ticket. `mass_properties` in particular is
+**not** a replacement for `SolidAudit::signed_volume`: it returns `Err(MassPropertiesUndefined)` on a
+non-positive volume, which is exactly the inconsistently-oriented fragment that field exists to report.
+`docs/isomesh-upstream-asks.md` carries the full triage and a third rev column.
+
+**Two stale claims were corrected while the files were open, both of which actively misdirected.**
+
+*Which repository owns the crate.* This file, `CLAUDE.md` and `README.md` each asserted that
+`Ladvien/bevy_autogib` is the source of truth and that a `crates/bevy_autogib/` in a monorepo checkout
+"is a corpse". The tooling says otherwise: `scripts/mirror_crates.sh` states "the monorepo is the source
+of truth; nothing is ever edited on the far side and nothing is ever pulled back", `bevy_autogib` is in
+its `CRATES` and `PUBLIC_CRATES` lists, the root `Cargo.toml` lists `crates/bevy_autogib` as a workspace
+member and depends on it by `path`, and there is no standalone checkout of the mirror on this machine.
+The corpse was the live copy. All three notes now say: the monorepo is the source of truth, the mirror is
+a `git subtree split` of it, and the bare `-p`-less build commands are the *mirror's* form — in a
+monorepo checkout every one of them takes `-p bevy_autogib`. The *reading* hazard the old note was
+reaching for survives, because it is real: a `subtree split` carries only commits, so anything
+uncommitted in the monorepo working tree cannot appear on the mirror at all.
+
+*How many clippy warnings pre-exist.* The definition of done said "three, in `bake.rs`, `soup.rs` and
+`mesh.rs`". Measured: **12**, in six files, and **none in `soup.rs`** — six of `chunks_exact` with a
+constant chunk size, two of `too_many_arguments`, and one each of `type_complexity`,
+`empty_line_after_doc_comments`, `items_after_test_module` and `unusual_byte_groupings`. The list is now
+enumerated by file and line, because "no new warnings" is unfalsifiable against a baseline that is
+wrong: a real regression hides in the gap. AG-021 itself adds none — it changes no `.rs` file, and every
+warning sits in source it never touched.
 
 ---
 

@@ -20,14 +20,23 @@ OUT=${2:?usage: gif.sh <frames-dir> <out.gif> "<caption>"}
 CAPTION=${3:-}
 
 LEGEND=${LEGEND:-audit}
-FONT=${FONT:-/System/Library/Fonts/Supplemental/Arial.ttf}
-BOLD=${BOLD:-/System/Library/Fonts/Supplemental/Arial Bold.ttf}
+# **No default font path, deliberately.** These were `/System/Library/Fonts/Supplemental/Arial.ttf`,
+# which exists on exactly one of the machines this repo is built on and fails on the others — and it
+# fails in `magick`, after ffmpeg has already spent the entire two-pass encode. Name both files at the
+# call site; `docs/DEMOS.md`'s recipe carries the paths for the host it was last run on. Arial and
+# Liberation Sans are metrically compatible, so substituting one for the other does not move the
+# caption or the legend.
+FONT=${FONT:?set FONT to a regular-weight .ttf — see docs/DEMOS.md}
+BOLD=${BOLD:?set BOLD to a bold-weight .ttf — see docs/DEMOS.md}
 WIDTH=${WIDTH:-640}
 FPS=${FPS:-30}
 
 [ -d "$FRAMES" ] || { echo "gif.sh: no such directory: $FRAMES" >&2; exit 1; }
 count=$(find "$FRAMES" -name 'frame*.png' | wc -l | tr -d ' ')
 [ "$count" -gt 0 ] || { echo "gif.sh: no frame*.png in $FRAMES" >&2; exit 1; }
+for f in "$FONT" "$BOLD"; do
+    [ -f "$f" ] || { echo "gif.sh: no such font file: $f" >&2; exit 1; }
+done
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

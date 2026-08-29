@@ -3137,8 +3137,8 @@ dependencies = [
 
 [[package]]
 name = "isomesh"
-version = "0.0.7"
-source = "git+https://github.com/Ladvien/isomesh?rev=22c3b35#22c3b354acd9e8e08bb56ed72aebc07400d383a0"
+version = "0.0.10"
+source = "git+https://github.com/Ladvien/isomesh?rev=aa82b0b#aa82b0b69bfb5829b0e4f18a3c3934d3652e3040"
 dependencies = [
  "libm",
 ]

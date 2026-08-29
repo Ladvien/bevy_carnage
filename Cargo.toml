@@ -44,19 +44,42 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 # `seed_from_path` and the canonical soup order exist to prevent. Bump it deliberately, in a commit that
 # re-blesses the locked topology counts, or not at all.
 #
-# **Bumped once, `4369e3c` → `22c3b35` (AG-013), and here is what that cost and bought.** Cost: one
-# re-blessed number. `supports_inside_outside` gained a `non_manifold_vertices == 0` clause, so the
-# torso+head baseline's collider-ready count went 4 → 1. That is a *correction*, not a regression — the
-# old policy let a bowtie vertex through, and ten of those twelve fragments have one. No emitted
-# geometry moved, and it cannot: the fracture is `soup.rs` and this dependency only ever measures it.
-# Bought: `weld_split_by` (the composite-key weld AG-005 was scoped to hand-roll), and `predicates`
-# with `orient2d`/`incircle` — Shewchuk's robust predicates, which is the floor AG-008's CDT stands on.
-# Still `no_std` with `libm` as its only dependency, so the leaf property is unchanged.
+# **A git rev rather than the registry, deliberately, now that there is a choice.** isomesh publishes:
+# `0.0.10` went to crates.io on 2026-08-27, and for a `0.0.x` Cargo's caret range admits that version
+# alone, so `isomesh = "0.0.10"` would be an exact, checksummed pin. The rev is kept anyway because
+# `origin/main` carries `isomesh::mass` — divergence-theorem volume, centre of mass, inertia and an
+# `asymmetry` leak detector — which is in no published release, and because a bump has to be re-read
+# against a *tree* either way. Revisit when the registry catches up.
 #
-# **Pin to a rev that is pushed.** The sibling working copy's `HEAD` was 229 commits past `4369e3c` and
-# *unpublished*; a git dependency cannot resolve a commit that exists on one machine. `22c3b35` is
-# `origin/main`.
-isomesh = { git = "https://github.com/Ladvien/isomesh", rev = "22c3b35", default-features = false }
+# **Bumped twice.**
+#
+# `4369e3c` → `22c3b35` (AG-013). Cost: one re-blessed number. `supports_inside_outside` gained a
+# `non_manifold_vertices == 0` clause, so the torso+head baseline's collider-ready count went 4 → 1.
+# That is a *correction*, not a regression — the old policy let a bowtie vertex through, and ten of
+# those twelve fragments have one. Bought: `weld_split_by` (the composite-key weld AG-005 was scoped to
+# hand-roll), and `predicates` with `orient2d`/`incircle`.
+#
+# `22c3b35` → `aa82b0b` (AG-021), 291 commits, `0.0.7` → `0.0.10` plus the unreleased `mass` work.
+# **Cost: zero re-blessed numbers, and that is a measurement rather than a hope.** `weld.rs` and
+# `mesh.rs` are byte-identical across the two revs. Every compute pass in `validate.rs` that produces a
+# counter this crate reads is line-for-line identical — the face triage, the edge-run scan behind
+# `boundary_edges`/`inconsistently_oriented_edges`/`non_manifold_edges`, the vertex-link pass behind
+# `non_manifold_vertices`, the degenerate-area test, the duplicate-vertex lattice probe, and the derived
+# χ/genus block. So are `ColliderReadiness`'s three predicates and `collider::from_report`.
+# `ValidateConfig::WELD_EPSILON_REL` is still `1e-4`, so `CELL_SIZE` and every threshold derived from it
+# are unmoved. `MeshReport`'s `Display` block is byte-identical, so even a printed report is the same
+# text. The only change in `collider.rs` is `triangle_indices` switching to `as_chunks::<3>()` — same
+# output. The one behaviour change 0.0.10 advertises loudly — vertex positions moving on the default
+# extraction path, 135 of 216 golden hashes rebaselined — is unreachable from here: this crate never
+# calls an extractor. Bought: `validate::sealing`, `validate::mesh_hash`, `connectivity`, `mass`, and two
+# recorded-never-gated `MeshReport` fields; none adopted, each triaged in
+# `docs/isomesh-upstream-asks.md`. Still `no_std` with `libm` as its only dependency — and that is
+# checked in `Cargo.lock`, not by `tests/leaf.rs`, which only parses this manifest's text.
+#
+# **Pin to a rev that is pushed.** `aa82b0b69bfb5829b0e4f18a3c3934d3652e3040` is `refs/heads/main` on
+# GitHub, confirmed with `git ls-remote`. A git dependency cannot resolve a commit that exists on one
+# machine, and that cost a session once already.
+isomesh = { git = "https://github.com/Ladvien/isomesh", rev = "aa82b0b", default-features = false }
 
 # **Examples only.** The crate's own `bevy` above is trimmed to what a bake needs. A runnable example
 # additionally needs a window, an event loop (winit) and the 3D render pipeline, so it takes the full

@@ -4,13 +4,13 @@ Runtime mesh fracture: take whatever meshes an entity actually loaded, recursive
 
 ## Source of truth
 
-**This repository is the source of truth.** [`Ladvien/bevy_autogib`](https://github.com/Ladvien/bevy_autogib) owns the crate; changes are made here and nowhere else. `foundation_vs_slop` consumes it as a git dependency pinned to a rev, the same way any other consumer would.
+**The monorepo is the source of truth.** This crate lives at `crates/bevy_autogib/` in `foundation_vs_slop`, which lists it as a workspace member and depends on it by `path`. [`Ladvien/bevy_autogib`](https://github.com/Ladvien/bevy_autogib) is a **history mirror** of that directory, re-derived by `git subtree split` on every sync (`scripts/mirror_crates.sh`, whose own header states it: "the monorepo is the source of truth; nothing is ever edited on the far side and nothing is ever pulled back"). Changes are made in the monorepo; the mirror is pushed, never pulled from.
 
-**It was the other way round until this branch, and that inversion is a known stale-read hazard.** This repo used to be a read-only `git subtree split` mirror of `foundation_vs_slop/crates/bevy_autogib/`, and a `subtree split` carries only *commits* — so the whole audit harness, the `isomesh` dependency and both research docs, which lived uncommitted in the monorepo working tree, could never arrive by that route. A research agent read the mirror, found no `isomesh` in the manifest, and reported it as fact; the claim was true of what it read and false of the crate. If you find a `crates/bevy_autogib/` in any monorepo checkout, it is a corpse — read this repo instead.
+**An earlier revision of this file claimed the exact reverse, and the tooling disproves it.** It said the mirror owned the crate, that the monorepo consumed it as a pinned git dependency, and that "if you find a `crates/bevy_autogib/` in any monorepo checkout, it is a corpse". The monorepo directory is the live one, and there is no standalone checkout of the mirror on the machines this is built on. AG-021 corrected the note. **The hazard it was reaching for is still real, and it is about reading:** a `subtree split` carries only *commits*, so anything living uncommitted in the monorepo working tree — as the whole audit harness, the `isomesh` dependency and both research docs once did — cannot arrive on the mirror at all. A research agent read the mirror, found no `isomesh` in the manifest, and reported it as fact; the claim was true of what it read and false of the crate. Read the monorepo, and read committed history.
 
 ## Build and test
 
-A leaf — `bevy` with defaults off, optional `serde`, and `isomesh` for validation — so it builds and tests on its own, with no `-p` flag and no workspace above it:
+A leaf — `bevy` with defaults off, optional `serde`, and `isomesh` for validation — so it builds and tests on its own with no workspace above it. The commands below are the **mirror's** form, where this crate is the whole repository; in a `foundation_vs_slop` checkout it is a workspace member and every one of them takes `-p bevy_autogib`:
 
 ```
 cargo test              # 16 unit + leaf.rs + doctests
