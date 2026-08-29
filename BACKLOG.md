@@ -610,6 +610,27 @@ cumulative ejecta count runs 3, 7, 12, 18, 26 — every plug divided into exactl
 pleasant second-order effect: many small plugs leave many small pools, which overlap into irregular
 spatter rather than the single tidy disc one plug left.
 
+**A defect this ticket nearly shipped, caught by writing the claim down before trusting it.**
+`ejecta_soften` is the twelfth field on `FractureSettings`, which is `serde(deny_unknown_fields)` with
+**no struct-level default** — so every field is required on deserialize, and adding one refuses any
+authored file that enumerated the others. At *load* time, which no build catches. The consuming game's
+`config.ron` lists all eleven previous dials exhaustively, so the bump would have taken its release
+build green and then refused the config at startup. Found while writing the pin-bump comment, which
+asserted the opposite; checking the file was what disproved it.
+
+The fix is the pairing `CutSettings::bores` already used: `#[serde(default = "default_ejecta_soften")]`
+plus the existing `deny_unknown_fields`. **Missing takes the shipped value; unknown is still an
+error** — a default that also swallowed typos would be a fallback, and this is not that. Three tests
+now hold it: the serde default and the `Default` impl must agree (or a config that *omits* the dial
+renders differently from one that never had it, which nobody would look for), the shipped settings
+must pass `validate`, and — the one that would actually have caught this — the exact eleven-field
+block from the game's own `config.ron`, copied rather than paraphrased, must still deserialize. That
+last test needs a format, so `ron` joins `[dev-dependencies]`; it is already in the lockfile via
+`bevy`, and `tests/leaf.rs` scopes its closed-dependency ratchet to `[dependencies]` for this case.
+
+**Any dial added to `FractureSettings` from now on needs the same treatment**, and the note is on the
+field rather than only here.
+
 **Still deliberately absent.** The pools are flat discs of one shared unit-radius circle asset scaled
 per pool, not projected decals; and nothing in the crate moves a plug or its pieces.
 

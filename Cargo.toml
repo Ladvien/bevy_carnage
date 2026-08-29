@@ -87,6 +87,13 @@ isomesh = { git = "https://github.com/Ladvien/isomesh", rev = "aa82b0b", default
 # `[dependencies]` only, deliberately.
 [dev-dependencies]
 bevy = { version = "0.19.0" }
+# **A RON parser, for one test and one reason.** `FractureSettings` is `deny_unknown_fields` with every
+# field required, so adding a dial breaks every authored file that enumerated the others — at load time,
+# which no compile catches. `a_config_written_before_ejecta_soften_still_loads` pins that against the
+# real shape a consumer authors, and it cannot be written without a format. Free in practice: `ron` is
+# already in the lockfile as a `bevy` dependency, and `tests/leaf.rs` scopes its closed-dependency
+# ratchet to `[dependencies]` for exactly this kind of case.
+ron = { version = "0.12" }
 
 [features]
 default = ["serde"]

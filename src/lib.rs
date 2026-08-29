@@ -193,7 +193,26 @@ pub struct FractureSettings {
     /// How much the drawn fragment is rounded — see [`CutSettings::soften`].
     pub soften: f32,
     /// How much the ejected debris is rounded — see [`CutSettings::ejecta_soften`].
+    ///
+    /// **Carries a serde default, and it is the first field here that needed one.** This struct is
+    /// `deny_unknown_fields` with no struct-level default, so every field is *required* on
+    /// deserialize — which means adding one silently breaks every authored file that enumerated the
+    /// others, at load time, in a way no compile catches. Measured on the consuming game: its
+    /// `config.ron` lists all eleven previous dials exhaustively, so shipping this field without a
+    /// default would have refused the config at startup.
+    ///
+    /// The pair is the right combination rather than a weakening: a *misspelled* field still fails,
+    /// because `deny_unknown_fields` catches it, while a *missing* one takes the shipped value. Any
+    /// dial added here from now on should do the same.
+    #[cfg_attr(feature = "serde", serde(default = "default_ejecta_soften"))]
     pub ejecta_soften: f32,
+}
+
+/// The shipped [`FractureSettings::ejecta_soften`], for serde to reach when an authored file predates
+/// the field. **Must agree with [`FractureSettings::default`]**, or a file that omits the dial gets a
+/// different look than one that never had it — pinned by `the_serde_default_matches_the_shipped_one`.
+fn default_ejecta_soften() -> f32 {
+    0.55
 }
 
 impl Default for FractureSettings {
@@ -326,5 +345,82 @@ impl Plugin for AutogibPlugin {
         app.init_resource::<FractureCache>()
             .init_resource::<FractureSettings>()
             .add_systems(Update, bake_fractures.in_set(AutogibSystems));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A serde default and a `Default` impl that disagree are worse than either alone.**
+    ///
+    /// [`FractureSettings`] is `deny_unknown_fields` with every field required, so a new dial needs an
+    /// explicit `serde(default = …)` or it breaks every authored file that enumerated the others — at
+    /// load time, which no compile catches. The trap that replaces it: the two defaults drift, and a
+    /// config that *omits* the dial then renders differently from one that never had it, which is a
+    /// difference nobody would think to look for.
+    ///
+    /// Pinned per field that carries an explicit serde default. There is one today.
+    #[test]
+    fn the_serde_default_matches_the_shipped_one() {
+        assert_eq!(
+            default_ejecta_soften(),
+            FractureSettings::default().ejecta_soften,
+            "serde would hand an authored file that omits `ejecta_soften` a different value than \
+             `FractureSettings::default()` uses, so the same config would look different depending \
+             on whether the field was written down"
+        );
+    }
+
+    /// **An authored file written before this dial existed must still load.**
+    ///
+    /// The regression test for the defect that produced `default_ejecta_soften`: this struct is
+    /// `deny_unknown_fields` with every field required, so a new dial refuses every config that listed
+    /// the others — at load time, which no build catches. The block below is *exactly* the eleven
+    /// fields the consuming game's `config.ron` enumerated before AG-024, copied rather than
+    /// paraphrased, because a paraphrase would stop being the thing that broke.
+    ///
+    /// The second half is the pairing that makes the default safe rather than a weakening: a
+    /// **misspelled** field is still refused. Missing takes the shipped value; unknown is an error.
+    #[test]
+    #[cfg(feature = "serde")]
+    fn a_config_written_before_ejecta_soften_still_loads() {
+        let authored = r#"(
+            pieces_base: 14,
+            ref_extent: 0.5,
+            min_pieces: 6,
+            max_pieces: 40,
+            min_fraction: 0.18,
+            max_depth: 12,
+            plane_jitter: 0.35,
+            size_spread: 0.5,
+            weak_axis: 0.75,
+            cap_relief: 0.30,
+            soften: 0.5,
+        )"#;
+        let s: FractureSettings = ron::from_str(authored)
+            .expect("a config listing the eleven pre-AG-024 dials must still deserialize");
+        assert_eq!(
+            s.ejecta_soften,
+            default_ejecta_soften(),
+            "the omitted dial must take the shipped default"
+        );
+        assert_eq!(s.pieces_base, 14, "the authored fields must survive");
+        assert_eq!(s.soften, 0.5, "the authored fields must survive");
+        s.validate().expect("an authored config plus the default dial must validate");
+
+        let typo = authored.replace("soften: 0.5,", "soften: 0.5, sofen: 0.9,");
+        assert!(
+            ron::from_str::<FractureSettings>(&typo).is_err(),
+            "a misspelled field must still be refused — `deny_unknown_fields` is what makes the \
+             serde default safe, and a default that also swallowed typos would be a fallback"
+        );
+    }
+
+    /// The shipped dials must pass the crate's own door check — otherwise every caller that starts
+    /// from `default()` and validates (which is what the crate tells them to do) is refused.
+    #[test]
+    fn the_shipped_settings_validate() {
+        FractureSettings::default().validate().expect("the shipped FractureSettings must validate");
     }
 }
