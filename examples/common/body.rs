@@ -53,26 +53,32 @@ pub const SOFTENINGS: [f32; 4] = [0.0, 0.25, 0.5, 0.75];
 /// roots — uncut. That is dismemberment; the last entry is gibs; the two in between are the range.
 pub const GRANULARITIES: [usize; 4] = [6, 12, 20, TARGET];
 
-/// **Where the demo's shots land**: `(frame, entry point, radius)`, subject-local.
+/// **Where the demo's shots land**: `(frame, entry point, radius, shatter)`, subject-local.
 ///
 /// Front to back along `-z`, because the camera sits at `+z` and the entry hole is the thing worth
 /// seeing. Radii are about a fortieth of the subject's height — a bullet, not a cannon — and every
 /// one is comfortably above `bevy_autogib`'s own minimum bore radius.
-pub const SHOTS: [(u32, Vec3, f32); 5] = [
-    (12, Vec3::new(0.06, 0.14, 0.0), 0.035),   // torso, high right
-    (32, Vec3::new(-0.09, -0.05, 0.0), 0.035), // torso, low left
-    (52, Vec3::new(0.00, 0.46, 0.0), 0.030),   // head
-    (72, Vec3::new(0.14, -0.18, 0.0), 0.035),  // torso, low right
-    (92, Vec3::new(-0.32, 0.06, 0.0), 0.030),  // through the left arm
+///
+/// **The `shatter` column climbs on purpose**, 3 → 8 across the five shots. A plug is one convex
+/// prism, so ejected whole it reads as a dowel — the channel was cut by something corer-shaped and
+/// the material it removed looks cored. The clip walks up the dial so the difference between a few
+/// big chunks and a spray is visible in one recording rather than described.
+pub const SHOTS: [(u32, Vec3, f32, u32); 5] = [
+    (12, Vec3::new(0.06, 0.14, 0.0), 0.035, 3),   // torso, high right
+    (32, Vec3::new(-0.09, -0.05, 0.0), 0.035, 4), // torso, low left
+    (52, Vec3::new(0.00, 0.46, 0.0), 0.030, 5),   // head
+    (72, Vec3::new(0.14, -0.18, 0.0), 0.035, 6),  // torso, low right
+    (92, Vec3::new(-0.32, 0.06, 0.0), 0.030, 8),  // through the left arm
 ];
 
-/// One shot as a bore straight through the subject, entering at `+z`.
+/// One shot as a bore straight through the subject, entering at `+z`, its plug breaking into
+/// `shatter` pieces.
 ///
 /// The segment is longer than the subject is deep on purpose: a `Bore` *is* its segment, so a shot
 /// that goes clean through is one that starts and ends outside the solid. Ending it inside would
 /// make the far end a pit floor instead, which is the other thing the same type says.
-pub fn bore_at(at: Vec3, radius: f32) -> Bore {
-    Bore::new(at + Vec3::Z * 0.6, at - Vec3::Z * 0.6, radius)
+pub fn bore_at(at: Vec3, radius: f32, shatter: u32) -> Bore {
+    Bore { shatter, ..Bore::new(at + Vec3::Z * 0.6, at - Vec3::Z * 0.6, radius) }
 }
 
 pub const GRAVITY: f32 = 18.0;
@@ -414,7 +420,7 @@ impl BodyMaterials {
             // paint.
             interior: material(world, Color::srgb(0.46, 0.07, 0.07), 0.42),
             aim,
-            pool: material(world, Color::srgb(0.24, 0.03, 0.035), 0.18),
+            pool: material(world, Color::srgb(0.17, 0.019, 0.024), 0.16),
             disc: world.resource_mut::<Assets<Mesh>>().add(Mesh::from(Circle::new(1.0))),
         }
     }

@@ -95,6 +95,24 @@ pub struct CutSettings {
     ///
     /// `0.0` leaves the fragment exactly as cut. Around `0.5` reads as flesh; `1.0` is a pebble.
     pub soften: f32,
+    /// **How much the ejected debris is rounded**, separately from [`soften`](Self::soften).
+    ///
+    /// Two values because the constraint that pins one does not apply to the other, and the gap is
+    /// measured. `soften` relaxes each drawn piece *independently* and does not pin the boundary it
+    /// shares with the piece beside it, so raising it on a **bored** subject pulls the wedges around a
+    /// channel apart: at 0.40 on the demo body the eight shards of each hole separate visibly, red
+    /// gaps radiate from every entry wound and the subject reads as disassembled rather than shot.
+    /// (Compact fracture fragments barely show it — a bore's shards are long thin wedges meeting over
+    /// large faces through the middle of the cell, which is what makes the shrink obvious.)
+    ///
+    /// **Ejecta share a boundary with nothing.** They are debris that already left the subject, so
+    /// nothing can open up beside them and they can be rounded freely — which is most of the
+    /// difference between a plug's pieces reading as sharp coins and reading as lumps of meat. A
+    /// caller wanting one look everywhere sets both the same.
+    ///
+    /// Tier B, like `soften`: the convex cells are untouched, so every collider and every audit
+    /// verdict is identical at any value.
+    pub ejecta_soften: f32,
     /// Drives every plane direction and every jitter draw — the only source of variation.
     pub seed: u32,
     /// **Channels subtracted from the proxy before any cut** — a bullet hole is one of these.
@@ -121,13 +139,14 @@ impl CutSettings {
             weak_axis: d.weak_axis,
             cap_relief: d.cap_relief,
             soften: d.soften,
+            ejecta_soften: d.ejecta_soften,
             seed,
             bores: Vec::new(),
         }
     }
 }
 
-/// How hard to break things. Eleven dials, all bake-time — nothing here decides how a chunk *moves*
+/// How hard to break things. Twelve dials, all bake-time — nothing here decides how a chunk *moves*
 /// after it exists, because that is the caller's physics, not this crate's business.
 ///
 /// The piece count is driven by the mesh's own bounding size rather than authored per asset:
@@ -173,6 +192,8 @@ pub struct FractureSettings {
     pub cap_relief: f32,
     /// How much the drawn fragment is rounded — see [`CutSettings::soften`].
     pub soften: f32,
+    /// How much the ejected debris is rounded — see [`CutSettings::ejecta_soften`].
+    pub ejecta_soften: f32,
 }
 
 impl Default for FractureSettings {
@@ -189,6 +210,9 @@ impl Default for FractureSettings {
             weak_axis: 0.75,
             cap_relief: 0.30,
             soften: 0.5,
+            // **Rounded even when the body is not.** Debris shares a boundary with nothing, so the
+            // constraint that forces `soften` to 0 on a bored subject does not reach it.
+            ejecta_soften: 0.55,
         }
     }
 }
@@ -228,9 +252,12 @@ impl FractureSettings {
                 self.plane_jitter
             ));
         }
-        for (name, v) in
-            [("weak_axis", self.weak_axis), ("cap_relief", self.cap_relief), ("soften", self.soften)]
-        {
+        for (name, v) in [
+            ("weak_axis", self.weak_axis),
+            ("cap_relief", self.cap_relief),
+            ("soften", self.soften),
+            ("ejecta_soften", self.ejecta_soften),
+        ] {
             if !(0.0..=1.0).contains(&v) {
                 return Err(format!("bevy_autogib: {name} is {v} — it must be in [0, 1]."));
             }
@@ -263,6 +290,7 @@ impl FractureSettings {
             weak_axis: self.weak_axis,
             cap_relief: self.cap_relief,
             soften: self.soften,
+            ejecta_soften: self.ejecta_soften,
             seed,
             bores,
         }

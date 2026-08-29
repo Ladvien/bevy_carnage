@@ -33,11 +33,15 @@ use bevy_autogib::Bore;
 const WIDTH: u32 = 720;
 const HEIGHT: u32 = 540;
 
-/// **Rendered flat, and that is a measurement rather than a taste.** `soften` relaxes each
-/// fragment's drawn skin *independently*, so where two shards share a boundary the two relaxations
-/// pull apart and a hairline opens along every wedge boundary radiating from a hole — which in a clip
-/// about holes reads as cracks. At `0.0` the shards share their boundary vertices exactly and the
-/// only opening in the subject is the one that was bored.
+/// **The body is rendered flat, and that is a measurement rather than a taste.** `soften` relaxes
+/// each fragment's drawn skin *independently* and does not pin the boundary it shares with its
+/// neighbour, so on a bored subject the wedges around a channel pull apart. Measured at 0.40: the
+/// eight shards of every hole separate outright, red gaps radiate from each entry wound, and the
+/// subject reads as disassembled rather than shot — much worse than the hairline AG-022 predicted.
+/// At `0.0` the shards share their boundary vertices exactly and the only opening is the bore.
+///
+/// **The gore is rounded anyway**, on `CutSettings::ejecta_soften`, which `Baked::bake` leaves at its
+/// shipped 0.55. Debris shares a boundary with nothing, so nothing can open up beside it.
 const SOFTEN: f32 = 0.0;
 
 /// The finest frontier: index into [`body::GRANULARITIES`]. The coarsest, because this clip is about
@@ -78,14 +82,14 @@ fn main() {
     // ordering trick `capture_sever` uses for its intact frames.
     rec.app().main.add_systems(Update, (integrate, body::bleed).chain());
 
-    let last = SHOTS.last().map(|(f, _, _)| *f).unwrap_or(0);
+    let last = SHOTS.last().map(|(f, _, _, _)| *f).unwrap_or(0);
     for frame in 0..last + TAIL + ORBIT {
-        for (at_frame, at, radius) in SHOTS {
+        for (at_frame, at, radius, shatter) in SHOTS {
             if frame == at_frame {
                 // **Every shot re-bakes**, because a bore is a bake input: the channel is part of the
                 // subject's shape, so a new hole is a new subject rather than an edit to this one.
-                bores.push(body::bore_at(at, radius));
-                info!("capture_holes: frame {frame} — bore at {at:?}, radius {radius}");
+                bores.push(body::bore_at(at, radius, shatter));
+                info!("capture_holes: frame {frame} — bore at {at:?}, radius {radius}, plug into {shatter}");
                 rebake(&mut rec, &bores);
             }
         }

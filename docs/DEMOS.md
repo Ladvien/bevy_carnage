@@ -148,7 +148,7 @@ that predated the Tier A/B split.
 
 ## `bullet_holes` — a channel through the solid, not a decal
 
-![A blue blocked-out humanoid standing still while five shots punch through it one at a time, each leaving a small dark-red hole in the blue skin and throwing a red chunk of gore out the far side that arcs down, lands and spreads into a dark pool on the floor, then the camera orbits a third of a turn to show the wider exit wounds and the pools together](holes.gif)
+![A blue blocked-out humanoid standing still while five shots punch through it one at a time, each leaving a small dark-red hole in the blue skin and throwing a handful of rounded red chunks out the far side that arc down, land and spread into overlapping dark pools on the floor, then the camera orbits a third of a turn to show the wider exit wounds and the spatter together](holes.gif)
 
 A hole here is geometry. `Bore { from, to, radius, sides, jaggedness, flare }` is a convex prism, and
 subtracting a convex prism from a convex cell has a closed form — `C \ P = ⋃ₖ (C ∩ Hₖ⁺ ∩ H₁⁻ … ∩
@@ -170,6 +170,27 @@ hole and the chunk that comes out of it are the *same* operation, the chunk is a
 like every other piece (`Collider::convex_hull` and it tumbles), and the bore went from being the one
 thing in the crate that destroyed volume to conserving it exactly — `shards + plugs = the cell`, which
 the transcript above now prints.
+
+**And it breaks up, because one prism cannot look like anything but a prism.** `Bore::shatter` runs the
+plug through `soup::choose_plane` — the crate's one cut policy, the same twenty lines the body fracture
+uses — so the pieces come apart across their narrow dimension and inherit `plane_jitter`, `size_spread`
+and `weak_axis` from the bake that made them. The five shots in the clip walk the dial from 3 up to 8
+so the difference is visible in one recording. Volume is conserved either way: the pieces are
+half-space intersections of the plug, so they tile it exactly.
+
+Two things were tried and rejected on the evidence. Cutting the plug with a *random* direction instead
+of the weak axis (on the theory that a plug is blown apart rather than failing along its own weak axis)
+turns a thin rod into flat flakes with visibly less mass — the weak-axis cuts give chunkier pieces, so
+the shared policy wins. And running `soup::fracture` recursively on the plug is wrong for AG-003's
+exact reason: a plug's skin is two *disconnected* patches, so `Shell::open` reads each as a sheet and
+carries it whole instead of clipping it.
+
+`ejecta_soften` is why the gore is rounded while the body is faceted. `soften` relaxes each drawn piece
+independently without pinning the boundary it shares with its neighbour, and on a bored subject that
+pulls the wedges around every channel apart — measured at 0.40, the eight shards of each hole separate
+outright and the subject reads as disassembled rather than shot, much worse than the hairline AG-022
+predicted. Debris shares a boundary with nothing, so it can be rounded freely; that is most of the
+difference between sharp coins and lumps of meat.
 
 A plug is deliberately **not** a fragment. Its barrel faces are the same rings the shards got, so a
 `ProxyCell` in the proxy would be bonded to every shard around it by a match that is working correctly
@@ -255,11 +276,11 @@ purpose: it is the smallest subject that is still honestly non-manifold where tw
     severing fragment 21's 2 bond(s) leaves 2 island(s) of sizes [11, 1]
 
   bore — one channel through the torso, and the same subject re-audited
-    radius 0.050 · 8 sides · jaggedness 0.35 · flare 0.25
+    radius 0.050 · 8 sides · jaggedness 0.35 · flare 0.25 · plug into 4
     cells 2 → 9 · leaves 12 · volume 0.2493 → 0.2472 · removed 0.0022 (the channel)
     every shard still closed, manifold, χ = 2:  12 of 12
-    ejected 1 plug(s) holding 0.0022 · shards + plugs 0.2493 = the subject 0.2493
-    every plug also closed, manifold, χ = 2:    1 of 1
+    ejected 4 plug(s) holding 0.0022 · shards + plugs 0.2493 = the subject 0.2493
+    every plug also closed, manifold, χ = 2:    4 of 4
 
    THE SOLID — each fragment's convex proxy cell, every face, closed
   ─────────────────────────────────────────────────────────────────────────────────

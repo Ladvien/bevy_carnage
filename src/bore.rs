@@ -38,7 +38,7 @@ use bevy::log::{info, warn};
 use bevy::math::Vec3;
 
 use crate::proxy::{FaceKind, ProxyCell};
-use crate::soup::{EPS, Plane, Soup, WELD, hash_f32, plane_basis, split_render};
+use crate::soup::{EPS, Plane, Soup, WELD, choose_plane, hash_f32, plane_basis, split_render};
 
 /// **A channel to subtract from the proxy** — a bullet hole, a drill, a spear thrust.
 ///
@@ -73,15 +73,34 @@ pub struct Bore {
     /// `radius * (1 + flare)`. Tilts each barrel plane instead of adding any, so the channel stays a
     /// convex prism and the shard count does not change. `0.0` is a straight bore.
     pub flare: f32,
+    /// **How many pieces the ejected plug breaks into**, in `1..=MAX_SHATTER`.
+    ///
+    /// `1` leaves the plug whole, and whole is what a plug *is*: one convex prism. That reads as a
+    /// dowel — the channel was cut by a corer, so the material it removed looks cored. Anything above
+    /// 1 breaks it with the crate's own cut policy ([`crate::soup::choose_plane`], the same twenty
+    /// lines the body fracture uses), so the pieces come apart across their narrow dimension and
+    /// inherit [`plane_jitter`](crate::CutSettings::plane_jitter),
+    /// [`size_spread`](crate::CutSettings::size_spread) and
+    /// [`weak_axis`](crate::CutSettings::weak_axis) from the bake that produced them.
+    ///
+    /// The shatter faces are ordinary cut faces, so [`cap_relief`](crate::CutSettings::cap_relief)
+    /// crumples them and [`soften`](crate::CutSettings::soften) rounds them — which is most of the
+    /// difference between four rod segments and four lumps. Clamped rather than refused: a count out
+    /// of range has an obvious nearest meaning, where a barrel with two sides does not.
+    ///
+    /// **Volume is conserved either way.** The pieces are half-space intersections of the plug, so
+    /// they tile it exactly; shattering changes how the material leaves, never how much.
+    pub shatter: u32,
 }
 
 impl Bore {
-    /// A bore with the shipped channel dials — 8 sides, a little raggedness, a little flare.
+    /// A bore with the shipped channel dials — 8 sides, a little raggedness, a little flare, and a
+    /// plug that comes apart into four.
     ///
     /// Assign to the rest, the way [`crate::CutSettings::new`] is used:
     /// `Bore { jaggedness: 0.0, ..Bore::new(a, b, 0.04) }`.
     pub fn new(from: Vec3, to: Vec3, radius: f32) -> Self {
-        Bore { from, to, radius, sides: 8, jaggedness: 0.35, flare: 0.25 }
+        Bore { from, to, radius, sides: 8, jaggedness: 0.35, flare: 0.25, shatter: 4 }
     }
 }
 
@@ -99,6 +118,10 @@ const MIN_RADIUS: f32 = 1.0e-2;
 /// Barrel faces beyond which the shard count is the cost and the roundness is not the benefit: 24
 /// planes already read as smooth, and each one is a shard with its own two meshes.
 const MAX_SIDES: u32 = 24;
+/// **The most pieces one plug may become.** Each is an entity with two meshes and its own trajectory,
+/// and a plug is small: past a dozen the pieces are below the size anything can be seen at, so the
+/// cost is real and the benefit is not.
+const MAX_SHATTER: u32 = 12;
 
 /// The bore's outward half-space planes: `sides` barrel planes, then the entry and exit caps.
 ///
@@ -297,6 +320,74 @@ pub(crate) struct Plug {
     /// along because a caller with several plugs from several shots would otherwise have to correlate
     /// two parallel arrays to work out which way each one should go.
     pub(crate) direction: Vec3,
+    /// [`Bore::shatter`], carried so the caller can break the plug up after its skin is assigned.
+    pub(crate) shatter: u32,
+}
+
+/// **Break one plug into `want` convex pieces**, carrying its skin along.
+///
+/// The plug is a convex prism, which is exactly what an apple corer leaves — so a plug ejected whole
+/// reads as a dowel however good the channel is. This breaks it with [`choose_plane`], the crate's own
+/// and only cut policy, so gore comes apart by the same rule as the body it came out of.
+///
+/// **A cut loop, but deliberately not [`crate::soup::fracture`]'s.** Calling that on a plug was tried
+/// and is wrong: a plug's skin is the two disconnected patches where the channel crossed the surface,
+/// and `Shell::open` reads each of them as a *sheet* — AG-003's protection for capes — so they would be
+/// carried whole to one piece instead of being clipped. What the two loops share is the part that
+/// decides the *look*, which is `choose_plane`; what differs is bookkeeping this has none of, because
+/// debris needs no tree, no bonds and no frontier.
+///
+/// `want <= 1` returns the plug untouched, so the shatter costs nothing when it is off. Volume is
+/// conserved exactly: every piece is a half-space intersection of the plug.
+pub(crate) fn shatter(
+    cell: ProxyCell,
+    render: Soup,
+    want: u32,
+    seed: u32,
+    weak_axis: f32,
+    plane_jitter: f32,
+    size_spread: f32,
+) -> Vec<(ProxyCell, Soup)> {
+    let mut live: Vec<(ProxyCell, Soup)> = vec![(cell, render)];
+    let want = want.clamp(1, MAX_SHATTER) as usize;
+    if want == 1 {
+        return live;
+    }
+    // The same shape as the main loop's: a bound on attempts, so a plug that refuses to divide
+    // (every plane missing it) ends rather than spinning.
+    let hard_cap = want as u32 * 4 + 8;
+    let mut cut = 0u32;
+    while live.len() < want && cut < hard_cap {
+        let ranked = |i: usize| -> f32 {
+            let v = live[i].0.volume();
+            if size_spread <= 0.0 {
+                return v;
+            }
+            let h = hash_f32(seed ^ (i as u32).wrapping_mul(0x9E37_79B9));
+            v * (1.0 - size_spread * 0.5 + size_spread * h)
+        };
+        // SORT-OK: `total_cmp` over the ranking with the index as tie-break — a total order, so which
+        // piece breaks next is a function of the geometry alone.
+        let Some(i) = (0..live.len()).max_by(|&a, &b| ranked(a).total_cmp(&ranked(b)).then(b.cmp(&a)))
+        else {
+            break;
+        };
+        let s = seed
+            .wrapping_add(cut.wrapping_mul(2_654_435_761))
+            .wrapping_add(live.len() as u32);
+        let plane = choose_plane(&live[i].0, s, weak_axis, plane_jitter);
+        cut += 1;
+        // **`FaceKind::Cut`, not `Bore`.** A shatter face is a fracture face on a piece of debris, so
+        // it should be crumpled and rounded like every other one. The plug's *barrel* faces stay
+        // `Bore` and stay flat: they are as long as the subject is deep, and `cap_relief` scaled by
+        // their radius would fold a piece through itself. Both kinds ride along on the same cell.
+        let (Some(above), Some(below)) = live[i].0.clip(&plane, FaceKind::Cut) else { continue };
+        let (mut ra, mut rb) = (Soup::default(), Soup::default());
+        split_render(&live[i].1, &plane, &mut ra, &mut rb);
+        live[i] = (above, ra);
+        live.push((below, rb));
+    }
+    live
 }
 
 /// Subtract every bore from the proxy; hand back the prisms that landed and the plugs they pushed out.
@@ -343,6 +434,7 @@ pub(crate) fn apply(
                         prism: landed.len(),
                         exit: bore.to,
                         direction: axis,
+                        shatter: bore.shatter,
                     });
                 }
             }
@@ -397,6 +489,10 @@ mod tests {
     }
 
     /// A bore straight up the box's `Y` axis, entering below it and leaving above it.
+    ///
+    /// `shatter: 1` on purpose, so every test built on this measures **one** plug: the plug's own
+    /// closure, its volume against the channel's, its skin, its exit. Shattering is a separate claim
+    /// with its own tests, and mixing the two would mean no test measured either cleanly.
     fn through_y(radius: f32, sides: u32, jaggedness: f32, flare: f32) -> Bore {
         Bore {
             from: Vec3::new(0.0, -1.5, 0.0),
@@ -405,7 +501,13 @@ mod tests {
             sides,
             jaggedness,
             flare,
+            shatter: 1,
         }
+    }
+
+    /// The same bore, broken into `shatter` pieces.
+    fn shattered_y(radius: f32, shatter: u32) -> Bore {
+        Bore { shatter, ..through_y(radius, 8, 0.0, 0.0) }
     }
 
     fn bake(cube: &Mesh, proxy: &[ProxyCell], target: usize, bores: Vec<Bore>) -> crate::Fracture {
@@ -740,6 +842,7 @@ mod tests {
             sides: 8,
             jaggedness: 0.0,
             flare: 0.0,
+            shatter: 1,
         };
         let prism = prism(&swallow).expect("a 0.5-radius bore is a valid channel");
         let left = apply(&cells, &[swallow]).0;
@@ -874,12 +977,15 @@ mod tests {
     /// the subject's own surface at each end where the shot went in and came out. `cap` is the wall,
     /// `outer` is the patches, and a plug through a solid must have both.
     ///
-    /// Measured at `soften = 0.0`, for the reason
+    /// Measured with **both** softening dials at zero, for the reason
     /// `the_skin_opens_exactly_where_the_channel_crosses_it` already records: the relaxation subdivides
     /// and moves the drawn surface, and on a plug it *grows* the end discs rather than shrinking them —
-    /// measured 0.244 against the carve's own 0.089 at the shipped `soften = 0.5`, because a disc
-    /// welded to a barrel ring bulges outward when it relaxes. That is the softening working; it is not
-    /// what this test is about.
+    /// 0.244 against the carve's own 0.089 at `soften = 0.5`, because a disc welded to a barrel ring
+    /// bulges outward when it relaxes.
+    ///
+    /// `ejecta_soften` has to be pinned here too, and this test is what found that out: it went red at
+    /// 0.256 the moment that dial gained its shipped 0.55 default, which is exactly the evidence that
+    /// the new dial reaches ejecta rather than being ignored.
     #[test]
     fn a_plug_carries_the_wall_and_the_skin_the_channel_tore_out() {
         let (cube, proxy) = cube_parts();
@@ -889,6 +995,7 @@ mod tests {
             &CutSettings {
                 bores: vec![through_y(0.12, 24, 0.0, 0.0)],
                 soften: 0.0,
+                ejecta_soften: 0.0,
                 ..CutSettings::new(1, 0.04, 0x5EED)
             },
         );
@@ -955,6 +1062,82 @@ mod tests {
             bake(&cube, &proxy, 8, Vec::new()).ejecta.is_empty(),
             "an unbored bake ejected a plug"
         );
+    }
+
+    /// **Shattering divides the plug and nothing else: the pieces tile it exactly.**
+    ///
+    /// The dial that answers "the plug looks like someone used an apple corer" — because a plug *is*
+    /// a convex prism, and one prism cannot look like anything else. Prediction: the piece count
+    /// tracks what was asked (a fat plug divides cleanly at every count the crate allows), the summed
+    /// volume is the plug's own to within the fracture's usual `1e-3`, and out-of-range counts clamp
+    /// rather than refusing the bore and losing the hole with it.
+    #[test]
+    fn shattering_divides_the_plug_and_conserves_it() {
+        let (cube, proxy) = cube_parts();
+        // The whole plug, unshattered, is the reference volume.
+        let whole = bake(&cube, &proxy, 1, vec![shattered_y(0.12, 1)]);
+        assert_eq!(whole.ejecta.len(), 1, "shatter 1 must leave the plug whole");
+        let plug_volume = whole.ejecta[0].cell.volume();
+        assert!(plug_volume > 0.0, "the reference plug enclosed nothing");
+
+        for want in [1u32, 2, 3, 4, 6, 8, 12] {
+            let baked = bake(&cube, &proxy, 1, vec![shattered_y(0.12, want)]);
+            let n = baked.ejecta.len();
+            assert_eq!(
+                n, want as usize,
+                "asked for {want} pieces of a 0.12 plug and got {n}"
+            );
+            let sum: f32 = baked.ejecta.iter().map(|e| e.cell.volume()).sum();
+            assert!(
+                (sum - plug_volume).abs() < 1.0e-3,
+                "shatter {want}: the pieces enclose {sum}, but the plug is {plug_volume} — \
+                 shattering must divide it, not resize it"
+            );
+        }
+
+        // Clamped, not refused: losing the hole because a look dial was out of range would be the
+        // worse failure by far.
+        assert_eq!(
+            bake(&cube, &proxy, 1, vec![shattered_y(0.12, 0)]).ejecta.len(),
+            1,
+            "shatter 0 must clamp to one whole plug"
+        );
+        assert_eq!(
+            bake(&cube, &proxy, 1, vec![shattered_y(0.12, 999)]).ejecta.len(),
+            MAX_SHATTER as usize,
+            "shatter 999 must clamp to MAX_SHATTER"
+        );
+    }
+
+    /// **Every shattered piece is still a closed convex solid, so it is still a collider.**
+    ///
+    /// The shatter is a run of half-space intersections over a cell that was already one, so this is
+    /// the same theorem a third time — and it must survive the thin plugs a real calibre produces,
+    /// which is where slivers live. Swept over calibre and count for that reason.
+    #[test]
+    fn every_shattered_piece_is_a_closed_convex_solid() {
+        let (cube, proxy) = cube_parts();
+        for radius in [0.02f32, 0.05, 0.12] {
+            for want in [2u32, 4, 8, 12] {
+                let baked = bake(&cube, &proxy, 6, vec![shattered_y(radius, want)]);
+                let what = format!("radius {radius}, shatter {want}");
+                assert!(!baked.ejecta.is_empty(), "{what}: nothing was ejected");
+                for (i, e) in baked.ejecta.iter().enumerate() {
+                    let a = crate::audit_cell(&e.cell)
+                        .unwrap_or_else(|err| panic!("{what}: piece {i} unauditable: {err}"));
+                    assert_eq!(a.boundary_edges, 0, "{what}: piece {i} is open: {a:?}");
+                    assert!(a.is_manifold(), "{what}: piece {i} is not a manifold: {a:?}");
+                    assert_eq!(
+                        a.euler_characteristic, 2,
+                        "{what}: piece {i} is not a topological sphere: {a:?}"
+                    );
+                    assert!(
+                        a.supports_inside_outside,
+                        "{what}: piece {i} is not solid enough for a collider: {a:?}"
+                    );
+                }
+            }
+        }
     }
 
     /// Summed triangle area of a mesh — the skin measurement the opening test compares.

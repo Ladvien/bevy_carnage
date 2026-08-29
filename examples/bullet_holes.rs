@@ -12,8 +12,14 @@
 //!   [ / ]           smaller / larger calibre
 //!   J               jaggedness — cycle how ragged the barrel is (0 / 0.35 / 0.7 / 1.0)
 //!   F               flare — cycle how much wider the exit is (0 / 0.25 / 0.6)
+//!   K               shatter — how many pieces the ejected plug breaks into (1 / 2 / 4 / 6 / 8)
 //!   R               reset to an unbored subject
 //! ```
+//!
+//! **Press `K` first.** At 1 the plug leaves whole, and a plug is one convex prism — so it reads as a
+//! dowel, because the channel was cut by something corer-shaped and the material it removed is
+//! exactly that shape. Anything above 1 breaks it with the crate's own cut policy, and the same shot
+//! reads as gore.
 //!
 //! **A shot re-bakes.** A bore is a bake *input*, not damage applied afterwards, because a channel is
 //! part of the subject's shape rather than part of its breakage. That is also why `sever` has no bore
@@ -51,6 +57,10 @@ const JAGGEDNESS: [f32; 4] = [0.0, 0.35, 0.7, 1.0];
 /// The exit-flare settings `F` cycles.
 const FLARES: [f32; 3] = [0.0, 0.25, 0.6];
 
+/// How many pieces the plug breaks into, as `K` cycles them. **1 is included deliberately**: it is the
+/// corer look, and having it on the dial is the only way to see what the others are fixing.
+const SHATTERS: [u32; 5] = [1, 2, 4, 6, 8];
+
 /// Where the next shot enters, in subject-local space.
 #[derive(Resource)]
 struct Aim(Vec3);
@@ -71,12 +81,14 @@ struct Dials {
     calibre: usize,
     jaggedness: usize,
     flare: usize,
+    shatter: usize,
 }
 
 impl Default for Dials {
     fn default() -> Self {
-        // The middle calibre, and the shipped `Bore::new` look for the other two.
-        Dials { calibre: 2, jaggedness: 1, flare: 1 }
+        // The middle calibre, and the shipped `Bore::new` look for the rest — including its
+        // `shatter: 4`, which is index 2 here.
+        Dials { calibre: 2, jaggedness: 1, flare: 1, shatter: 2 }
     }
 }
 
@@ -150,7 +162,7 @@ fn setup(world: &mut World) {
 fn spawn_hud(world: &mut World) {
     world.spawn((
         Text::new(
-            "arrows / WASD  aim\n        Space  fire a channel through the subject\n        [ / ]  calibre     J jaggedness     F flare     R reset",
+            "arrows / WASD  aim\n        Space  fire a channel through the subject\n        [ / ]  calibre     J jaggedness     F flare     K shatter     R reset",
         ),
         TextFont { font_size: FontSize::Px(15.0), ..default() },
         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
@@ -174,13 +186,15 @@ fn hud(
     mut line: Query<&mut Text, With<HudStatus>>,
 ) {
     let text = format!(
-        "{}\n{} hole(s)  |  {} shards standing  |  radius {:.3}  ·  jaggedness {:.2}  ·  flare {:.2}",
+        "{}\n{} hole(s)  |  {} shards standing  |  radius {:.3}  ·  jaggedness {:.2}  ·  flare \
+         {:.2}  ·  plug into {}",
         status.0,
         bores.0.len(),
         standing.iter().count(),
         CALIBRES[dials.calibre],
         JAGGEDNESS[dials.jaggedness],
         FLARES[dials.flare],
+        SHATTERS[dials.shatter],
     );
     for mut t in &mut line {
         if t.0 != text {
@@ -247,6 +261,17 @@ fn fire(world: &mut World) {
             format!("jaggedness {now:.2} — each barrel plane bites inward, never outward");
         return;
     }
+    if pressed(world, KeyCode::KeyK) {
+        let mut d = world.resource_mut::<Dials>();
+        d.shatter = (d.shatter + 1) % SHATTERS.len();
+        let now = SHATTERS[d.shatter];
+        world.resource_mut::<Status>().0 = if now == 1 {
+            "plug into 1 — whole, which is one convex prism: the corer look".into()
+        } else {
+            format!("plug into {now} — broken by the same cut policy the body uses")
+        };
+        return;
+    }
     if pressed(world, KeyCode::KeyF) {
         let mut d = world.resource_mut::<Dials>();
         d.flare = (d.flare + 1) % FLARES.len();
@@ -267,14 +292,15 @@ fn fire(world: &mut World) {
     }
     if shot {
         let at = world.resource::<Aim>().0;
-        let (radius, jaggedness, flare) = {
+        let (radius, jaggedness, flare, shatter) = {
             let d = world.resource::<Dials>();
-            (CALIBRES[d.calibre], JAGGEDNESS[d.jaggedness], FLARES[d.flare])
+            (CALIBRES[d.calibre], JAGGEDNESS[d.jaggedness], FLARES[d.flare], SHATTERS[d.shatter])
         };
-        let bore = Bore { jaggedness, flare, ..body::bore_at(at, radius) };
+        let bore = Bore { jaggedness, flare, ..body::bore_at(at, radius, shatter) };
         info!(
             "bore: entry {:?} → {:?}, radius {radius}, {} sides, jaggedness {jaggedness}, flare \
-             {flare} — re-baking, because a channel is part of the subject's shape",
+             {flare}, plug into {shatter} — re-baking, because a channel is part of the subject's \
+             shape",
             bore.from, bore.to, bore.sides
         );
         world.resource_mut::<Bores>().0.push(bore);

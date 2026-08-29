@@ -5,7 +5,7 @@
 `docs/research-brief.md` (the open problems), `docs/isomesh-upstream-asks.md` (what we need from the
 validator).
 
-**15 tickets archived, 9 landed this phase (AG-015 … AG-023), 0 open.** The architectural change this backlog opened with
+**15 tickets archived, 10 landed this phase (AG-015 … AG-024), 0 open.** The architectural change this backlog opened with
 has landed: the crate no longer cuts the triangle soup. It cuts a caller-supplied convex proxy and
 carries the render triangles along as a payload.
 
@@ -555,6 +555,64 @@ projected decals — this crate has no floor and no decal pipeline, and the exam
 to prove a point about geometry. And nothing in the crate moves a plug: `direction` and `exit` are
 facts about the `Bore`, and turning them into a velocity is the caller's, exactly as it is for a
 fragment.
+
+| [x] | **AG-024 — the plug breaks up, because one convex prism looks like one convex prism.** Reported as "the plugs look like someone used an apple coring cutter", and that is literally what the geometry was. `Bore::shatter` (1..=12, clamped) runs the plug through `soup::choose_plane` — extracted verbatim from `fracture`'s loop so there is still exactly one cut policy — and `CutSettings::ejecta_soften` rounds the debris without touching the body. Per-shot `shatter` in the demo, a `K` key in the windowed one, two tests. | M |
+
+### AG-024, as landed
+
+**Pre-registered prediction: extracting `choose_plane` out of the cut loop moves nothing**, because it
+is a verbatim lift of a pure function of `(cell, mixed seed, weak_axis, plane_jitter)` and the seed
+mixing — which folds in the live frontier size and is load-bearing for every bake this crate has ever
+produced — stays with the caller.
+
+**Confirmed, and checked before anything was built on it.** 76 tests green, `31 bonds over 12 finest
+fragments`, `volume enclosed 0.2493`, `bit-identical: true`, and the bore census unchanged. The
+extraction was verified on its own commit-worth of work precisely because a silent drift there would
+have re-partitioned every asset and been attributed to the shatter.
+
+**Sharing the policy rather than copying it is the whole point.** The *look* of every broken thing in
+this crate comes from those twenty lines. Two copies would drift the first time either was tuned, and
+gore that came apart along a different rule than the body it came out of would be a second answer to
+one question.
+
+**Three things were tried and rejected on evidence, not taste.**
+
+*Calling `soup::fracture` recursively on the plug.* The obvious reuse, and wrong for AG-003's exact
+reason: a plug's skin is the two **disconnected** patches where the channel crossed the surface, so
+`Shell::open` reads each as a *sheet* — the cape protection — and carries it whole to one piece instead
+of clipping it. What the two loops can share is `choose_plane`; what they cannot share is shell
+classification, which a plug needs none of.
+
+*Cutting the plug along a random direction instead of its weak axis.* The theory was sound — a plug is
+blown apart by an impact rather than failing along its own weak cross-section, so `weak_axis` is
+importing the wrong physical story. Recorded both: random planes through a thin rod produce flat flakes
+with visibly less mass, while the weak-axis cuts give chunkier segments that read better. Reverted to
+the shared dial. The theory was right and the picture disagreed.
+
+*Raising `soften` so the gore rounds.* This is where the ticket found a defect worse than the one AG-022
+recorded. At `soften = 0.40` the demo body does not merely show hairlines — the eight shards of every
+hole **separate outright**, red gaps radiate from each entry wound, and the subject reads as
+disassembled rather than shot. Cause: `soften` relaxes each drawn piece independently and never pins
+the boundary it shares with its neighbour. Compact fracture fragments barely show it; a bore's shards
+are long thin wedges meeting over large faces through the middle of the cell, so the shrink is obvious.
+Fixing `soften` to pin shared boundaries would need per-vertex neighbour knowledge and would re-bless
+every bake in the repo — out of scope, recorded here. `ejecta_soften` is the narrow fix: **ejecta share
+a boundary with nothing**, so they can be rounded freely, and that is most of the difference between
+sharp coins and lumps of meat. Twelve dials now, not eleven.
+
+**One test earned its keep immediately.**
+`a_plug_carries_the_wall_and_the_skin_the_channel_tore_out` went red at 0.256 the moment
+`ejecta_soften` gained its 0.55 default — which is exactly the evidence that the new dial reaches
+ejecta rather than being silently ignored. It now pins both softening dials and says why.
+
+**Measured, from the recorder's own log.** The five shots ask for 3, 4, 5, 6 and 8 pieces and the
+cumulative ejecta count runs 3, 7, 12, 18, 26 — every plug divided into exactly what was asked. A
+pleasant second-order effect: many small plugs leave many small pools, which overlap into irregular
+spatter rather than the single tidy disc one plug left.
+
+**Still deliberately absent.** The pools are flat discs of one shared unit-radius circle asset scaled
+per pool, not projected decals; and nothing in the crate moves a plug or its pieces.
+
 
 
 ---

@@ -183,8 +183,8 @@ fn main() {
     println!();
     println!("  bore — one channel through the torso, and the same subject re-audited");
     println!(
-        "    radius {:.3} · {} sides · jaggedness {:.2} · flare {:.2}",
-        bore.radius, bore.sides, bore.jaggedness, bore.flare
+        "    radius {:.3} · {} sides · jaggedness {:.2} · flare {:.2} · plug into {}",
+        bore.radius, bore.sides, bore.jaggedness, bore.flare, bore.shatter
     );
     println!(
         "    cells {} → {bored_roots} · leaves {} · volume {plain_volume:.4} → {bored_volume:.4} · \

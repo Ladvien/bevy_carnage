@@ -375,6 +375,7 @@ pub(crate) fn fracture(
         weak_axis,
         cap_relief,
         soften,
+        ejecta_soften,
         seed,
         ref bores,
     } = *cut;
@@ -541,44 +542,7 @@ pub(crate) fn fracture(
         let s = seed
             .wrapping_add((cut_index as u32).wrapping_mul(2_654_435_761))
             .wrapping_add(live.len() as u32);
-        // **Cut across the piece's narrow dimension, not at a random angle.** The cut face is
-        // perpendicular to the normal, so the direction the piece is *longest* along is the one that
-        // gives the smallest cross-section — which is where a real thing comes apart. Sampling a few
-        // candidates and keeping the longest is most of Sellán et al.'s "break across weak regions"
-        // for the cost of a few dot products, and `weak_axis = 0` samples once, which is exactly the
-        // behaviour every bake before this had.
-        let centroid = pieces[parent].cell.centroid();
-        let candidates = 1 + (weak_axis.clamp(0.0, 1.0) * 7.0).round() as u32;
-        let mut normal = random_dir(s);
-        if candidates > 1 {
-            let span_of = |n: Vec3| {
-                let (lo, hi) = pieces[parent].cell.span_along(n, centroid);
-                hi - lo
-            };
-            let mut best = span_of(normal);
-            for k in 1..candidates {
-                let d = random_dir(s ^ k.wrapping_mul(0x9E37_79B9));
-                let span = span_of(d);
-                // SORT-OK: strictly greater, scanned in candidate order, so a tie keeps the first —
-                // a total order over the candidate list and a function of the geometry alone.
-                if span > best {
-                    best = span;
-                    normal = d;
-                }
-            }
-        }
-        // **Slide the plane off centre.** A plane through the centroid halves the piece, and halving
-        // every piece every time is what makes the output read as uniform shards. The offset is
-        // measured against how far *this* piece reaches along *this* normal, scaled back toward the
-        // centre by `plane_jitter` — so with jitter below 1.0 the plane is always strictly inside
-        // the cell and a cut can never be silently lost to a plane that missed.
-        let offset = if plane_jitter > 0.0 {
-            let (lo, hi) = pieces[parent].cell.span_along(normal, centroid);
-            (lo + (hi - lo) * hash_f32(s ^ 0x5BD1_E995)) * plane_jitter
-        } else {
-            0.0
-        };
-        let plane = Plane { point: centroid + normal * offset, normal };
+        let plane = choose_plane(&pieces[parent].cell, s, weak_axis, plane_jitter);
 
         let (Some(above), Some(below)) = pieces[parent].cell.clip(&plane, crate::proxy::FaceKind::Cut)
         else {
@@ -629,7 +593,8 @@ pub(crate) fn fracture(
     // red without a second material path.
     let ejecta: Vec<Ejected> = plugs
         .into_iter()
-        .map(|plug| {
+        .enumerate()
+        .flat_map(|(n, plug)| {
             let mut render = Soup::default();
             if let Some(skin) = torn.get(plug.prism) {
                 for (t, tri) in skin.idx.iter().enumerate() {
@@ -641,21 +606,97 @@ pub(crate) fn fracture(
                     }
                 }
             }
-            Ejected {
+            // **And then it comes apart.** A plug is one convex prism, which is what a corer leaves;
+            // breaking it with the crate's own cut policy is what turns cored material into gore. The
+            // seed folds in the plug's index so two channels through one subject do not shatter
+            // identically, and the shape dials are the bake's own — one look, one set of dials.
+            let (exit, direction) = (plug.exit, plug.direction);
+            crate::bore::shatter(
+                plug.cell,
+                render,
+                plug.shatter,
+                seed.wrapping_add((n as u32).wrapping_mul(0x27D4_EB2F)),
+                weak_axis,
+                plane_jitter,
+                size_spread,
+            )
+            .into_iter()
+            .map(move |(cell, render)| Ejected {
                 piece: Piece {
-                    cell: plug.cell,
+                    cell,
                     render,
                     sheets: Vec::new(),
                     relief: cap_relief,
-                    soften,
+                    // **Debris is rounded on its own dial.** See `CutSettings::ejecta_soften`: a
+                    // bored subject must be drawn flat or its wedges separate, and gore has no
+                    // neighbour to separate from.
+                    soften: ejecta_soften,
                 },
-                exit: plug.exit,
-                direction: plug.direction,
-            }
+                exit,
+                direction,
+            })
+            .collect::<Vec<_>>()
         })
         .collect();
 
     (pieces, FragmentTree::from_nodes(nodes, cuts), ejecta)
+}
+
+/// **Where to cut one convex cell, given a mixed seed and the shape dials.** The crate's single cut
+/// policy.
+///
+/// Lifted verbatim out of [`fracture`]'s loop when the bore learned to shatter its plug, and shared
+/// rather than copied for one reason: the *look* of every broken thing in this crate comes from these
+/// twenty lines, and two copies would drift the moment either was tuned. Gore that came apart along a
+/// different rule than the body it came out of would be a second answer to one question.
+///
+/// `s` is the caller's already-mixed seed. Mixing stays with the caller because the two loops count
+/// different things — [`fracture`] folds in the live frontier size, which is load-bearing for every
+/// bake this crate has ever produced and must not be reinterpreted here.
+///
+/// # Cut across the piece's narrow dimension, not at a random angle
+///
+/// The cut face is perpendicular to the normal, so the direction the piece is *longest* along is the
+/// one that gives the smallest cross-section — which is where a real thing comes apart. Sampling a
+/// few candidates and keeping the longest is most of Sellán et al.'s "break across weak regions" for
+/// the cost of a few dot products, and `weak_axis = 0` samples once, which is exactly the behaviour
+/// every bake before that dial existed had.
+///
+/// # Slide the plane off centre
+///
+/// A plane through the centroid halves the piece, and halving every piece every time is what makes
+/// the output read as uniform shards. The offset is measured against how far *this* piece reaches
+/// along *this* normal, scaled back toward the centre by `plane_jitter` — so with jitter below 1.0
+/// the plane is always strictly inside the cell and a cut can never be silently lost to a plane that
+/// missed.
+pub(crate) fn choose_plane(cell: &ProxyCell, s: u32, weak_axis: f32, plane_jitter: f32) -> Plane {
+    let centroid = cell.centroid();
+    let candidates = 1 + (weak_axis.clamp(0.0, 1.0) * 7.0).round() as u32;
+    let mut normal = random_dir(s);
+    if candidates > 1 {
+        let span_of = |n: Vec3| {
+            let (lo, hi) = cell.span_along(n, centroid);
+            hi - lo
+        };
+        let mut best = span_of(normal);
+        for k in 1..candidates {
+            let d = random_dir(s ^ k.wrapping_mul(0x9E37_79B9));
+            let span = span_of(d);
+            // SORT-OK: strictly greater, scanned in candidate order, so a tie keeps the first —
+            // a total order over the candidate list and a function of the geometry alone.
+            if span > best {
+                best = span;
+                normal = d;
+            }
+        }
+    }
+    let offset = if plane_jitter > 0.0 {
+        let (lo, hi) = cell.span_along(normal, centroid);
+        (lo + (hi - lo) * hash_f32(s ^ 0x5BD1_E995)) * plane_jitter
+    } else {
+        0.0
+    };
+    Plane { point: centroid + normal * offset, normal }
 }
 
 /// Split a render payload by a plane into both half-spaces. **Clipping only** — a render fragment is a
