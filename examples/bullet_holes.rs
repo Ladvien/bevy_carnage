@@ -61,6 +61,20 @@ const FLARES: [f32; 3] = [0.0, 0.25, 0.6];
 /// corer look, and having it on the dial is the only way to see what the others are fixing.
 const SHATTERS: [u32; 5] = [1, 2, 4, 6, 8];
 
+/// **How far in front of the subject the aim marker floats.**
+///
+/// `Aim` is a point on the bore's *axis*, not on the surface — so drawn at the aim point itself the
+/// marker sits **inside the torso** and is invisible, which is exactly what the first run of this
+/// example showed. Pushed out along `+z` it sits on the line the shot travels instead.
+///
+/// **Small on purpose.** The first fix used 0.42, which is visible but wrong in a subtler way: the
+/// camera is off-axis, so a marker that far forward parallaxes away from the hole it predicts and
+/// stops being an aiming aid. The subject's own front faces sit at `z = 0.10` (arms) to `0.14`
+/// (torso), so 0.20 clears the skin by more than the marker's radius while staying close enough that
+/// marker and entry wound read as the same place. `sever.rs` has the same latent problem and a
+/// different excuse: its blows are regions, not rays, so its marker has no line to sit on.
+const MARKER_STANDOFF: f32 = 0.20;
+
 /// Where the next shot enters, in subject-local space.
 #[derive(Resource)]
 struct Aim(Vec3);
@@ -93,6 +107,12 @@ impl Default for Dials {
 }
 
 /// Marks the line reporting the dials and what the last shot did.
+///
+/// **Everything that reaches this `Text` is ASCII, and that is a constraint rather than a style.**
+/// Bevy's default font atlas has neither U+00B7 `·` nor U+2014 `—`, so both render as missing-glyph
+/// boxes — found the first time this example was run, in the status line and then again in the message
+/// `K` produces. `sever.rs` uses plain hyphens throughout for the same reason. The window title and
+/// the `info!` logs are exempt: those go to the window manager and the terminal, not the atlas.
 #[derive(Component)]
 struct HudStatus;
 
@@ -132,7 +152,11 @@ fn main() {
 fn setup(world: &mut World) {
     // Nearer than the other examples: a 0.035 hole on a 1.0-tall subject is a smudge at the shared
     // framing, and this example exists to look at the hole.
-    let camera = Transform::from_xyz(1.35, 1.15, 1.75).looking_at(ORIGIN, Vec3::Y);
+    //
+    // **Aimed below `ORIGIN`, because `ORIGIN` is the subject's feet-on-floor anchor and not its
+    // middle.** Pointed at `ORIGIN` the subject's legs ran off the bottom of the window — measured on
+    // the first run of this example, at the shipped 960x680.
+    let camera = Transform::from_xyz(1.50, 1.15, 1.95).looking_at(ORIGIN - Vec3::Y * 0.16, Vec3::Y);
     world.spawn((Camera3d::default(), camera));
     light_and_floor(world);
 
@@ -146,7 +170,7 @@ fn setup(world: &mut World) {
         AimMarker,
         Mesh3d(marker),
         MeshMaterial3d(materials.aim.clone()),
-        Transform::from_translation(ORIGIN + aim),
+        Transform::from_translation(ORIGIN + aim + Vec3::Z * MARKER_STANDOFF),
     ));
 
     world.insert_resource(baked);
@@ -186,8 +210,11 @@ fn hud(
     mut line: Query<&mut Text, With<HudStatus>>,
 ) {
     let text = format!(
-        "{}\n{} hole(s)  |  {} shards standing  |  radius {:.3}  ·  jaggedness {:.2}  ·  flare \
-         {:.2}  ·  plug into {}",
+        // **ASCII only, and that is not fussiness.** The `·` separators here rendered as
+        // missing-glyph boxes the first time this example was ever actually run: Bevy's default font
+        // atlas has no U+00B7. The legend above survived because it was already ASCII.
+        "{}\n{} hole(s)  |  {} shards standing  |  radius {:.3}  |  jaggedness {:.2}  |  flare \
+         {:.2}  |  plug into {}",
         status.0,
         bores.0.len(),
         standing.iter().count(),
@@ -229,7 +256,7 @@ fn aim_marker(
     aim.0 += d * step;
     aim.0 = aim.0.clamp(Vec3::new(-0.8, -0.7, -0.6), Vec3::new(0.8, 1.2, 0.6));
     for mut t in &mut marker {
-        t.translation = ORIGIN + aim.0;
+        t.translation = ORIGIN + aim.0 + Vec3::Z * MARKER_STANDOFF;
     }
 }
 
@@ -250,7 +277,7 @@ fn fire(world: &mut World) {
             d.calibre.saturating_sub(1)
         };
         let now = CALIBRES[d.calibre];
-        world.resource_mut::<Status>().0 = format!("calibre {now:.3} — fire (Space) to see it");
+        world.resource_mut::<Status>().0 = format!("calibre {now:.3} - fire (Space) to see it");
         return;
     }
     if pressed(world, KeyCode::KeyJ) {
@@ -258,7 +285,7 @@ fn fire(world: &mut World) {
         d.jaggedness = (d.jaggedness + 1) % JAGGEDNESS.len();
         let now = JAGGEDNESS[d.jaggedness];
         world.resource_mut::<Status>().0 =
-            format!("jaggedness {now:.2} — each barrel plane bites inward, never outward");
+            format!("jaggedness {now:.2} - each barrel plane bites inward, never outward");
         return;
     }
     if pressed(world, KeyCode::KeyK) {
@@ -266,9 +293,9 @@ fn fire(world: &mut World) {
         d.shatter = (d.shatter + 1) % SHATTERS.len();
         let now = SHATTERS[d.shatter];
         world.resource_mut::<Status>().0 = if now == 1 {
-            "plug into 1 — whole, which is one convex prism: the corer look".into()
+            "plug into 1 - whole, which is one convex prism: the corer look".into()
         } else {
-            format!("plug into {now} — broken by the same cut policy the body uses")
+            format!("plug into {now} - broken by the same cut policy the body uses")
         };
         return;
     }
@@ -277,7 +304,7 @@ fn fire(world: &mut World) {
         d.flare = (d.flare + 1) % FLARES.len();
         let now = FLARES[d.flare];
         world.resource_mut::<Status>().0 =
-            format!("flare {now:.2} — the exit is that much wider than the entry");
+            format!("flare {now:.2} - the exit is that much wider than the entry");
         return;
     }
 
@@ -323,7 +350,7 @@ fn fire(world: &mut World) {
 
     let standing = world.resource::<body::Baked>().tree.roots().len();
     world.resource_mut::<Status>().0 = if reset {
-        "reset — an unbored subject".into()
+        "reset - an unbored subject".into()
     } else {
         format!("fired: {} hole(s), the proxy is now {standing} cells", bores.len())
     };

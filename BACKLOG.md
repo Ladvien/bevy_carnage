@@ -631,6 +631,37 @@ last test needs a format, so `ron` joins `[dev-dependencies]`; it is already in 
 **Any dial added to `FractureSettings` from now on needs the same treatment**, and the note is on the
 field rather than only here.
 
+### AG-024 — and then the windowed example was run for the first time
+
+`examples/bullet_holes.rs` shipped in AG-022, AG-023 and AG-024 **without ever being executed.** This
+host runs no desktop (`seat0`'s active session is the SDDM greeter), so three tickets' worth of
+verification stopped at "it compiles, and every function it calls is exercised by `capture_holes`".
+With `Xvfb` installed it ran under `:99` against the real GPU — NVIDIA/Vulkan, window created,
+62 fragments baked — and produced **four defects in the first two screenshots**, none of which a test
+or a headless recorder could have found:
+
+1. **`·` rendered as a missing-glyph box** in the status line. Bevy's default font atlas has no
+   U+00B7. The legend above it survived only because it was already ASCII.
+2. **`—` did the same**, in every message the dial keys produce — found on the second screenshot,
+   after fixing the first. `sever.rs` uses plain hyphens throughout, so the original author already
+   knew; the note now lives on `HudStatus` so the next person does too.
+3. **The aim marker was invisible.** `Aim` is a point on the bore's *axis*, so drawn at the aim point
+   the marker sits inside the torso. The first fix pushed it 0.42 forward, which was visible and wrong
+   in a subtler way — the camera is off-axis, so it parallaxed away from the hole it predicts and
+   stopped being an aiming aid. 0.20 clears the skin by more than the marker's radius while reading as
+   the same place as the wound.
+4. **The subject's feet ran off the bottom of the window.** The camera aimed at `ORIGIN`, which is the
+   feet-on-floor anchor rather than the subject's middle.
+
+**Input was synthesised without another dependency.** No `xdotool`, but `libX11` and `libXtst` are
+present, so XTEST goes through `ctypes` in about thirty lines. One catch worth writing down: with no
+window manager there is no input focus, so the first injected keypress was silently swallowed —
+`XSetInputFocus` on the app window is required before anything is delivered.
+
+**Verified end to end after the fixes**: `K` twice moved the shatter dial 4 → 6 → 8, `Space` punched a
+hole, the status line read `fired: 1 hole(s), the proxy is now 13 cells`, and eight pools landed on the
+floor. That is the whole feature driven by real X key events through the real app.
+
 **Still deliberately absent.** The pools are flat discs of one shared unit-radius circle asset scaled
 per pool, not projected decals; and nothing in the crate moves a plug or its pieces.
 
