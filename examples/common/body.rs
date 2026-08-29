@@ -19,7 +19,7 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 use bevy_autogib::{
-    BondGraph, BondSet, CutSettings, FragmentId, FragmentTree, ProxyCell, Reach, capsule,
+    Bore, BondGraph, BondSet, CutSettings, FragmentId, FragmentTree, ProxyCell, Reach, capsule,
     directional, fracture_mesh, hash_f32, radial, spread, swept_triangle,
 };
 
@@ -52,6 +52,28 @@ pub const SOFTENINGS: [f32; 4] = [0.0, 0.25, 0.5, 0.75];
 /// **The first entry is the six body parts**, because `frontier_of(6)` on a six-cell proxy is the
 /// roots — uncut. That is dismemberment; the last entry is gibs; the two in between are the range.
 pub const GRANULARITIES: [usize; 4] = [6, 12, 20, TARGET];
+
+/// **Where the demo's shots land**: `(frame, entry point, radius)`, subject-local.
+///
+/// Front to back along `-z`, because the camera sits at `+z` and the entry hole is the thing worth
+/// seeing. Radii are about a fortieth of the subject's height — a bullet, not a cannon — and every
+/// one is comfortably above `bevy_autogib`'s own minimum bore radius.
+pub const SHOTS: [(u32, Vec3, f32); 5] = [
+    (12, Vec3::new(0.06, 0.14, 0.0), 0.035),   // torso, high right
+    (32, Vec3::new(-0.09, -0.05, 0.0), 0.035), // torso, low left
+    (52, Vec3::new(0.00, 0.46, 0.0), 0.030),   // head
+    (72, Vec3::new(0.14, -0.18, 0.0), 0.035),  // torso, low right
+    (92, Vec3::new(-0.32, 0.06, 0.0), 0.030),  // through the left arm
+];
+
+/// One shot as a bore straight through the subject, entering at `+z`.
+///
+/// The segment is longer than the subject is deep on purpose: a `Bore` *is* its segment, so a shot
+/// that goes clean through is one that starts and ends outside the solid. Ending it inside would
+/// make the far end a pit floor instead, which is the other thing the same type says.
+pub fn bore_at(at: Vec3, radius: f32) -> Bore {
+    Bore::new(at + Vec3::Z * 0.6, at - Vec3::Z * 0.6, radius)
+}
 
 pub const GRAVITY: f32 = 18.0;
 pub const RESTITUTION: f32 = 0.3;
@@ -144,12 +166,17 @@ pub struct Baked {
 
 impl Baked {
     /// Fracture the subject and register every fragment's meshes.
-    pub fn bake(world: &mut World, soften: f32) -> Baked {
+    ///
+    /// `bores` are channels subtracted from the proxy before any cut — see [`bore_at`]. Taking them
+    /// here rather than in each caller is what keeps the windowed demo and the recorder honest: there
+    /// is one bake definition, so a hole in the GIF is a hole you can reproduce by keypress.
+    pub fn bake(world: &mut World, soften: f32, bores: &[Bore]) -> Baked {
         let owned = subject();
         let parts: Vec<(&Mesh, Mat4)> = owned.iter().map(|(m, x)| (m, *x)).collect();
         let cut = CutSettings {
             max_depth: MAX_DEPTH,
             soften,
+            bores: bores.to_vec(),
             ..CutSettings::new(TARGET, MIN_FRACTION, SEED)
         };
         let baked = fracture_mesh(&parts, &proxy(), &cut);

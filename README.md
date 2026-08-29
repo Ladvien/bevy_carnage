@@ -15,6 +15,7 @@ That is `examples/explode.rs` at its own 0.4× playback. The subject is intact, 
 - **One bake, every granularity.** A bake keeps the whole hierarchy it cut through, so the same cached asset answers "break this into three" and "break this into forty" without cutting twice.
 - **Localised damage.** A bond graph records which fragments actually share a face. Shoot a shoulder and the arm comes off while the body stays standing — the joints are found by geometry, not authored.
 - **Five region queries** — projectile, slash, swept blade, blast, directional pull — each a pure function of the bake plus some geometry.
+- **Bullet holes that go through.** A segment plus a radius subtracts a convex prism from the proxy, in closed form and as plane cuts only, so the channel is real geometry with a red interior, the pieces around it stay bonded, and every shard is still a convex-hull collider. Dials for radius, barrel sides, raggedness and exit flare.
 - **Progressive destruction.** Hit it again and it comes apart further. Island detection is stateless; you own the damage state.
 - **Two meshes per fragment** — the subject's own skin and the newly-cut faces, separately, so the inside can take a different material.
 - **Solver-ready colliders.** Every fragment is one convex cell. `Collider::convex_hull(frag.cell.points())` and you are done — no decomposition at spawn, no trimesh.
@@ -103,7 +104,7 @@ assert!(pieces.iter().all(|p| p.outer.is_some() || p.cap.is_some()));
 
 ## Demos
 
-**[docs/DEMOS.md](docs/DEMOS.md) — all four examples, with recordings**, what each is for, and how to regenerate the clips.
+**[docs/DEMOS.md](docs/DEMOS.md) — all five examples, with recordings**, what each is for, and how to regenerate the clips.
 
 ![A blue blocked-out humanoid standing; a projectile takes off its arm, another its head, a slash takes the other arm, a blade through the waist takes both legs and a blast finishes the torso](docs/sever.gif)
 
@@ -112,6 +113,7 @@ That is `examples/sever.rs`, on a fixed script. The subject **stays standing** b
 ```sh
 cargo run --release --example sever           # needs a GPU
 cargo run --release --example explode         # needs a GPU
+cargo run --release --example bullet_holes    # needs a GPU
 cargo run --release --example fracture_cube   # terminal only — no window, no GPU
 ```
 
@@ -122,6 +124,10 @@ cargo run --release --example fracture_cube   # terminal only — no window, no 
   T               soften — cycle how hard the drawn fragments are rounded
   R               reset
 ```
+
+![A blue blocked-out humanoid standing still while five shots punch through it one at a time, each leaving a small dark-red hole in the blue skin, then the camera orbits a third of a turn to show the wider exit wounds on the far side](docs/holes.gif)
+
+That is `examples/bullet_holes.rs`, on a fixed script. Each shot is a `Bore` — a segment, a radius and three look dials — subtracted from the proxy before any cut, so the hole has a wall rather than being painted on a surface. The subject keeps standing because the shards around a channel share their radial faces bit-for-bit and the bond graph reads them as one island. Run it and you aim it yourself, with `[`/`]` for calibre, `J` for raggedness and `F` for exit flare.
 
 ## Why: break the asset once, not the frame
 
@@ -205,7 +211,7 @@ The last four are look dials, and the last two touch only the *drawn* mesh: the 
 
 ## What it deliberately does not do
 
-**It does not compute a convex decomposition.** You supply the proxy cells; the crate cuts them. A consumer already running V-HACD or CoACD for colliders has a decomposition, and forcing a second, different one would be the fracture disagreeing with the physics about what the object is. `ProxyCell::from_box` covers a blocked-out subject.
+**It does not compute a convex decomposition.** You supply the proxy cells; the crate cuts them. A consumer already running V-HACD or CoACD for colliders has a decomposition, and forcing a second, different one would be the fracture disagreeing with the physics about what the object is. `ProxyCell::from_box` covers a blocked-out subject. Boring is not an exception to this: a `Bore` subtracts a prism *you* described from a cell *you* supplied, by plane splits with a closed-form decomposition, so what comes back is still a set of cells whose union is the shape you handed in — and a concave cell is still refused at the door.
 
 **It does not move anything.** No rigid bodies, no velocities, no physics dependency. The bake hands you a mesh and a convex cell per piece; spawning them, building a collider and throwing them is your game's decision and your solver's job. `examples/explode.rs` integrates its own ballistics in thirty lines to make the point.
 

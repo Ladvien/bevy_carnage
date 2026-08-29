@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use bevy::asset::AssetPath;
 use bevy::prelude::*;
 
+use crate::bore::Bore;
 use crate::FractureSettings;
 use crate::bond::BondGraph;
 use crate::mesh::{append_mesh, geometry_from_piece, geometry_from_soup};
@@ -35,6 +36,15 @@ pub struct FractureSubject(pub Handle<WorldAsset>);
 /// alternative is synthesising a bounding box and silently fracturing the wrong shape.
 #[derive(Component)]
 pub struct FractureProxy(pub Vec<ProxyCell>);
+
+/// **Channels bored through this subject's proxy before it is cut** — bullet holes, baked in.
+///
+/// Read once, at bake time, exactly like [`FractureProxy`]: the bake is cached per asset id, so
+/// adding a bore after the first bake does not re-bore that subject. A subject whose holes change
+/// during play is a fresh bake, not an edit — [`crate::fracture_mesh`] is the pure path for that, and
+/// it costs about the 2 ms `AG-011` measured.
+#[derive(Component, Default, Clone, Debug)]
+pub struct FractureBores(pub Vec<Bore>);
 
 /// **Marks a subtree to be pruned out of the body and baked as one intact chunk**, keeping its own
 /// material — a carried weapon, a hat, a backpack. The walk does not descend past it.
@@ -257,14 +267,14 @@ pub fn bake_fractures(
     mut cache: ResMut<FractureCache>,
     mut meshes: ResMut<Assets<Mesh>>,
     settings: Res<FractureSettings>,
-    subjects: Query<(&FractureSubject, &FractureProxy, &Children)>,
+    subjects: Query<(&FractureSubject, &FractureProxy, &Children, Option<&FractureBores>)>,
     children_q: Query<&Children>,
     transforms: Query<&Transform>,
     mesh_q: Query<&Mesh3d>,
     mat_q: Query<&MeshMaterial3d<StandardMaterial>>,
     is_detached: Query<(), With<DetachedPart>>,
 ) {
-    for (subject, proxy, children) in &subjects {
+    for (subject, proxy, children, bores) in &subjects {
         let source = subject.0.id();
         if cache.baked.contains(&source) {
             continue;
@@ -433,8 +443,9 @@ pub fn bake_fractures(
         // feature unification. One code path that is concurrent in some consumers' builds and not
         // others is exactly the ambiguity `CLAUDE.md`'s one-path rule exists to prevent, and buying it
         // for 0.33 ms would be a bad trade twice over.
+        let bores = bores.map(|b| b.0.clone()).unwrap_or_default();
         let (pieces, tree) =
-            fracture(body, &proxy.0, &settings.cut_for(target, seed_from_path(&asset_path)));
+            fracture(body, &proxy.0, &settings.cut_for(target, seed_from_path(&asset_path), bores));
         let graph = crate::mesh::bond_graph(&pieces, &tree);
         let frags: Vec<Fragment> = pieces
             .into_iter()

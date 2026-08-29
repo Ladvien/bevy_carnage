@@ -104,7 +104,7 @@ fn setup(world: &mut World) {
     light_and_floor(world);
 
     let soften = SOFTENINGS[world.resource::<Soften>().0];
-    let baked = body::Baked::bake(world, soften);
+    let baked = body::Baked::bake(world, soften, &[]);
     let materials = BodyMaterials::new(world);
     let granularity = world.resource::<Granularity>().0;
     let damage = body::Damage::fresh(&baked, granularity);
@@ -240,7 +240,7 @@ fn strike(world: &mut World) {
         // so changing it means cutting again. Cheap enough at this size to do on a keypress.
         if rounder {
             let soften = SOFTENINGS[world.resource::<Soften>().0];
-            let baked = body::Baked::bake(world, soften);
+            let baked = body::Baked::bake(world, soften, &[]);
             world.insert_resource(baked);
         }
         let damage = {

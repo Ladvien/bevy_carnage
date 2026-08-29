@@ -1,11 +1,11 @@
 # bevy_autogib — BACKLOG
 
-**Updated:** 2026-08-28
+**Updated:** 2026-08-29
 **Companions:** `CLAUDE.md` (rules), `README.md` (what the crate promises),
 `docs/research-brief.md` (the open problems), `docs/isomesh-upstream-asks.md` (what we need from the
 validator).
 
-**15 tickets archived, 7 landed this phase (AG-015 … AG-021), 0 open.** The architectural change this backlog opened with
+**15 tickets archived, 8 landed this phase (AG-015 … AG-022), 0 open.** The architectural change this backlog opened with
 has landed: the crate no longer cuts the triangle soup. It cuts a caller-supplied convex proxy and
 carries the render triangles along as a payload.
 
@@ -413,6 +413,86 @@ constant chunk size, two of `too_many_arguments`, and one each of `type_complexi
 enumerated by file and line, because "no new warnings" is unfalsifiable against a baseline that is
 wrong: a real regression hides in the gap. AG-021 itself adds none — it changes no `.rs` file, and every
 warning sits in source it never touched.
+
+| [x] | **AG-022 — bullet holes that go through: a `Bore` subtracted from the proxy.** `Bore { from, to, radius, sides, jaggedness, flare }` carried in `CutSettings::bores` and in a `FractureBores` component; `bore::apply` subtracts each channel from the proxy cells before assignment and before the cut loop, and carves it out of the render skin per closed shell. `FaceKind` replaces `ProxyCell`'s `face_cut: Vec<bool>` so a channel wall is emitted flat. Plus `examples/bullet_holes.rs`, `examples/capture_holes.rs`, `docs/holes.gif`, a bore census in `fracture_cube`'s transcript, and ten tests. | M |
+
+### AG-022, as landed
+
+**Pre-registered prediction, written before the run: no existing number moves** — every bore is
+opt-in and empty by default, so `fracture_cube`'s committed transcript, `mesh.rs`'s volume
+conservation and exact-area accounting, and all three existing GIFs are untouched — **and a bored
+subject stays one island**, because the shards' radial faces are bit-identical coplanar pairs.
+
+**Both confirmed.** `fracture_cube` reproduces the committed transcript digit for digit: `12 of 12`
+watertight, manifold, χ = 2 and collider-ready; `volume enclosed 0.2493`; `total volume 0.2493` at all
+five granularities; the whole `soften` table unmoved; `adjacency — 31 bonds over 12 finest fragments`;
+`2 island(s) of sizes [11, 1]`; `bit-identical: true`. All 71 tests green with none re-blessed, and
+`git status` shows `docs/holes.gif` added with no existing GIF modified. `a_bored_cell_is_still_one_island`
+finds exactly one island over the eight shards of a bored cell, with no fracture cut holding them
+together.
+
+**Three premises the plan stated were falsified by building it, and the second one was the expensive
+one.**
+
+*One: the barrel planes at distance `radius` from the axis describe the wrong polygon.* The plan's
+design put each of the `sides` planes at `radius`, and asserted the channel was therefore the
+*inscribed* polygon. It is the **circumscribed** one: a plane at distance `radius` is the apothem, so
+the polygon's corners reach `radius / cos(π/n)` and the hole is 8.2% wider than asked for at 8 sides.
+Measured on the 1×2×1 fixture, an 8-gon bore of radius 0.1 removed `0.066274` — exactly
+`8 · 0.1² · tan(22.5°) · 2`, the circumscribed area — where the inscribed channel is `0.056569`; at 24
+sides `0.063193` against `0.062117`, which is how it first showed up, as a 1.7% miss that looked like
+float noise until the 8-sided case made it 17%. The fix is one `cos(π/n)` factor, chosen over
+re-documenting `radius` as the apothem because two public doc sentences promise `radius` bounds the
+entry hole, and `jaggedness`'s inward-only bite is meaningless against a bound that is already
+exceeded.
+
+*Two: the skin cannot be carved before the shells are classified.* The plan had `bore::apply` take the
+whole render soup and hand back a carved one, with `fracture` classifying shells afterwards as it
+always had. A carved skin has boundary edges at every hole rim, so `Shell::open` reads a bored solid
+as a **sheet** — AG-003's protection for capes and hair cards — and a sheet is carried whole to the one
+cell containing its centroid. For a bored box that centroid is *inside the channel*, so it belongs to
+no cell: measured, all 10.0 of the fixture's skin area came back homeless and every fragment drew
+nothing. The fix keeps one path rather than adding an exception: `bore::apply` returns the prisms that
+landed, `fracture` decides open-versus-closed on the artist's own geometry, and `bore::carve` runs per
+**closed** shell. A sheet is carried unbored, which is the same answer from the other direction — a
+bore is a subtraction from the proxy, and a sheet is not in the proxy. `carve` with no prisms is the
+identity, so an unbored bake stays byte-identical.
+
+*Three: softening is not a minor perturbation of skin area once there are shards.* The plan's skin
+test allowed the measured loss to sit within 1.5–2.5× the channel cross-section, "since the softening
+and the rim slivers move it". At the shipped `soften = 0.5` the 24-shard bored fixture's skin came
+back **3.1 against the unbored 10.0** — because the relaxation runs per fragment and 24 shards shrink
+24 times. The test measures at `soften = 0.0` and says so; softening has its own tests. The same
+measurement is why `capture_holes` and `bullet_holes` render at `soften = 0.0`: independent relaxation
+pulls two shards' shared boundary apart, and a hairline along every wedge boundary radiating from a
+hole is, in a clip about holes, read as a crack.
+
+**One assumption was carried through unmeasured, and that is worth flagging.** The plan predicted that
+`cap_relief` on a bore wall would fold the wall through the channel axis — a 0.04 bore through the
+0.28-deep torso gives a wall face of radius ≈ 0.176, which `cap_relief = 0.30` displaces by up to
+0.053, larger than the hole — and specified `FaceKind::Bore` to emit walls flat. That is what shipped,
+and the arithmetic is in `FaceKind`'s doc comment, but **the defect was never rendered**: no clip was
+taken with `FaceKind::Bore` treated as `Cut`. The dial is off by construction, so nothing is wrong;
+what is missing is the picture proving it had to be.
+
+**A tenth test was added beyond the nine the plan listed.** `flare` is a public dial whose whole claim
+is "the exit radius is `radius * (1 + flare)`", and nothing tested it — the GIF's third visual claim
+rested on eyeballing an obliquely-viewed face. `flare_widens_the_exit_and_leaves_the_entry_where_it_was`
+solves for where each barrel plane crosses the ray `axis(h) + dir·t`, which is the channel's radius
+along that facet's own outward direction rather than the plane's perpendicular distance, and pins entry
+= apothem and exit = 1.6 × apothem to within `1e-6`.
+
+**Two shapes grew, both as forcing functions rather than conveniences.** `FractureSettings::cut_for`
+takes `bores` as a parameter instead of defaulting it, so the ECS path cannot silently drop a subject's
+channels; and `examples/common/body.rs`'s `Baked::bake` takes the bore list, so the windowed demo and
+the recorder cannot diverge about what was fired. `CutSettings::bores` carries
+`#[cfg_attr(feature = "serde", serde(default))]` — `CutSettings` has no `deny_unknown_fields`, so a
+missing field is the only compatibility risk, and the default is the empty list that means "as before".
+
+**Measured, from `capture_holes`'s own log:** each shot subtracts from the original six cells and adds
+exactly seven — 13, 20, 27, 34, 41 cells for one through five holes — one cell becoming its eight
+shards every time, with volume removed 0.00079 → 0.00367. No bore reported reaching no cell, and no
+triangle came back homeless.
 
 ---
 

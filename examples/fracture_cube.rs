@@ -16,7 +16,7 @@
 
 use bevy::math::{Mat4, Vec3, primitives::Cuboid};
 use bevy::mesh::Mesh;
-use bevy_autogib::{BondSet, CutSettings, FragmentGeometry, ProxyCell, fracture_mesh};
+use bevy_autogib::{Bore, BondSet, CutSettings, FragmentGeometry, ProxyCell, fracture_mesh};
 
 /// Target fragment count. The ECS bake derives this from the mesh's bounding size and the
 /// `FractureSettings` dials; here it is spelled out so one number can be varied at a time.
@@ -151,6 +151,38 @@ fn main() {
     println!("     exactly on the torso cell's top face at y = 0.5 — coplanar, so a real bond. Cells");
     println!("     that merely interpenetrate or abut without agreeing on a face get NO bond, and");
     println!("     that refusal is deliberate: a proximity guess would weld a head to a torso.)");
+
+    // **bore — a bullet hole is a channel subtracted from the proxy, not a decal drawn on it.**
+    //
+    // Its own bake, deliberately: boring the main `baked` would move every number in this
+    // transcript, and the whole value of the block above is that it does not move. The channel is a
+    // convex prism expressed as plane cuts, so each of its shards is still an audited closed solid
+    // and still one convex-hull collider — which is what the census line reports.
+    let bore = Bore::new(Vec3::new(0.08, 0.10, -0.40), Vec3::new(0.08, 0.10, 0.40), 0.05);
+    let plain_volume: f32 = baked.leaves().iter().map(|p| p.cell.volume()).sum();
+    let bored = fracture_mesh(&parts, &proxy, &CutSettings { bores: vec![bore], ..cut(seed) });
+    let bored_roots = bored.tree.roots().len();
+    let bored_pieces: Vec<FragmentGeometry> = bored.into_leaves();
+    let bored_volume: f32 = bored_pieces.iter().map(|p| p.cell.volume()).sum();
+    let census = bevy_autogib::audit_proxies(&bored_pieces);
+    let sound = census
+        .iter()
+        .filter(|a| a.is_closed() && a.is_manifold() && a.euler_characteristic == 2)
+        .count();
+    println!();
+    println!("  bore — one channel through the torso, and the same subject re-audited");
+    println!(
+        "    radius {:.3} · {} sides · jaggedness {:.2} · flare {:.2}",
+        bore.radius, bore.sides, bore.jaggedness, bore.flare
+    );
+    println!(
+        "    cells {} → {bored_roots} · leaves {} · volume {plain_volume:.4} → {bored_volume:.4} · \
+         removed {:.4} (the channel)",
+        proxy.len(),
+        bored_pieces.len(),
+        plain_volume - bored_volume
+    );
+    println!("    every shard still closed, manifold, χ = 2:  {sound} of {}", census.len());
 
     let pieces: Vec<FragmentGeometry> = baked.into_leaves();
 

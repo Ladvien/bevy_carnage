@@ -326,9 +326,15 @@ fn shells(soup: &Soup) -> Vec<Shell> {
 /// # Why each fragment is exactly one cell
 ///
 /// A cut splits one cell into two, so a fragment is always a single convex cell rather than a set of
-/// them. That is a deliberate narrowing of the architecture note, and it pays twice: the fragment is
-/// trivially closed and convex, and `AG-007` gets a solver-ready collider with no decomposition at
-/// spawn. Cells are never unioned across shells, so a head cannot weld itself to a torso.
+/// them. A bore makes several cells out of one *before* the loop starts, and each of those is still
+/// exactly one convex cell, so the property holds either way. That is a deliberate narrowing of the
+/// architecture note, and it pays twice: the fragment is trivially closed and convex, and `AG-007`
+/// gets a solver-ready collider with no decomposition at spawn. Cells are never unioned across
+/// shells, so a head cannot weld itself to a torso.
+///
+/// A bore's shards count toward [`CutSettings::target`](crate::CutSettings::target), so a heavily
+/// bored subject may reach `target` with no fracture cuts at all. That is the honest reading: the
+/// channel already divided it, and cutting further would only shrink pieces the bore made small.
 ///
 /// # The returned forest
 ///
@@ -348,7 +354,28 @@ pub(crate) fn fracture(
     proxy: &[ProxyCell],
     cut: &CutSettings,
 ) -> (Vec<Piece>, FragmentTree) {
-    let CutSettings { target, min_fraction, max_depth, plane_jitter, size_spread, weak_axis, cap_relief, soften, seed } = *cut;
+    let CutSettings {
+        target,
+        min_fraction,
+        max_depth,
+        plane_jitter,
+        size_spread,
+        weak_axis,
+        cap_relief,
+        soften,
+        seed,
+        ref bores,
+    } = *cut;
+    // **Bores first, because a channel is part of the subject's shape and not part of its breakage.**
+    // Subtracting here means a bored cell reaches the loop as ordinary convex root cells, so the tree
+    // stays binary, `fragments[id.index()]` stays parallel with `tree.node(id)`, and the plug is never
+    // a fragment anyone has to remember not to spawn.
+    //
+    // The **skin** is carved a few lines down, per closed shell, rather than here: a carved skin has
+    // boundary edges at every hole rim, so classifying it after the carve reads a bored solid as a
+    // sheet and carries the whole subject to one fragment. See [`crate::bore::carve`].
+    let (bored, prisms) = crate::bore::apply(proxy, bores);
+    let proxy: &[ProxyCell] = &bored;
     // Tier B assignment. Every triangle goes to the first cell containing its centroid — first, not
     // nearest, because overlapping shells (a head sunk into a torso) are the normal case and a
     // deterministic tie-break beats a distance that can flip on a rounding difference.
@@ -362,6 +389,7 @@ pub(crate) fn fracture(
         .collect();
     let mut homeless = 0usize;
     let mut carried = 0usize;
+    let mut considered = 0usize;
 
     for shell in shells(&render) {
         if shell.open {
@@ -382,11 +410,27 @@ pub(crate) fn fracture(
                 }
                 None => homeless += shell.tris.len(),
             }
+            considered += shell.tris.len();
             continue;
         }
+        // **A bore opens a solid's skin, and only a solid's.** The shell was classified above on the
+        // artist's own geometry and is carved here, so the opening is the width of the channel rather
+        // than the width of a triangle, and its new boundary lands exactly on the barrel planes where
+        // the wall's cut-face ring already is. A sheet is carried unbored: a bore is a subtraction
+        // from the proxy, and a sheet is not in the proxy.
+        let mut solid = Soup::default();
         for &t in &shell.tris {
             let tri = render.idx[t];
-            let (a, b, c) = (render.vtx(tri[0]), render.vtx(tri[1]), render.vtx(tri[2]));
+            solid.push_tri(
+                render.vtx(tri[0]),
+                render.vtx(tri[1]),
+                render.vtx(tri[2]),
+                render.tri_interior[t],
+            );
+        }
+        let solid = crate::bore::carve(solid, &prisms);
+        for (t, tri) in solid.idx.iter().enumerate() {
+            let (a, b, c) = (solid.vtx(tri[0]), solid.vtx(tri[1]), solid.vtx(tri[2]));
             let mid = (a.pos + b.pos + c.pos) / 3.0;
             // **Test just inside the surface, not on it.** A triangle's outward normal points away
             // from the solid it bounds, so a point a hair behind it is inside the cell that triangle
@@ -401,9 +445,10 @@ pub(crate) fn fracture(
             // torso holding all 0.3812 of it. Which is to say the hole was exactly joint-shaped.
             let mid = mid - face_normal(a.pos, b.pos, c.pos) * INWARD_NUDGE;
             match pieces.iter().position(|p| p.cell.contains(mid)) {
-                Some(i) => pieces[i].render.push_tri(a, b, c, render.tri_interior[t]),
+                Some(i) => pieces[i].render.push_tri(a, b, c, solid.tri_interior[t]),
                 None => homeless += 1,
             }
+            considered += 1;
         }
     }
     if carried > 0 {
@@ -413,7 +458,7 @@ pub(crate) fn fracture(
         warn!(
             "autogib: {homeless} of {} triangles lie outside every proxy cell and were dropped — the \
              proxy does not cover the mesh",
-            render.idx.len()
+            considered
         );
     }
 
@@ -521,7 +566,8 @@ pub(crate) fn fracture(
         };
         let plane = Plane { point: centroid + normal * offset, normal };
 
-        let (Some(above), Some(below)) = pieces[parent].cell.clip(&plane) else {
+        let (Some(above), Some(below)) = pieces[parent].cell.clip(&plane, crate::proxy::FaceKind::Cut)
+        else {
             unsplittable[slot] = true;
             continue;
         };
@@ -566,7 +612,7 @@ pub(crate) fn fracture(
 
 /// Split a render payload by a plane into both half-spaces. **Clipping only** — a render fragment is a
 /// surface subset, not a solid, and giving it a cap here would duplicate the one the cell carries.
-fn split_render(src: &Soup, plane: &Plane, above: &mut Soup, below: &mut Soup) {
+pub(crate) fn split_render(src: &Soup, plane: &Plane, above: &mut Soup, below: &mut Soup) {
     for (t, tri) in src.idx.iter().enumerate() {
         let v = [src.vtx(tri[0]), src.vtx(tri[1]), src.vtx(tri[2])];
         let d = [

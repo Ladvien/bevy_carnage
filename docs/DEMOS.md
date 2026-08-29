@@ -1,19 +1,20 @@
 # Demos
 
-Every example in the repo, and what each one is for. All four run from a clean checkout with no
+Every example in the repo, and what each one is for. All five run from a clean checkout with no
 assets and no setup:
 
 ```sh
 cargo run --release --example fracture_cube   # terminal only — no window, no GPU
 cargo run --release --example sever           # needs a GPU
 cargo run --release --example explode         # needs a GPU
+cargo run --release --example bullet_holes    # needs a GPU
 ```
 
-The clips below are **not screen recordings**. They come from two headless recorders, `capture` and
-`capture_sever`, which render the same scenes on a fixed timestep with no window and no wall clock.
-Frame 62 of one run is frame 62 of the next, so two GIFs taken either side of a change differ only
-where the geometry does — which is what makes them worth committing. Regenerating them is
-[at the bottom](#regenerating-these).
+The clips below are **not screen recordings**. They come from three headless recorders, `capture`,
+`capture_sever` and `capture_holes`, which render the same scenes on a fixed timestep with no window
+and no wall clock. Frame 62 of one run is frame 62 of the next, so two GIFs taken either side of a
+change differ only where the geometry does — which is what makes them worth committing. Regenerating
+them is [at the bottom](#regenerating-these).
 
 **The subject is a blocked-out humanoid** — torso, head, two arms, two legs, one convex proxy cell
 each. That matters more than it looks. Cutting a limbless mass with pseudorandom planes produces
@@ -145,6 +146,65 @@ that predated the Tier A/B split.
 
 ---
 
+## `bullet_holes` — a channel through the solid, not a decal
+
+![A blue blocked-out humanoid standing still while five shots punch through it one at a time, each leaving a small dark-red hole in the blue skin, then the camera orbits a third of a turn to show the wider exit wounds on the far side](holes.gif)
+
+A hole here is geometry. `Bore { from, to, radius, sides, jaggedness, flare }` is a convex prism, and
+subtracting a convex prism from a convex cell has a closed form — `C \ P = ⋃ₖ (C ∩ Hₖ⁺ ∩ H₁⁻ … ∩
+Hₖ₋₁⁻)` — which is a run of the same plane split every fracture cut already uses. So each shard around
+a channel is still an audited closed solid and still one convex-hull collider; there is no CSG kernel
+here and no new dependency.
+
+**The wall is red because it is a cut face**, the same mechanism as every other interior surface in
+the crate. Nothing special-cases a bore for material purposes — `face_is_cut` answers `true` for a
+channel wall exactly as it does for a fracture plane, and the interior material follows. The one place
+the two differ is `cap_relief`: it scales its crumple by the face's own centre-to-corner radius, and a
+wall face's radius is half the subject's *thickness*, not half a fragment's width. On this subject a
+0.04 bore through a 0.28-deep torso yields a wall of radius ≈ 0.176, which the shipped `cap_relief =
+0.30` would displace by up to 0.053 — larger than the hole. So a bore wall is emitted flat.
+
+**The shards stay bonded, which is why a bored subject still stands.** Shard *k* and shard *k+1* share
+plane *k*'s face region bit-for-bit, because the splitter hands both halves the same ring. That is
+precisely what the bond match keys on, so the wedges radiating from a hole come back as one island.
+The barrel faces have no partner — the material there is gone — and that is correct rather than
+something handled.
+
+The clip is rendered at `soften = 0.0`, deliberately. The softening relaxes each fragment's drawn skin
+*independently*, so where two shards meet the two relaxations pull apart and a hairline opens along
+every wedge boundary radiating from a hole — which in a clip about holes reads as cracks. At `0.0` the
+shards share their boundary vertices exactly and the only opening in the subject is the one that was
+bored.
+
+Run it yourself and you aim:
+
+```text
+  arrows / WASD   move the aim marker
+  Space           fire a channel straight through, entering at the marker
+  [ / ]           smaller / larger calibre
+  J               jaggedness — cycle how ragged the barrel is (0 / 0.35 / 0.7 / 1.0)
+  F               flare — cycle how much wider the exit is (0 / 0.25 / 0.6)
+  R               reset to an unbored subject
+```
+
+**A shot re-bakes**, because a bore is a bake *input*: the channel is part of the subject's shape
+rather than part of its breakage. From the recorder's own log, each shot subtracting from the original
+six cells:
+
+| shots | proxy cells | volume removed |
+|---|---|---|
+| 1 | 13 | 0.00079 |
+| 2 | 20 | 0.00174 |
+| 3 | 27 | 0.00221 |
+| 4 | 34 | 0.00318 |
+| 5 | 41 | 0.00367 |
+
+Seven cells per shot, every time — one cell becoming its eight shards. That is also why `sever` has no
+bore key: re-baking there would reset exactly the accumulated severance damage that example exists to
+show.
+
+---
+
 ## `fracture_cube` — the numbers, in a terminal
 
 > Captured against `isomesh` at `aa82b0b` (`0.0.10`+), the rev `Cargo.toml` pins. Every number in the
@@ -173,6 +233,11 @@ purpose: it is the smallest subject that is still honestly non-manifold where tw
   adjacency — 31 bonds over 12 finest fragments
     intact, that is 1 island(s)
     severing fragment 21's 2 bond(s) leaves 2 island(s) of sizes [11, 1]
+
+  bore — one channel through the torso, and the same subject re-audited
+    radius 0.050 · 8 sides · jaggedness 0.35 · flare 0.25
+    cells 2 → 9 · leaves 12 · volume 0.2493 → 0.2472 · removed 0.0022 (the channel)
+    every shard still closed, manifold, χ = 2:  12 of 12
 
    THE SOLID — each fragment's convex proxy cell, every face, closed
   ─────────────────────────────────────────────────────────────────────────────────
@@ -214,7 +279,7 @@ change.
 ## Regenerating these
 
 Any change that moves emitted geometry should regenerate them, or the picture stops describing the
-code. Both recorders write one PNG per frame; `tools/gif.sh` does the encode, with a fixed two-pass
+code. Every recorder writes one PNG per frame; `tools/gif.sh` does the encode, with a fixed two-pass
 palette so two GIFs a week apart are actually comparable.
 
 ```sh
@@ -224,10 +289,12 @@ export BOLD=/usr/share/fonts/liberation/LiberationSans-Bold.ttf
 cargo run --release --example capture       -- --out frames-demo  --tint demo  --width 720 --height 512 --soften 0.5
 cargo run --release --example capture       -- --out frames-audit --tint audit --width 720 --height 512 --soften 0.25
 cargo run --release --example capture_sever -- --out frames-sever
+cargo run --release --example capture_holes -- --out frames-holes
 
 WIDTH=560 LEGEND=none  tools/gif.sh frames-demo  docs/explode.gif ""
 WIDTH=560 LEGEND=audit tools/gif.sh frames-audit docs/fracture-tier-ab.gif "Tier A/B — every fragment audited as a solid"
 WIDTH=560 LEGEND=none  tools/gif.sh frames-sever docs/sever.gif ""
+WIDTH=560 LEGEND=none  tools/gif.sh frames-holes docs/holes.gif "Bullet holes — the channel is geometry, not a decal"
 ```
 
 `gif.sh` has no default font path and refuses without one: `FONT` and `BOLD` must both name an
@@ -240,6 +307,8 @@ naming colours that are not in the picture is worse than no key at all. `--width
 render aspect — `720x512` matches the 560×398 the clips are encoded at, so the crop is not itself one
 of the differences when you hold two of them up next to each other.
 
-The two recorders share `examples/common/` — the headless harness, and the subject and damage rules
-`sever` itself uses. That sharing is deliberate: a recorder that reimplements its subject drifts from
-it silently, and the drift would be invisible in exactly the place you would look for it.
+The three recorders share `examples/common/` — the headless harness, and the subject, bake and damage
+rules `sever` and `bullet_holes` themselves use. That sharing is deliberate: a recorder that
+reimplements its subject drifts from it silently, and the drift would be invisible in exactly the
+place you would look for it. `Baked::bake` takes the bore list for the same reason, so a hole in
+`holes.gif` is a hole you can reproduce with a keypress.

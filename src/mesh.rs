@@ -627,7 +627,8 @@ mod tests {
     #[test]
     fn cap_is_unit_square_area() {
         let cell = ProxyCell::from_box(Vec3::ZERO, Vec3::splat(0.5));
-        let (above, _) = cell.clip(&crate::soup::Plane { point: Vec3::ZERO, normal: Vec3::Y });
+        let (above, _) = cell
+            .clip(&crate::soup::Plane { point: Vec3::ZERO, normal: Vec3::Y }, crate::proxy::FaceKind::Cut);
         let mut cap = Soup::default();
         above.expect("the cube cuts").append_cut_faces(&mut cap, &[], 0.0);
         assert!(
@@ -721,8 +722,10 @@ mod tests {
     #[test]
     fn degenerate_plane_leaves_piece_whole() {
         let cell = ProxyCell::from_box(Vec3::ZERO, Vec3::splat(0.5));
-        let (above, below) =
-            cell.clip(&crate::soup::Plane { point: Vec3::splat(5.0), normal: Vec3::X });
+        let (above, below) = cell.clip(
+            &crate::soup::Plane { point: Vec3::splat(5.0), normal: Vec3::X },
+            crate::proxy::FaceKind::Cut,
+        );
         assert!(above.is_none(), "nothing above a plane past the cube");
         assert!(below.is_some(), "the whole cell lies below it");
         // A `min_fraction` this large stops the recursion early; the loop must *terminate* there

@@ -498,6 +498,7 @@ fn intersect(p: (f32, f32), q: (f32, f32), sp: f32, sq: f32) -> Option<(f32, f32
 mod tests {
     use super::*;
     use crate::CutSettings;
+    use crate::proxy::FaceKind;
     use crate::soup::{Plane, fracture};
 
     fn unit_cube_cells() -> Vec<ProxyCell> {
@@ -508,7 +509,7 @@ mod tests {
     #[test]
     fn a_single_cut_bonds_its_two_halves_over_the_full_cut_face() {
         let cell = ProxyCell::from_box(Vec3::ZERO, Vec3::splat(0.5));
-        let (above, below) = cell.clip(&Plane { point: Vec3::ZERO, normal: Vec3::Y });
+        let (above, below) = cell.clip(&Plane { point: Vec3::ZERO, normal: Vec3::Y }, FaceKind::Cut);
         let (above, below) = (above.expect("cuts"), below.expect("cuts"));
         let members = [(FragmentId(0), &above), (FragmentId(1), &below)];
         let g = BondGraph::of(&members, 2);

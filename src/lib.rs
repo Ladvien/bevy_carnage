@@ -4,6 +4,7 @@
 mod audit;
 mod bake;
 mod bond;
+mod bore;
 mod mesh;
 mod proxy;
 mod severance;
@@ -13,10 +14,11 @@ mod tree;
 pub use audit::{SolidAudit, SurfaceReport, audit_proxies, audit_proxy, audit_render};
 pub use bond::{Bond, BondGraph, BondId, BondSet};
 pub use bake::{
-    DetachedChunk, DetachedPart, Fragment, FractureCache, FractureProxy, FractureSubject,
-    bake_fractures,
+    DetachedChunk, DetachedPart, Fragment, FractureBores, FractureCache, FractureProxy,
+    FractureSubject, bake_fractures,
 };
 pub use mesh::{Fracture, FragmentGeometry, fracture_mesh};
+pub use bore::Bore;
 pub use proxy::ProxyCell;
 pub use severance::{Reach, capsule, directional, radial, spread, swept_triangle};
 pub use soup::hash_f32;
@@ -95,6 +97,14 @@ pub struct CutSettings {
     pub soften: f32,
     /// Drives every plane direction and every jitter draw — the only source of variation.
     pub seed: u32,
+    /// **Channels subtracted from the proxy before any cut** — a bullet hole is one of these.
+    ///
+    /// Applied to the caller's cells, so a bored cell arrives at the cut loop as several convex
+    /// shards and the hole is part of the subject's shape rather than part of its breakage. Empty is
+    /// the whole of the previous behaviour: with no bores the bake is byte-identical to one taken
+    /// before this field existed. See [`Bore`].
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub bores: Vec<Bore>,
 }
 
 impl CutSettings {
@@ -112,6 +122,7 @@ impl CutSettings {
             cap_relief: d.cap_relief,
             soften: d.soften,
             seed,
+            bores: Vec::new(),
         }
     }
 }
@@ -239,7 +250,10 @@ impl FractureSettings {
     /// `target` comes from this resource's sizing policy applied to a particular mesh, and `seed`
     /// from that asset's path — neither is a property of the settings alone, which is why they are
     /// arguments rather than fields.
-    pub fn cut_for(&self, target: usize, seed: u32) -> CutSettings {
+    /// `bores` are per-subject and come from the [`FractureBores`] component, never from this
+    /// resource: a shot is an event, not an authored dial. A parameter rather than a default so the
+    /// ECS path cannot forget to pass them.
+    pub fn cut_for(&self, target: usize, seed: u32, bores: Vec<Bore>) -> CutSettings {
         CutSettings {
             target,
             min_fraction: self.min_fraction,
@@ -250,6 +264,7 @@ impl FractureSettings {
             cap_relief: self.cap_relief,
             soften: self.soften,
             seed,
+            bores,
         }
     }
 }

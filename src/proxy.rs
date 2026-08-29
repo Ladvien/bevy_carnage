@@ -41,6 +41,25 @@ use std::collections::HashMap;
 
 use crate::soup::{EPS, MIN_CROSS2, Plane, WELD, classify, plane_basis, signed_dist};
 
+/// What made a face, and therefore how it is drawn.
+///
+/// This was a `bool` — cut or supplied — until bores needed a third answer. The distinction is not
+/// cosmetic: `cap_relief` scales its displacement by the face's own centre-to-corner radius
+/// ([`ProxyCell::append_cut_faces`]), and a channel wall's radius is half the subject's *thickness*,
+/// not half a fragment's width. Measured on the demo body: a 0.04-radius bore through a 0.28-deep
+/// torso leaves a wall face of radius ≈ 0.176, and the shipped `cap_relief = 0.30` displaces its
+/// centre by up to 0.053 — larger than the hole, so the wall folds through the channel axis and out
+/// the far side, and the drawn mesh ends up *outside* its own collider. A bore wall is emitted flat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FaceKind {
+    /// The caller's own hull. Never drawn — the render mesh covers that region far better.
+    Supplied,
+    /// A fracture plane's cut face. Drawn with the interior material, crumpled by `cap_relief`.
+    Cut,
+    /// A bore's barrel or pit floor. Drawn with the interior material, never crumpled.
+    Bore,
+}
+
 /// A convex cell of the caller-supplied proxy: the volume Tier A actually cuts.
 ///
 /// Construct with [`ProxyCell::new`] (which validates) or [`ProxyCell::from_box`] for the common case.
@@ -51,12 +70,12 @@ pub struct ProxyCell {
     verts: Vec<Vec3>,
     /// Rings of indices into `verts`, one per face.
     faces: Vec<Vec<u32>>,
-    /// Parallel to `faces`: `true` where the face was created by a cut rather than supplied.
+    /// Parallel to `faces`: what made each face — see [`FaceKind`].
     ///
-    /// This is what the render pass needs — a cut face is raw interior and takes the interior
-    /// material; a supplied face is the caller's own hull and is *not* drawn at all, because the render
-    /// mesh already covers that region far better than a hull does.
-    face_cut: Vec<bool>,
+    /// This is what the render pass needs — a cut face and a bore wall are both raw interior and take
+    /// the interior material; a supplied face is the caller's own hull and is *not* drawn at all,
+    /// because the render mesh already covers that region far better than a hull does.
+    face_kind: Vec<FaceKind>,
 }
 
 impl ProxyCell {
@@ -83,8 +102,8 @@ impl ProxyCell {
                 return None;
             }
         }
-        let face_cut = vec![false; faces.len()];
-        let cell = Self { verts, faces, face_cut };
+        let face_kind = vec![FaceKind::Supplied; faces.len()];
+        let cell = Self { verts, faces, face_kind };
         cell.reject_if_concave()?;
         Some(cell)
     }
@@ -162,7 +181,7 @@ impl ProxyCell {
             vec![0, 4, 7, 3], // -X
             vec![1, 2, 6, 5], // +X
         ];
-        Self { face_cut: vec![false; faces.len()], verts, faces }
+        Self { face_kind: vec![FaceKind::Supplied; faces.len()], verts, faces }
     }
 
     /// The cell's vertices — **this is the collider.**
@@ -190,9 +209,11 @@ impl ProxyCell {
     /// Was face `fi` created by a cut, rather than supplied by the caller?
     ///
     /// A cut face is raw interior and takes the interior material; a supplied face is the caller's
-    /// own hull and is not drawn at all, because the render mesh already covers that region.
+    /// own hull and is not drawn at all, because the render mesh already covers that region. A bore's
+    /// channel wall answers `true` here too, because for material purposes it is the same thing: raw
+    /// interior the crate created. Only how it is *displaced* differs — see [`FaceKind`].
     pub fn face_is_cut(&self, fi: usize) -> bool {
-        self.face_cut.get(fi).copied().unwrap_or(false)
+        self.face_kind.get(fi).is_some_and(|k| *k != FaceKind::Supplied)
     }
 
     /// Enclosed volume. Useful for mass properties: a solver wanting uniform density needs exactly
@@ -312,7 +333,7 @@ impl ProxyCell {
     /// and nowhere else in this crate: the section is convex, so its vertices are in angular order
     /// around any interior point. That is the whole replacement for `assemble_loops` — a sort instead
     /// of a graph walk, with no ambiguity to resolve and nothing to drop.
-    pub(crate) fn clip(&self, plane: &Plane) -> (Option<ProxyCell>, Option<ProxyCell>) {
+    pub(crate) fn clip(&self, plane: &Plane, new_face: FaceKind) -> (Option<ProxyCell>, Option<ProxyCell>) {
         let d: Vec<f32> = self.verts.iter().map(|v| signed_dist(*v, plane)).collect();
         if d.iter().all(|&s| s >= -EPS) {
             return (Some(self.clone()), None);
@@ -349,10 +370,10 @@ impl ProxyCell {
                 }
             }
             if ra.len() >= 3 {
-                above.face(&ra, self.face_cut[fi]);
+                above.face(&ra, self.face_kind[fi]);
             }
             if rb.len() >= 3 {
-                below.face(&rb, self.face_cut[fi]);
+                below.face(&rb, self.face_kind[fi]);
             }
         }
 
@@ -361,8 +382,8 @@ impl ProxyCell {
         if ring.len() >= 3 {
             let mut rev = ring.clone();
             rev.reverse();
-            above.face(&rev, true);
-            below.face(&ring, true);
+            above.face(&rev, new_face);
+            below.face(&ring, new_face);
         }
         (above.build(), below.build())
     }
@@ -377,10 +398,12 @@ impl ProxyCell {
     /// property this whole tier exists to guarantee.
     pub(crate) fn append_cut_faces(&self, out: &mut crate::soup::Soup, seam: &[Vec3], relief: f32) {
         for (fi, f) in self.faces.iter().enumerate() {
-            if !self.face_cut[fi] {
+            if self.face_kind[fi] == FaceKind::Supplied {
                 continue;
             }
             let Some((origin, n)) = self.face_plane(fi) else { continue };
+            // A bore wall is emitted flat; see `FaceKind::Bore` for the measurement.
+            let relief = if self.face_kind[fi] == FaceKind::Bore { 0.0 } else { relief };
             let ring: Vec<Vec3> = f.iter().map(|&v| self.verts[v as usize]).collect();
             let ring = weave_seam(&ring, n, origin, seam);
             let (bu, bv) = plane_basis(n);
@@ -452,7 +475,7 @@ impl ProxyCell {
                 if (b - a).cross(c - a).length_squared() < 1.0e-12 {
                     continue;
                 }
-                out.push_tri(vtx(a), vtx(b), vtx(c), self.face_cut[fi]);
+                out.push_tri(vtx(a), vtx(b), vtx(c), self.face_kind[fi] != FaceKind::Supplied);
             }
         }
     }
@@ -468,7 +491,7 @@ impl ProxyCell {
 struct CellBuilder {
     verts: Vec<Vec3>,
     faces: Vec<Vec<u32>>,
-    face_cut: Vec<bool>,
+    face_kind: Vec<FaceKind>,
     table: HashMap<(i64, i64, i64), u32>,
 }
 
@@ -485,7 +508,7 @@ impl CellBuilder {
         id
     }
 
-    fn face(&mut self, ring: &[Vec3], cut: bool) {
+    fn face(&mut self, ring: &[Vec3], kind: FaceKind) {
         let mut idx: Vec<u32> = Vec::with_capacity(ring.len());
         for p in ring {
             let id = self.weld(*p);
@@ -499,7 +522,7 @@ impl CellBuilder {
         }
         if idx.len() >= 3 {
             self.faces.push(idx);
-            self.face_cut.push(cut);
+            self.face_kind.push(kind);
         }
     }
 
@@ -567,8 +590,8 @@ impl CellBuilder {
             self.verts[*r as usize] = *s / *n;
         }
 
-        let (faces, face_cut) = (std::mem::take(&mut self.faces), std::mem::take(&mut self.face_cut));
-        for (f, cut) in faces.into_iter().zip(face_cut) {
+        let (faces, face_kind) = (std::mem::take(&mut self.faces), std::mem::take(&mut self.face_kind));
+        for (f, kind) in faces.into_iter().zip(face_kind) {
             let mut idx: Vec<u32> = Vec::with_capacity(f.len());
             for v in f {
                 let r = find(&mut parent, v);
@@ -581,7 +604,7 @@ impl CellBuilder {
             }
             if idx.len() >= 3 && area2(&idx, &self.verts) >= MIN_CROSS2 {
                 self.faces.push(idx);
-                self.face_cut.push(cut);
+                self.face_kind.push(kind);
             }
         }
     }
@@ -591,7 +614,7 @@ impl CellBuilder {
         if self.faces.len() < 4 {
             return None;
         }
-        Some(ProxyCell { verts: self.verts, faces: self.faces, face_cut: self.face_cut })
+        Some(ProxyCell { verts: self.verts, faces: self.faces, face_kind: self.face_kind })
     }
 }
 
@@ -767,7 +790,7 @@ mod tests {
     fn a_plane_splits_a_cell_into_two_closed_halves() {
         let c = unit_box();
         let p = Plane { point: Vec3::new(0.1, 0.0, 0.0), normal: Vec3::X };
-        let (a, b) = c.clip(&p);
+        let (a, b) = c.clip(&p, FaceKind::Cut);
         let (a, b) = (a.expect("above half exists"), b.expect("below half exists"));
 
         assert!((a.volume() - 0.4).abs() < 1.0e-4, "above encloses {}, expected 0.4", a.volume());
@@ -780,8 +803,16 @@ mod tests {
             c.volume()
         );
         // Exactly one new face per half, and it is tagged as a cut.
-        assert_eq!(a.face_cut.iter().filter(|x| **x).count(), 1, "above should have one cut face");
-        assert_eq!(b.face_cut.iter().filter(|x| **x).count(), 1, "below should have one cut face");
+        assert_eq!(
+            a.face_kind.iter().filter(|k| **k == FaceKind::Cut).count(),
+            1,
+            "above should have one cut face"
+        );
+        assert_eq!(
+            b.face_kind.iter().filter(|k| **k == FaceKind::Cut).count(),
+            1,
+            "below should have one cut face"
+        );
     }
 
     /// An oblique plane is the case a fan over a *recovered* loop used to get wrong.
@@ -789,7 +820,7 @@ mod tests {
     fn an_oblique_cut_still_closes_and_conserves_volume() {
         let c = unit_box();
         let p = Plane { point: Vec3::ZERO, normal: Vec3::new(1.0, 1.0, 1.0).normalize() };
-        let (a, b) = c.clip(&p);
+        let (a, b) = c.clip(&p, FaceKind::Cut);
         let (a, b) = (a.expect("above"), b.expect("below"));
         assert!(
             (a.volume() + b.volume() - 1.0).abs() < 1.0e-4,
@@ -805,7 +836,7 @@ mod tests {
     #[test]
     fn a_plane_outside_the_cell_does_not_split_it() {
         let c = unit_box();
-        let (a, b) = c.clip(&Plane { point: Vec3::new(5.0, 0.0, 0.0), normal: Vec3::X });
+        let (a, b) = c.clip(&Plane { point: Vec3::new(5.0, 0.0, 0.0), normal: Vec3::X }, FaceKind::Cut);
         assert!(a.is_none(), "nothing lies above a plane past the cell");
         assert!(b.is_some(), "the whole cell lies below it");
     }
@@ -823,7 +854,7 @@ mod tests {
         for (n, off) in planes {
             let mut next = Vec::new();
             for c in &cells {
-                let (a, b) = c.clip(&Plane { point: n * off, normal: n });
+                let (a, b) = c.clip(&Plane { point: n * off, normal: n }, FaceKind::Cut);
                 next.extend(a);
                 next.extend(b);
             }
@@ -841,9 +872,9 @@ mod tests {
     #[test]
     fn clipping_is_bit_identical_across_runs() {
         let p = Plane { point: Vec3::new(0.03, 0.0, 0.0), normal: Vec3::new(1.0, 2.0, 3.0).normalize() };
-        let first = unit_box().clip(&p);
+        let first = unit_box().clip(&p, FaceKind::Cut);
         for _ in 0..3 {
-            assert_eq!(unit_box().clip(&p), first, "the same cut produced different cells");
+            assert_eq!(unit_box().clip(&p, FaceKind::Cut), first, "the same cut produced different cells");
         }
     }
 }
