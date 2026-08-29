@@ -148,7 +148,7 @@ that predated the Tier A/B split.
 
 ## `bullet_holes` — a channel through the solid, not a decal
 
-![A blue blocked-out humanoid standing still while five shots punch through it one at a time, each leaving a small dark-red hole in the blue skin, then the camera orbits a third of a turn to show the wider exit wounds on the far side](holes.gif)
+![A blue blocked-out humanoid standing still while five shots punch through it one at a time, each leaving a small dark-red hole in the blue skin and throwing a red chunk of gore out the far side that arcs down, lands and spreads into a dark pool on the floor, then the camera orbits a third of a turn to show the wider exit wounds and the pools together](holes.gif)
 
 A hole here is geometry. `Bore { from, to, radius, sides, jaggedness, flare }` is a convex prism, and
 subtracting a convex prism from a convex cell has a closed form — `C \ P = ⋃ₖ (C ∩ Hₖ⁺ ∩ H₁⁻ … ∩
@@ -163,6 +163,26 @@ the two differ is `cap_relief`: it scales its crumple by the face's own centre-t
 wall face's radius is half the subject's *thickness*, not half a fragment's width. On this subject a
 0.04 bore through a 0.28-deep torso yields a wall of radius ≈ 0.176, which the shipped `cap_relief =
 0.30` would displace by up to 0.053 — larger than the hole. So a bore wall is emitted flat.
+
+**The gore is the plug, and it is free.** The subtraction has to compute the material inside the
+channel in order to remove it; `Ejecta` is that material handed back instead of dropped. So a bullet
+hole and the chunk that comes out of it are the *same* operation, the chunk is a closed convex solid
+like every other piece (`Collider::convex_hull` and it tumbles), and the bore went from being the one
+thing in the crate that destroyed volume to conserving it exactly — `shards + plugs = the cell`, which
+the transcript above now prints.
+
+A plug is deliberately **not** a fragment. Its barrel faces are the same rings the shards got, so a
+`ProxyCell` in the proxy would be bonded to every shard around it by a match that is working correctly
+— and the hole would be filled by a piece welded across it. It comes back as its own type so that
+cannot be written.
+
+What the example does with it after that is the example's business, and none of it is in the crate: it
+throws each plug along the channel axis the crate reported, integrates it with the same thirty-line
+solver every gib uses, stops it dead on contact (a wet lump neither bounces nor skids), lays its long
+axis flat, and three frames later replaces it with a flat disc on the floor. **The pools are not
+meshes in any meaningful sense** — one unit-radius circle asset, scaled per pool, lying a
+six-thousandth of a unit above the floor. A gib whose geometry persists forever is what makes a floor
+read as a bin of debris; spilled material should stop being an object and become a mark.
 
 **The shards stay bonded, which is why a bored subject still stands.** Shard *k* and shard *k+1* share
 plane *k*'s face region bit-for-bit, because the splitter hands both halves the same ring. That is
@@ -238,6 +258,8 @@ purpose: it is the smallest subject that is still honestly non-manifold where tw
     radius 0.050 · 8 sides · jaggedness 0.35 · flare 0.25
     cells 2 → 9 · leaves 12 · volume 0.2493 → 0.2472 · removed 0.0022 (the channel)
     every shard still closed, manifold, χ = 2:  12 of 12
+    ejected 1 plug(s) holding 0.0022 · shards + plugs 0.2493 = the subject 0.2493
+    every plug also closed, manifold, χ = 2:    1 of 1
 
    THE SOLID — each fragment's convex proxy cell, every face, closed
   ─────────────────────────────────────────────────────────────────────────────────

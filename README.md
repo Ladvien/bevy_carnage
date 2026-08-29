@@ -15,7 +15,7 @@ That is `examples/explode.rs` at its own 0.4× playback. The subject is intact, 
 - **One bake, every granularity.** A bake keeps the whole hierarchy it cut through, so the same cached asset answers "break this into three" and "break this into forty" without cutting twice.
 - **Localised damage.** A bond graph records which fragments actually share a face. Shoot a shoulder and the arm comes off while the body stays standing — the joints are found by geometry, not authored.
 - **Five region queries** — projectile, slash, swept blade, blast, directional pull — each a pure function of the bake plus some geometry.
-- **Bullet holes that go through.** A segment plus a radius subtracts a convex prism from the proxy, in closed form and as plane cuts only, so the channel is real geometry with a red interior, the pieces around it stay bonded, and every shard is still a convex-hull collider. Dials for radius, barrel sides, raggedness and exit flare.
+- **Bullet holes that go through, and gore that comes out the far side.** A segment plus a radius subtracts a convex prism from the proxy, in closed form and as plane cuts only, so the channel is real geometry with a red interior, the pieces around it stay bonded, and every shard is still a convex-hull collider. The material the channel removed comes back as `Ejecta` — a spawnable convex chunk with the wall's raw interior and a patch of skin at each end — so the hole and the gore are the *same subtraction*, and the bore conserves volume. Dials for radius, barrel sides, raggedness and exit flare.
 - **Progressive destruction.** Hit it again and it comes apart further. Island detection is stateless; you own the damage state.
 - **Two meshes per fragment** — the subject's own skin and the newly-cut faces, separately, so the inside can take a different material.
 - **Solver-ready colliders.** Every fragment is one convex cell. `Collider::convex_hull(frag.cell.points())` and you are done — no decomposition at spawn, no trimesh.
@@ -125,9 +125,9 @@ cargo run --release --example fracture_cube   # terminal only — no window, no 
   R               reset
 ```
 
-![A blue blocked-out humanoid standing still while five shots punch through it one at a time, each leaving a small dark-red hole in the blue skin, then the camera orbits a third of a turn to show the wider exit wounds on the far side](docs/holes.gif)
+![A blue blocked-out humanoid standing still while five shots punch through it one at a time, each leaving a small dark-red hole in the blue skin and throwing a red chunk of gore out the far side that arcs down, lands and spreads into a dark pool on the floor, then the camera orbits a third of a turn to show the wider exit wounds and the pools together](docs/holes.gif)
 
-That is `examples/bullet_holes.rs`, on a fixed script. Each shot is a `Bore` — a segment, a radius and three look dials — subtracted from the proxy before any cut, so the hole has a wall rather than being painted on a surface. The subject keeps standing because the shards around a channel share their radial faces bit-for-bit and the bond graph reads them as one island. Run it and you aim it yourself, with `[`/`]` for calibre, `J` for raggedness and `F` for exit flare.
+That is `examples/bullet_holes.rs`, on a fixed script. Each shot is a `Bore` — a segment, a radius and three look dials — subtracted from the proxy before any cut, so the hole has a wall rather than being painted on a surface, and the plug it removed is thrown out the exit side as a chunk of gore that lands and becomes a flat stain. The subject keeps standing because the shards around a channel share their radial faces bit-for-bit and the bond graph reads them as one island. Run it and you aim it yourself, with `[`/`]` for calibre, `J` for raggedness and `F` for exit flare.
 
 ## Why: break the asset once, not the frame
 

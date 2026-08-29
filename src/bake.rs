@@ -83,6 +83,28 @@ pub struct DetachedChunk {
     pub half_extents: Vec3,
 }
 
+/// **A plug a bore pushed out**, baked into mesh handles alongside the fragments.
+///
+/// The ECS mirror of [`crate::Ejecta`], and it exists so that setting [`FractureBores`] means the same
+/// thing on both paths: a subject with baked-in channels also has the material those channels removed.
+/// Two meshes, like a fragment, because the point is the contrast — the channel wall takes the
+/// interior material and the two end patches keep the subject's own skin.
+///
+/// Spawn these at the same moment the body fragments are spawned; they are debris that already left,
+/// so no frontier query returns one and no bond holds one on.
+pub struct EjectaChunk {
+    pub outer_mesh: Option<Handle<Mesh>>,
+    pub cap_mesh: Option<Handle<Mesh>>,
+    /// **The plug as a solid.** One convex cell, and its volume is exactly what the hole took.
+    pub cell: ProxyCell,
+    pub center_local: Vec3,
+    pub half_extents: Vec3,
+    /// Where the channel left the subject, subject-local.
+    pub exit: Vec3,
+    /// The channel's axis, unit — which way this was travelling. A geometric fact, not a velocity.
+    pub direction: Vec3,
+}
+
 /// Baked fracture data, keyed by the subject's source scene asset id so multiple distinct subjects
 /// each get their own bake and swapping the asset needs zero code change.
 #[derive(Resource, Default)]
@@ -91,6 +113,7 @@ pub struct FractureCache {
     trees: HashMap<AssetId<WorldAsset>, FragmentTree>,
     graphs: HashMap<AssetId<WorldAsset>, BondGraph>,
     detached: HashMap<AssetId<WorldAsset>, DetachedChunk>,
+    ejecta: HashMap<AssetId<WorldAsset>, Vec<EjectaChunk>>,
     baked: HashSet<AssetId<WorldAsset>>,
 }
 
@@ -154,6 +177,15 @@ impl FractureCache {
     /// The baked [`DetachedPart`] chunk for a source, if any.
     pub fn detached_chunk(&self, source: AssetId<WorldAsset>) -> Option<&DetachedChunk> {
         self.detached.get(&source)
+    }
+
+    /// The plugs this source's baked-in [`FractureBores`] pushed out, if any.
+    ///
+    /// Empty rather than `None` for a subject with no bores: "this subject ejected nothing" and "this
+    /// subject was never bored" are the same fact from a spawner's point of view, and both mean it has
+    /// no debris to place.
+    pub fn ejecta(&self, source: AssetId<WorldAsset>) -> &[EjectaChunk] {
+        self.ejecta.get(&source).map_or(&[], |v| v.as_slice())
     }
 
     /// Has this source been baked at all? True even when the bake produced no fragments (a degenerate
@@ -243,6 +275,21 @@ fn build_fragment(id: FragmentId, piece: crate::soup::Piece, meshes: &mut Assets
         cell: g.cell,
         center_local: g.center_local,
         half_extents: g.half_extents,
+    }
+}
+
+/// Turn one ejected plug into cached mesh handles — the same shape as [`build_fragment`], minus the
+/// tree id it deliberately does not have.
+fn build_ejecta(e: crate::soup::Ejected, meshes: &mut Assets<Mesh>) -> EjectaChunk {
+    let g = crate::mesh::ejecta_from_piece(e);
+    EjectaChunk {
+        outer_mesh: g.outer.map(|m| meshes.add(m)),
+        cap_mesh: g.cap.map(|m| meshes.add(m)),
+        cell: g.cell,
+        center_local: g.center_local,
+        half_extents: g.half_extents,
+        exit: g.exit,
+        direction: g.direction,
     }
 }
 
@@ -444,7 +491,7 @@ pub fn bake_fractures(
         // others is exactly the ambiguity `CLAUDE.md`'s one-path rule exists to prevent, and buying it
         // for 0.33 ms would be a bad trade twice over.
         let bores = bores.map(|b| b.0.clone()).unwrap_or_default();
-        let (pieces, tree) =
+        let (pieces, tree, ejected) =
             fracture(body, &proxy.0, &settings.cut_for(target, seed_from_path(&asset_path), bores));
         let graph = crate::mesh::bond_graph(&pieces, &tree);
         let frags: Vec<Fragment> = pieces
@@ -452,17 +499,21 @@ pub fn bake_fractures(
             .enumerate()
             .map(|(i, piece)| build_fragment(FragmentId(i as u32), piece, &mut meshes))
             .collect();
+        let plugs: Vec<EjectaChunk> =
+            ejected.into_iter().map(|e| build_ejecta(e, &mut meshes)).collect();
         info!(
             "autogib: baked {} fragments for {asset_path} ({} in the finest frontier, {} cuts, \
-             {} bonds)",
+             {} bonds, {} ejected plug(s))",
             frags.len(),
             tree.leaves().len(),
             tree.cuts(),
-            graph.len()
+            graph.len(),
+            plugs.len()
         );
         cache.body.insert(source, frags);
         cache.trees.insert(source, tree);
         cache.graphs.insert(source, graph);
+        cache.ejecta.insert(source, plugs);
 
         // The detached chunk (single intact piece, keeps its own material).
         if let Some(chunk) = bake_detached(&part, part_material, &mut meshes) {

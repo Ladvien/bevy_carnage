@@ -162,6 +162,17 @@ fn main() {
     let plain_volume: f32 = baked.leaves().iter().map(|p| p.cell.volume()).sum();
     let bored = fracture_mesh(&parts, &proxy, &CutSettings { bores: vec![bore], ..cut(seed) });
     let bored_roots = bored.tree.roots().len();
+    // **The plug the channel pushed out** — the gore, and the reason the bore now conserves volume.
+    let ejected: f32 = bored.ejecta.iter().map(|e| e.cell.volume()).sum();
+    let plugs = bored.ejecta.len();
+    let plug_sound = bored
+        .ejecta
+        .iter()
+        .filter(|e| {
+            bevy_autogib::audit_cell(&e.cell)
+                .is_ok_and(|a| a.is_closed() && a.is_manifold() && a.euler_characteristic == 2)
+        })
+        .count();
     let bored_pieces: Vec<FragmentGeometry> = bored.into_leaves();
     let bored_volume: f32 = bored_pieces.iter().map(|p| p.cell.volume()).sum();
     let census = bevy_autogib::audit_proxies(&bored_pieces);
@@ -183,6 +194,12 @@ fn main() {
         plain_volume - bored_volume
     );
     println!("    every shard still closed, manifold, χ = 2:  {sound} of {}", census.len());
+    println!(
+        "    ejected {plugs} plug(s) holding {ejected:.4} · shards + plugs {:.4} = the subject \
+         {plain_volume:.4}",
+        bored_volume + ejected
+    );
+    println!("    every plug also closed, manifold, χ = 2:    {plug_sound} of {plugs}");
 
     let pieces: Vec<FragmentGeometry> = baked.into_leaves();
 

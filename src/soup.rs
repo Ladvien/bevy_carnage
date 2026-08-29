@@ -219,6 +219,18 @@ pub(crate) struct Piece {
     pub(crate) soften: f32,
 }
 
+/// One plug on its way out, mid-fracture: the same [`Piece`] shape as a fragment, plus where it left.
+///
+/// A `Piece` because it is emitted through exactly the same path — a convex cell, a subset of the
+/// subject's skin, cut faces from the cell, and the same two Tier B dials. The difference is what it
+/// is *not*: it never enters the [`crate::tree::FragmentTree`] and never reaches
+/// [`crate::bond::BondGraph`], so it cannot bond itself back into the hole it came from.
+pub(crate) struct Ejected {
+    pub(crate) piece: Piece,
+    pub(crate) exit: Vec3,
+    pub(crate) direction: Vec3,
+}
+
 /// One connected component of a triangle soup, and whether it is a *solid's* surface or a sheet.
 ///
 /// **The distinction AG-003 exists for.** A cape, a hair card, a decal or any single-sided sheet has no
@@ -353,7 +365,7 @@ pub(crate) fn fracture(
     render: Soup,
     proxy: &[ProxyCell],
     cut: &CutSettings,
-) -> (Vec<Piece>, FragmentTree) {
+) -> (Vec<Piece>, FragmentTree, Vec<Ejected>) {
     let CutSettings {
         target,
         min_fraction,
@@ -368,14 +380,16 @@ pub(crate) fn fracture(
     } = *cut;
     // **Bores first, because a channel is part of the subject's shape and not part of its breakage.**
     // Subtracting here means a bored cell reaches the loop as ordinary convex root cells, so the tree
-    // stays binary, `fragments[id.index()]` stays parallel with `tree.node(id)`, and the plug is never
-    // a fragment anyone has to remember not to spawn.
+    // stays binary and `fragments[id.index()]` stays parallel with `tree.node(id)`. The plugs come
+    // back separately and stay out of both, so nothing can bond one into the hole it came from.
     //
     // The **skin** is carved a few lines down, per closed shell, rather than here: a carved skin has
     // boundary edges at every hole rim, so classifying it after the carve reads a bored solid as a
     // sheet and carries the whole subject to one fragment. See [`crate::bore::carve`].
-    let (bored, prisms) = crate::bore::apply(proxy, bores);
+    let (bored, prisms, plugs) = crate::bore::apply(proxy, bores);
     let proxy: &[ProxyCell] = &bored;
+    // One slot per landed prism, filled by the per-shell carve below with the skin that channel took.
+    let mut torn: Vec<Soup> = (0..prisms.len()).map(|_| Soup::default()).collect();
     // Tier B assignment. Every triangle goes to the first cell containing its centroid — first, not
     // nearest, because overlapping shells (a head sunk into a torso) are the normal case and a
     // deterministic tie-break beats a distance that can flip on a rounding difference.
@@ -428,7 +442,7 @@ pub(crate) fn fracture(
                 render.tri_interior[t],
             );
         }
-        let solid = crate::bore::carve(solid, &prisms);
+        let solid = crate::bore::carve(solid, &prisms, &mut torn);
         for (t, tri) in solid.idx.iter().enumerate() {
             let (a, b, c) = (solid.vtx(tri[0]), solid.vtx(tri[1]), solid.vtx(tri[2]));
             let mid = (a.pos + b.pos + c.pos) / 3.0;
@@ -607,7 +621,41 @@ pub(crate) fn fracture(
         unsplittable.push(false);
         cuts += 1;
     }
-    (pieces, FragmentTree::from_nodes(nodes, cuts))
+
+    // **The plugs, assembled last and kept out of everything above.** Each takes the skin its own
+    // channel tore out — the entry and exit patches — assigned by the same inward-nudged centroid test
+    // the fragments used, so a shot that crossed two cells gives each plug its own share. The cut faces
+    // come from the plug's cell at emit time like any other piece, which is what makes the barrel wall
+    // red without a second material path.
+    let ejecta: Vec<Ejected> = plugs
+        .into_iter()
+        .map(|plug| {
+            let mut render = Soup::default();
+            if let Some(skin) = torn.get(plug.prism) {
+                for (t, tri) in skin.idx.iter().enumerate() {
+                    let (a, b, c) = (skin.vtx(tri[0]), skin.vtx(tri[1]), skin.vtx(tri[2]));
+                    let mid = (a.pos + b.pos + c.pos) / 3.0
+                        - face_normal(a.pos, b.pos, c.pos) * INWARD_NUDGE;
+                    if plug.cell.contains(mid) {
+                        render.push_tri(a, b, c, skin.tri_interior[t]);
+                    }
+                }
+            }
+            Ejected {
+                piece: Piece {
+                    cell: plug.cell,
+                    render,
+                    sheets: Vec::new(),
+                    relief: cap_relief,
+                    soften,
+                },
+                exit: plug.exit,
+                direction: plug.direction,
+            }
+        })
+        .collect();
+
+    (pieces, FragmentTree::from_nodes(nodes, cuts), ejecta)
 }
 
 /// Split a render payload by a plane into both half-spaces. **Clipping only** — a render fragment is a

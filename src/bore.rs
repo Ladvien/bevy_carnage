@@ -186,16 +186,29 @@ pub(crate) fn prism(bore: &Bore) -> Option<Vec<Plane>> {
     Some(planes)
 }
 
-/// Replace `cell` with the convex shards of `cell \ prism`, or leave it alone.
+/// What one bore took out of one cell: the shards that stay behind, and the plug that leaves.
 ///
-/// `None` means the prism does not reach this cell and the caller keeps it as it was. `Some(shards)`
-/// means the cell is replaced; an **empty** `shards` means the bore consumed the cell whole, which
-/// is a small cell shot away and is reported by the caller rather than fudged into a sliver.
+/// **The plug is deliberately not a `ProxyCell` in the returned proxy, and that is load-bearing.** Its
+/// barrel faces are the *same* rings [`ProxyCell::clip`] handed the shards, reversed — bit-identically
+/// coplanar, which is exactly what [`crate::bond::BondGraph::of`] matches on. Put it back in the proxy
+/// and the graph would correctly bond it to every shard around it, the plug would be part of the body
+/// island, and the hole would be *filled*. It comes back as its own thing so that cannot be typed.
+pub(crate) struct Cut {
+    pub(crate) shards: Vec<ProxyCell>,
+    /// The channel's own material. Convex, closed, and exactly the volume the hole removed.
+    pub(crate) plug: ProxyCell,
+}
+
+/// Divide `cell` into the convex shards of `cell \ prism` plus the plug inside it, or leave it alone.
+///
+/// `None` means the prism does not reach this cell and the caller keeps it as it was. `Some` means the
+/// cell is replaced; an **empty** `shards` means the bore consumed the cell whole, and then the plug
+/// *is* the cell — a small part shot clean off, which is the honest reading and needs no special case.
 ///
 /// Note what this does *not* do: it never re-hulls, never re-welds independently, never nudges a
 /// vertex. Any of those destroys the bit-exact coplanarity [`crate::bond`] matches on, and the crate
 /// refuses to paper that over with a proximity heuristic. `clip` is the only route.
-pub(crate) fn subtract(cell: &ProxyCell, prism: &[Plane]) -> Option<Vec<ProxyCell>> {
+pub(crate) fn subtract(cell: &ProxyCell, prism: &[Plane]) -> Option<Cut> {
     let mut shards: Vec<ProxyCell> = Vec::new();
     let mut rest = cell.clone();
     for plane in prism {
@@ -214,7 +227,10 @@ pub(crate) fn subtract(cell: &ProxyCell, prism: &[Plane]) -> Option<Vec<ProxyCel
             (None, None) => return None,
         }
     }
-    Some(shards) // `rest` is the plug, and dropping it is the hole
+    // `rest` is the plug. It used to be dropped here, and dropping it was the hole — which also meant
+    // the bore was the one operation in this crate that did not conserve volume. It comes back now:
+    // shards + plug is the cell, exactly.
+    Some(Cut { shards, plug: rest })
 }
 
 /// One closed shell's skin with everything inside the landed prisms removed, clipped not culled.
@@ -234,10 +250,16 @@ pub(crate) fn subtract(cell: &ProxyCell, prism: &[Plane]) -> Option<Vec<ProxyCel
 /// which is the same answer from the other direction: a bore is a subtraction from the *proxy*, and a
 /// sheet is not in the proxy.
 ///
+/// The skin the channel took is **kept**, appended into `removed[i]` for prism `i` — those are the
+/// entry and exit patches, and they are what makes the ejected plug read as a chunk of the subject
+/// rather than a bare red rod. `removed` is sized by the caller from `prisms.len()`; a short slice
+/// drops those patches rather than panicking, because a length mismatch here is a crate bug and not
+/// something a caller can cause.
+///
 /// With no prisms this is exactly `src`, so an unbored bake is byte-identical.
-pub(crate) fn carve(src: Soup, prisms: &[Vec<Plane>]) -> Soup {
+pub(crate) fn carve(src: Soup, prisms: &[Vec<Plane>], removed: &mut [Soup]) -> Soup {
     let mut skin = src;
-    for prism in prisms {
+    for (i, prism) in prisms.iter().enumerate() {
         let mut kept = Soup::default();
         let mut rest = skin;
         for plane in prism {
@@ -245,13 +267,39 @@ pub(crate) fn carve(src: Soup, prisms: &[Vec<Plane>]) -> Soup {
             split_render(&rest, plane, &mut kept, &mut inside);
             rest = inside;
         }
-        // `rest` is the skin inside the channel: the entry and exit patches.
+        // `rest` is the skin inside the channel: the entry and exit patches. Prism `i + 1` splits
+        // only what prism `i` kept, so the patches collected here are disjoint across prisms and no
+        // triangle can be claimed by two plugs.
+        if let Some(slot) = removed.get_mut(i) {
+            for (t, tri) in rest.idx.iter().enumerate() {
+                slot.push_tri(rest.vtx(tri[0]), rest.vtx(tri[1]), rest.vtx(tri[2]), rest.tri_interior[t]);
+            }
+        }
         skin = kept;
     }
     skin
 }
 
-/// Subtract every bore from the proxy, and hand back the prisms that actually landed.
+/// **The material one channel removed from one cell**, on its way out of the subject.
+///
+/// One per (bore, cell) pair, so a shot through a torso and an arm pushes two of these out — which is
+/// the right answer and needed no extra code. It is not a fragment: see [`Cut`] for why it must not be.
+pub(crate) struct Plug {
+    pub(crate) cell: ProxyCell,
+    /// Which landed prism made it — the index into the returned prism list, so the skin
+    /// [`carve`] took can be matched back to the plug it belongs to.
+    pub(crate) prism: usize,
+    /// Where the channel left the subject, in subject-local space: the bore's own `to`.
+    pub(crate) exit: Vec3,
+    /// The channel's axis, unit — which way the plug was travelling when it came out.
+    ///
+    /// A geometric fact about the [`Bore`], not a velocity: the crate still moves nothing. It rides
+    /// along because a caller with several plugs from several shots would otherwise have to correlate
+    /// two parallel arrays to work out which way each one should go.
+    pub(crate) direction: Vec3,
+}
+
+/// Subtract every bore from the proxy; hand back the prisms that landed and the plugs they pushed out.
 ///
 /// Bores are applied in the order given, each to the previous one's output, so two shots that
 /// overlap produce one channel rather than two contradictory ones. Cells keep their input order and
@@ -259,35 +307,47 @@ pub(crate) fn carve(src: Soup, prisms: &[Vec<Plane>]) -> Soup {
 /// the geometry alone — no hash iteration, no sort.
 ///
 /// The returned prisms are the ones the caller must also [`carve`] out of the skin, in the same
-/// order. A bore that reached no proxy cell is **not** in that list: a channel that touched no solid
-/// must not open the skin.
-pub(crate) fn apply(cells: &[ProxyCell], bores: &[Bore]) -> (Vec<ProxyCell>, Vec<Vec<Plane>>) {
+/// order. A bore that reached no proxy cell is **not** in that list and contributes no plug: a
+/// channel that touched no solid must not open the skin, and it cannot have ejected anything either.
+pub(crate) fn apply(
+    cells: &[ProxyCell],
+    bores: &[Bore],
+) -> (Vec<ProxyCell>, Vec<Vec<Plane>>, Vec<Plug>) {
     // With an empty `bores` this is one clone of a handful of cells and the pipeline is otherwise
     // byte-identical. One path, no `if bores.is_empty()` branch to diverge.
     let mut cells: Vec<ProxyCell> = cells.to_vec();
     let mut landed: Vec<Vec<Plane>> = Vec::new();
+    let mut plugs: Vec<Plug> = Vec::new();
     let cells_before = cells.len();
-    let mut removed = 0.0f32;
+    let mut ejected = 0.0f32;
     let mut consumed = 0usize;
 
     for bore in bores {
         let Some(prism) = prism(bore) else { continue }; // already warned
+        let axis = (bore.to - bore.from).normalize_or_zero();
         let mut next: Vec<ProxyCell> = Vec::with_capacity(cells.len());
-        let mut hit = false;
+        // Staged, because a bore that turns out to have reached nothing must contribute no plug —
+        // and that is only known after every cell has been tried.
+        let mut mine: Vec<Plug> = Vec::new();
         for cell in &cells {
             match subtract(cell, &prism) {
                 None => next.push(cell.clone()),
-                Some(shards) => {
-                    hit = true;
-                    removed += cell.volume() - shards.iter().map(|s| s.volume()).sum::<f32>();
+                Some(Cut { shards, plug }) => {
                     if shards.is_empty() {
                         consumed += 1;
                     }
+                    ejected += plug.volume();
                     next.extend(shards);
+                    mine.push(Plug {
+                        cell: plug,
+                        prism: landed.len(),
+                        exit: bore.to,
+                        direction: axis,
+                    });
                 }
             }
         }
-        if !hit {
+        if mine.is_empty() {
             warn!(
                 "autogib: a bore from {:?} to {:?} (radius {}) reached no proxy cell; nothing was \
                  carved",
@@ -297,20 +357,22 @@ pub(crate) fn apply(cells: &[ProxyCell], bores: &[Bore]) -> (Vec<ProxyCell>, Vec
         }
         cells = next;
         landed.push(prism);
+        plugs.append(&mut mine);
     }
 
     if !landed.is_empty() {
         info!(
-            "autogib: bored {} channel(s); {cells_before} cells became {}, removing {removed} of \
-             volume",
+            "autogib: bored {} channel(s); {cells_before} cells became {}, ejecting {} plug(s) \
+             holding {ejected} of volume",
             landed.len(),
-            cells.len()
+            cells.len(),
+            plugs.len()
         );
         if consumed > 0 {
-            info!("autogib: {consumed} of those cells were swallowed whole by a bore and are gone");
+            info!("autogib: {consumed} of those cells were swallowed whole and left as plugs");
         }
     }
-    (cells, landed)
+    (cells, landed, plugs)
 }
 
 #[cfg(test)]
@@ -682,11 +744,217 @@ mod tests {
         let prism = prism(&swallow).expect("a 0.5-radius bore is a valid channel");
         let left = apply(&cells, &[swallow]).0;
         assert!(
-            subtract(&cells[0], &prism).is_some_and(|s| s.is_empty()),
+            subtract(&cells[0], &prism).is_some_and(|c| c.shards.is_empty()),
             "the first cell should have been consumed whole"
         );
         assert_eq!(left.len(), 1, "one of the two cells should be gone, got {} left", left.len());
         assert_eq!(left[0], cells[1], "the cell the bore missed must come back untouched");
+    }
+
+    /// **The bore conserves volume now: shards plus plug is the cell, exactly.**
+    ///
+    /// This is the invariant keeping the plug bought. Before it, the bore was the one operation in the
+    /// crate that destroyed solid — the channel's material simply vanished — and there was no way to
+    /// state a conservation law about a bored subject. `subtract` is a partition of the cell into
+    /// half-space intersections, so the sum is exact up to the weld, and the tolerance here is the
+    /// same `1e-3` the fracture's own conservation test uses.
+    ///
+    /// Swept across the dials because slivers are the failure mode: a shard that collapses under
+    /// `MIN_CROSS2` takes its volume with it, and this is what would notice.
+    #[test]
+    fn the_shards_and_the_plug_are_the_cell_exactly() {
+        let cell = ProxyCell::from_box(Vec3::ZERO, Vec3::new(0.5, 1.0, 0.5));
+        for radius in [0.02f32, 0.05, 0.12] {
+            for sides in [3u32, 8, 24] {
+                for jaggedness in [0.0f32, 0.35, 1.0] {
+                    for flare in [0.0f32, 0.5] {
+                        let bore = through_y(radius, sides, jaggedness, flare);
+                        let p = prism(&bore).expect("a valid channel");
+                        let Cut { shards, plug } =
+                            subtract(&cell, &p).expect("the channel crosses the cell");
+                        let what =
+                            format!("radius {radius}, {sides} sides, jag {jaggedness}, flare {flare}");
+                        let sum: f32 =
+                            shards.iter().map(|s| s.volume()).sum::<f32>() + plug.volume();
+                        assert!(
+                            (sum - 2.0).abs() < 1.0e-3,
+                            "{what}: {} shards plus the plug enclose {sum}, not the cell's 2.0",
+                            shards.len()
+                        );
+                        assert!(plug.volume() > 0.0, "{what}: the plug enclosed nothing");
+                    }
+                }
+            }
+        }
+    }
+
+    /// **A plug is a closed convex solid, so it is a collider like any other chunk.**
+    ///
+    /// It is an intersection of the cell with half-spaces, exactly as a shard is, so this is the same
+    /// theorem — and it must hold for the material that *left* as much as for the material that
+    /// stayed. Audited through [`crate::audit_cell`], which exists so a plug does not need a
+    /// `FragmentGeometry` it has no id for.
+    #[test]
+    fn every_plug_is_a_closed_convex_solid() {
+        let (cube, proxy) = cube_parts();
+        for radius in [0.02f32, 0.05, 0.12] {
+            for sides in [3u32, 8, 24] {
+                for jaggedness in [0.0f32, 1.0] {
+                    for flare in [0.0f32, 0.5] {
+                        let baked =
+                            bake(&cube, &proxy, 6, vec![through_y(radius, sides, jaggedness, flare)]);
+                        let what =
+                            format!("radius {radius}, {sides} sides, jag {jaggedness}, flare {flare}");
+                        assert_eq!(baked.ejecta.len(), 1, "{what}: expected exactly one plug");
+                        for (i, e) in baked.ejecta.iter().enumerate() {
+                            let a = crate::audit_cell(&e.cell)
+                                .unwrap_or_else(|err| panic!("{what}: plug {i} unauditable: {err}"));
+                            assert_eq!(a.boundary_edges, 0, "{what}: plug {i} is open: {a:?}");
+                            assert!(a.is_manifold(), "{what}: plug {i} is not a manifold: {a:?}");
+                            assert_eq!(
+                                a.euler_characteristic, 2,
+                                "{what}: plug {i} is not a topological sphere: {a:?}"
+                            );
+                            assert!(
+                                a.supports_inside_outside,
+                                "{what}: plug {i} is not solid enough for a collider: {a:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// **A plug is not a fragment, and cannot bond itself back into the hole it came from.**
+    ///
+    /// The whole reason [`Ejecta`](crate::Ejecta) is its own type. A plug's barrel faces are the same
+    /// rings the shards got, so if it were a proxy cell the bond match would find it — correctly — and
+    /// the channel would be filled by a piece welded across it. Prediction: the tree and the bond
+    /// graph are *identical* to a bake of the same bore that ignores ejecta, the body is still one
+    /// island, and no leaf's cell equals the plug's.
+    #[test]
+    fn a_plug_is_absent_from_the_tree_and_from_the_bonds() {
+        let (cube, proxy) = cube_parts();
+        let baked = bake(&cube, &proxy, 1, vec![through_y(0.1, 8, 0.0, 0.0)]);
+        let ids = baked.tree.leaves();
+
+        assert_eq!(baked.ejecta.len(), 1, "one bore through one cell is one plug");
+        assert_eq!(
+            baked.fragments.len(),
+            ids.len(),
+            "at target 1 every node is a leaf, so a plug must not have been added as one"
+        );
+        let plug = &baked.ejecta[0].cell;
+        for (i, f) in baked.fragments.iter().enumerate() {
+            assert_ne!(
+                f.cell.points(),
+                plug.points(),
+                "fragment {i} IS the plug — it was added to the proxy instead of ejected"
+            );
+        }
+
+        // And the shards it left behind are still one island, with the plug gone.
+        let members: Vec<(crate::FragmentId, &ProxyCell)> = ids
+            .iter()
+            .filter_map(|id| baked.fragments.get(id.index()).map(|f| (*id, &f.cell)))
+            .collect();
+        let graph = BondGraph::of(&members, baked.tree.len());
+        assert_eq!(
+            graph.islands(&ids, &BondSet::new(&graph)).len(),
+            1,
+            "the {} shards around the channel must still be one island",
+            ids.len()
+        );
+    }
+
+    /// **A plug carries both materials: the channel wall and the skin the channel tore out.**
+    ///
+    /// That contrast is the whole read — a chunk of gore that is mostly raw interior with a patch of
+    /// the subject's own surface at each end where the shot went in and came out. `cap` is the wall,
+    /// `outer` is the patches, and a plug through a solid must have both.
+    ///
+    /// Measured at `soften = 0.0`, for the reason
+    /// `the_skin_opens_exactly_where_the_channel_crosses_it` already records: the relaxation subdivides
+    /// and moves the drawn surface, and on a plug it *grows* the end discs rather than shrinking them —
+    /// measured 0.244 against the carve's own 0.089 at the shipped `soften = 0.5`, because a disc
+    /// welded to a barrel ring bulges outward when it relaxes. That is the softening working; it is not
+    /// what this test is about.
+    #[test]
+    fn a_plug_carries_the_wall_and_the_skin_the_channel_tore_out() {
+        let (cube, proxy) = cube_parts();
+        let baked = fracture_mesh(
+            &[(&cube, Mat4::IDENTITY)],
+            &proxy,
+            &CutSettings {
+                bores: vec![through_y(0.12, 24, 0.0, 0.0)],
+                soften: 0.0,
+                ..CutSettings::new(1, 0.04, 0x5EED)
+            },
+        );
+        let e = &baked.ejecta[0];
+        assert!(e.cap.is_some(), "the plug has no channel wall to give the interior material");
+        assert!(
+            e.outer.is_some(),
+            "the plug has no skin patches — the entry and exit discs were dropped rather than carried"
+        );
+        // Both ends of a through-shot, so the patches are two discs, not one.
+        let area = mesh_area(e.outer.as_ref().expect("skin"));
+        let disc = 0.5 * 24.0 * 0.12 * 0.12 * (std::f32::consts::TAU / 24.0).sin();
+        assert!(
+            area > disc * 1.5 && area < disc * 2.5,
+            "the plug's skin is {area}; entry plus exit is about {} (2 × {disc})",
+            disc * 2.0
+        );
+    }
+
+    /// **A plug knows where it left and which way it was going**, so a caller can throw it.
+    ///
+    /// Both are geometric facts about the [`Bore`] rather than physics: `exit` is its `to` and
+    /// `direction` is its normalised axis. Pinned because the demo's gore flies along them, and a sign
+    /// error would send every chunk back into the subject.
+    #[test]
+    fn a_plug_leaves_along_the_channel_and_exits_where_the_bore_did() {
+        let (cube, proxy) = cube_parts();
+        let bore = through_y(0.1, 8, 0.0, 0.0);
+        let baked = bake(&cube, &proxy, 1, vec![bore]);
+        let e = &baked.ejecta[0];
+        assert_eq!(e.exit, bore.to, "the plug did not leave at the bore's own far end");
+        assert!(
+            (e.direction - Vec3::Y).length() < 1.0e-6,
+            "a bore along +Y must eject along +Y, got {:?}",
+            e.direction
+        );
+        // The plug's own centre sits on the channel axis, between entry and exit.
+        assert!(
+            e.center_local.x.abs() < 1.0e-3 && e.center_local.z.abs() < 1.0e-3,
+            "the plug's centre {:?} is off the channel axis",
+            e.center_local
+        );
+    }
+
+    /// **A bore that never reached the solid ejects nothing**, whether it missed or was refused.
+    ///
+    /// The counterpart of the two existing refusal tests. Gore that appears for a shot which hit
+    /// nothing is worse than no gore: it is the feature claiming a hit the geometry did not make.
+    #[test]
+    fn a_bore_that_reached_nothing_ejects_nothing() {
+        let (cube, proxy) = cube_parts();
+        let miss = Bore {
+            from: Vec3::new(5.0, -1.5, 0.0),
+            to: Vec3::new(5.0, 1.5, 0.0),
+            ..Bore::new(Vec3::ZERO, Vec3::Y, 0.05)
+        };
+        assert!(bake(&cube, &proxy, 8, vec![miss]).ejecta.is_empty(), "a missed bore ejected a plug");
+        let refused = through_y(1.0e-3, 8, 0.0, 0.0);
+        assert!(
+            bake(&cube, &proxy, 8, vec![refused]).ejecta.is_empty(),
+            "a refused bore ejected a plug"
+        );
+        assert!(
+            bake(&cube, &proxy, 8, Vec::new()).ejecta.is_empty(),
+            "an unbored bake ejected a plug"
+        );
     }
 
     /// Summed triangle area of a mesh — the skin measurement the opening test compares.

@@ -373,6 +373,23 @@ pub(crate) fn proxy_soup(cell: &ProxyCell) -> Soup {
 /// extent, and it is a perfectly good collider. It comes back with both meshes `None` and is bounded
 /// by its cell rather than by a render mesh it never received.
 pub(crate) fn geometry_from_piece(id: FragmentId, piece: crate::soup::Piece) -> FragmentGeometry {
+    let Drawn { outer, cap, center, half_extents, cell } = draw_piece(piece);
+    FragmentGeometry { id, outer, cap, cell, center_local: center, half_extents }
+}
+
+/// What emitting one piece produces, before anything decides whether it is a fragment or ejecta.
+pub(crate) struct Drawn {
+    pub(crate) outer: Option<Mesh>,
+    pub(crate) cap: Option<Mesh>,
+    pub(crate) center: Vec3,
+    pub(crate) half_extents: Vec3,
+    pub(crate) cell: ProxyCell,
+}
+
+/// **Emit one piece: skin, cut faces welded into it, softened, recentred.** The one path both a
+/// fragment and an ejected plug travel, so a plug's channel wall gets the interior material by the
+/// same mechanism every other cut face does — no second emit path to keep in step.
+fn draw_piece(piece: crate::soup::Piece) -> Drawn {
     let crate::soup::Piece { cell, render, sheets, relief, soften: round } = piece;
     // The cap comes from the cell, never from the render mesh — that is the architecture in one line.
     //
@@ -413,7 +430,46 @@ pub(crate) fn geometry_from_piece(id: FragmentId, piece: crate::soup::Piece) -> 
     } else {
         (soup_to_mesh(&drawn, false, center), soup_to_mesh(&drawn, true, center))
     };
-    FragmentGeometry { id, outer, cap, cell, center_local: center, half_extents }
+    Drawn { outer, cap, center, half_extents, cell }
+}
+
+/// **What a bore pushed out the far side** — the channel's own material, as a spawnable chunk.
+///
+/// A bullet hole and the gore that leaves through it are the *same subtraction*: this is the plug
+/// [`crate::Bore`] removed, and its geometry costs nothing extra because the cut had to compute it
+/// either way. Mostly interior — the barrel wall takes the same material every cut face does — with a
+/// patch of the subject's own skin at each end where the channel crossed the surface.
+///
+/// **Not a fragment, and deliberately not carrying a [`FragmentId`].** It is absent from the
+/// [`FragmentTree`](crate::FragmentTree) and from the [`BondGraph`], because its barrel faces are
+/// bit-identically coplanar with the shards it left behind — a bond match would weld it back into the
+/// hole. Spawn these once, at the moment of the bake; they are debris, not a frontier.
+pub struct Ejecta {
+    /// The subject's own surface where the channel crossed it — the entry and exit patches. `None`
+    /// for a plug that never reached the skin, which is a bore entirely inside the solid.
+    pub outer: Option<Mesh>,
+    /// The channel wall. Give this the interior material, the same one the fragments' caps take.
+    pub cap: Option<Mesh>,
+    /// **The plug as a solid.** One convex cell, so `Collider::convex_hull(e.cell.points())` and it
+    /// tumbles like any other chunk. Its [`volume`](ProxyCell::volume) is exactly what the hole took.
+    pub cell: ProxyCell,
+    /// Both meshes are recentred on this, so the chunk spins about itself rather than orbiting.
+    pub center_local: Vec3,
+    pub half_extents: Vec3,
+    /// Where the channel left the subject, subject-local — the [`Bore`](crate::Bore)'s own `to`.
+    pub exit: Vec3,
+    /// The channel's axis, unit: which way this was travelling when it came out.
+    ///
+    /// **A geometric fact, not a velocity.** The crate moves nothing; how fast a plug leaves is the
+    /// caller's physics, exactly as it is for a fragment. This rides along so a caller holding several
+    /// plugs from several shots does not have to correlate parallel arrays to know which way each goes.
+    pub direction: Vec3,
+}
+
+pub(crate) fn ejecta_from_piece(e: crate::soup::Ejected) -> Ejecta {
+    let crate::soup::Ejected { piece, exit, direction } = e;
+    let Drawn { outer, cap, center, half_extents, cell } = draw_piece(piece);
+    Ejecta { outer, cap, cell, center_local: center, half_extents, exit, direction }
 }
 
 /// Axis-aligned bounds of a cell's own vertices. `(ZERO, ZERO)` for a cell with no points, which
@@ -474,14 +530,15 @@ pub fn fracture_mesh(parts: &[(&Mesh, Mat4)], proxy: &[ProxyCell], cut: &CutSett
     if soup.is_empty() {
         return Fracture::default();
     }
-    let (pieces, tree) = fracture(soup, proxy, cut);
+    let (pieces, tree, ejected) = fracture(soup, proxy, cut);
     let bonds = bond_graph(&pieces, &tree);
     let fragments = pieces
         .into_iter()
         .enumerate()
         .map(|(i, p)| geometry_from_piece(FragmentId(i as u32), p))
         .collect();
-    Fracture { fragments, tree, bonds }
+    let ejecta = ejected.into_iter().map(ejecta_from_piece).collect();
+    Fracture { fragments, tree, bonds, ejecta }
 }
 
 /// Match up which of a bake's finest fragments share a face.
@@ -512,6 +569,13 @@ pub struct Fracture {
     /// Which fragments *touch* which, over the finest frontier. Nesting and neighbouring are
     /// different questions, and a localised break needs the second one.
     pub bonds: BondGraph,
+    /// **What the bores pushed out**, if any — the plugs, as spawnable chunks. Empty for a bake with
+    /// no [`bores`](crate::CutSettings::bores).
+    ///
+    /// Deliberately *not* in `fragments` and not in `tree`: these are debris that left the subject, so
+    /// no frontier query can return one and nothing can bond one back into the hole it came from.
+    /// Spawn them once, at the moment the bake happens. See [`Ejecta`].
+    pub ejecta: Vec<Ejecta>,
 }
 
 impl Fracture {
@@ -641,8 +705,8 @@ mod tests {
     #[test]
     fn fracture_reaches_target_and_is_deterministic() {
         let proxy = cube_proxy();
-        let (a, ta) = fracture(cube_soup(), &proxy, &CutSettings::new(8, 0.05, 0xABCD_1234));
-        let (b, tb) = fracture(cube_soup(), &proxy, &CutSettings::new(8, 0.05, 0xABCD_1234));
+        let (a, ta, _) = fracture(cube_soup(), &proxy, &CutSettings::new(8, 0.05, 0xABCD_1234));
+        let (b, tb, _) = fracture(cube_soup(), &proxy, &CutSettings::new(8, 0.05, 0xABCD_1234));
         assert_eq!(a.len(), b.len());
         assert_eq!(ta, tb, "the hierarchy is reproducible, not just the geometry");
         let leaves = ta.leaves();
@@ -663,7 +727,7 @@ mod tests {
     #[test]
     fn every_frontier_of_one_bake_conserves_the_whole_volume() {
         let proxy = cube_proxy();
-        let (pieces, tree) = fracture(cube_soup(), &proxy, &CutSettings::new(8, 0.05, 0xABCD_1234));
+        let (pieces, tree, _) = fracture(cube_soup(), &proxy, &CutSettings::new(8, 0.05, 0xABCD_1234));
         let whole: f32 = proxy.iter().map(|c| c.volume()).sum();
         for cuts in 0..=tree.cuts() {
             let v: f32 = tree
@@ -730,7 +794,7 @@ mod tests {
         assert!(below.is_some(), "the whole cell lies below it");
         // A `min_fraction` this large stops the recursion early; the loop must *terminate* there
         // rather than spin to its hard cap looking for a cut it is never allowed to make.
-        let (out, tree) = fracture(cube_soup(), &cube_proxy(), &CutSettings::new(4, 0.6, 42));
+        let (out, tree, _) = fracture(cube_soup(), &cube_proxy(), &CutSettings::new(4, 0.6, 42));
         assert!(!out.is_empty());
         assert!(tree.cuts() <= 4, "the volume floor bounded the cuts, got {}", tree.cuts());
         assert!(tree.leaves().len() <= 4, "and so bounded the finest frontier");
@@ -740,7 +804,7 @@ mod tests {
     /// spin, and it does not silently produce a deeper tree than asked for.
     #[test]
     fn max_depth_bounds_the_hierarchy_without_looping() {
-        let (_, tree) = fracture(cube_soup(), &cube_proxy(), &CutSettings { max_depth: 2, ..CutSettings::new(32, 0.001, 0x5EED_1234) });
+        let (_, tree, _) = fracture(cube_soup(), &cube_proxy(), &CutSettings { max_depth: 2, ..CutSettings::new(32, 0.001, 0x5EED_1234) });
         assert!(tree.cuts() > 0, "a depth of 2 still permits cuts");
         assert!(
             tree.iter().all(|(_, n)| n.depth <= 2),

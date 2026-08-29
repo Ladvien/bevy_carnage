@@ -25,7 +25,7 @@
 use bevy::prelude::*;
 
 mod common;
-use common::body::{self, ORIGIN, SHOTS};
+use common::body::{self, Chunk, ORIGIN, SHOTS};
 use common::{Recorder, arg, light_and_floor};
 use bevy_autogib::Bore;
 
@@ -51,19 +51,32 @@ const TAIL: u32 = 12;
 /// Frames of orbit at the end — a third of a turn, so the exit side comes into view.
 const ORBIT: u32 = 56;
 
+/// **Fixed timestep**, the reason a recorder exists alongside a windowed demo: the gore's
+/// trajectories are then a pure function of the seed rather than of how fast the machine rendered.
+/// The same constant `capture_sever` uses.
+const DT: f32 = 1.0 / 30.0 * 0.55;
+
 fn main() {
     let out = arg("--out").unwrap_or_else(|| "frames-holes".to_string());
     // **A closer camera than the other four clips, on purpose.** The shared framing exists so the
     // *body* clips are comparable to each other; this one is not one of them. A 0.035 hole on a
     // 1.0-tall subject is about 16 px at that distance, which is a smudge — so this sits nearer and
     // gives up the comparison.
-    let camera = Transform::from_xyz(1.15, 1.05, 1.55).looking_at(ORIGIN, Vec3::Y);
+    // Tilted down a little from the AG-022 framing, because the clip now has to show the floor: the
+    // plugs land about 1.2 units out and the pools they leave are the end of the story.
+    let camera = Transform::from_xyz(1.30, 1.20, 1.75).looking_at(ORIGIN - Vec3::Y * 0.16, Vec3::Y);
     let Some(mut rec) = Recorder::new(WIDTH, HEIGHT, camera, &out) else { return };
 
     light_and_floor(rec.world());
     let mut bores: Vec<Bore> = Vec::new();
+    // Nothing has been thrown yet. The counter lives in the world so `spawn_gore` stays idempotent
+    // across the four re-bakes this clip performs.
+    rec.world().init_resource::<body::Thrown>();
     rebake(&mut rec, &bores);
     rec.warm_up(4);
+    // Added after the scene, so the frames before the first shot are perfectly still — the same
+    // ordering trick `capture_sever` uses for its intact frames.
+    rec.app().main.add_systems(Update, (integrate, body::bleed).chain());
 
     let last = SHOTS.last().map(|(f, _, _)| *f).unwrap_or(0);
     for frame in 0..last + TAIL + ORBIT {
@@ -82,8 +95,17 @@ fn main() {
             let t = (frame - (last + TAIL)) as f32 / ORBIT as f32;
             let angle = t * std::f32::consts::TAU / 3.0;
             let (s, c) = angle.sin_cos();
-            let (x, z) = (1.15 * c + 1.55 * s, 1.55 * c - 1.15 * s);
-            let moved = Transform::from_xyz(x, 1.05, z).looking_at(ORIGIN, Vec3::Y);
+            let (x, z) = (1.30 * c + 1.75 * s, 1.75 * c - 1.30 * s);
+            // **Pulling back and rising as it goes round, which the AG-022 orbit did not have to do.**
+            // The gore flies out the exit side, so a third of a turn puts the camera on the same side
+            // as the pools — and at the fixed radius they ended up a few tenths of a unit in front of
+            // the lens, i.e. out of frame entirely. Backing off to 1.6x and lifting while aiming lower
+            // keeps the exit wounds and the stains they left in the same shot, which is the whole
+            // point of ending here.
+            let out = 1.0 + 0.45 * t;
+            let look = ORIGIN - Vec3::Y * (0.16 + 0.30 * t);
+            let moved =
+                Transform::from_xyz(x * out, 1.20 + 0.48 * t, z * out).looking_at(look, Vec3::Y);
             let mut cams = rec.world().query_filtered::<&mut Transform, With<Camera3d>>();
             for mut cam in cams.iter_mut(rec.world()) {
                 *cam = moved;
@@ -95,10 +117,11 @@ fn main() {
     info!("capture_holes: wrote {n} frames to {out}");
 }
 
-/// Re-cut the subject with the accumulated channels and stand it back up.
+/// Re-cut the subject with the accumulated channels, stand it back up, and throw what came out.
 ///
-/// The same sequence `sever`'s `T` key performs: clear, bake, fresh damage, stand. Shared with
-/// nothing because it *is* the script — what differs between the two recorders is only this.
+/// The same sequence `sever`'s `T` key performs, plus [`body::spawn_gore`]. `clear` deliberately
+/// leaves gore and pools alone, and `spawn_gore` only throws plugs it has not thrown before — so
+/// re-baking on every shot neither recalls debris already in the air nor duplicates it.
 fn rebake(rec: &mut Recorder, bores: &[Bore]) {
     body::clear(rec.world());
     let baked = body::Baked::bake(rec.world(), SOFTEN, bores);
@@ -108,4 +131,13 @@ fn rebake(rec: &mut Recorder, bores: &[Bore]) {
     rec.world().insert_resource(materials);
     rec.world().insert_resource(damage);
     body::stand(rec.world(), GRANULARITY);
+    body::spawn_gore(rec.world());
+}
+
+/// Gravity, a ground bounce and tumbling for the ejected plugs — on a fixed `DT`, so the run is
+/// reproducible. The standing shards are never touched: they are attached, not chunks.
+fn integrate(mut chunks: Query<(&mut Chunk, &mut Transform)>) {
+    for (mut chunk, mut transform) in &mut chunks {
+        body::integrate(&mut chunk, &mut transform, DT);
+    }
 }

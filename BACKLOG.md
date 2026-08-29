@@ -5,7 +5,7 @@
 `docs/research-brief.md` (the open problems), `docs/isomesh-upstream-asks.md` (what we need from the
 validator).
 
-**15 tickets archived, 8 landed this phase (AG-015 … AG-022), 0 open.** The architectural change this backlog opened with
+**15 tickets archived, 9 landed this phase (AG-015 … AG-023), 0 open.** The architectural change this backlog opened with
 has landed: the crate no longer cuts the triangle soup. It cuts a caller-supplied convex proxy and
 carries the render triangles along as a payload.
 
@@ -493,6 +493,69 @@ missing field is the only compatibility risk, and the default is the empty list 
 exactly seven — 13, 20, 27, 34, 41 cells for one through five holes — one cell becoming its eight
 shards every time, with volume removed 0.00079 → 0.00367. No bore reported reaching no cell, and no
 triangle came back homeless.
+
+| [x] | **AG-023 — the plug comes out: a bullet hole and its gore are the same subtraction.** `bore::subtract` kept the plug instead of dropping it; it comes back as `Ejecta` (pure path) and `EjectaChunk` (ECS path) — a convex cell, the channel wall as interior material, a patch of skin at each end, plus the exit point and the channel axis. `audit_cell` extracted so a plug can be audited without a `FragmentGeometry` it has no id for. The demo throws each plug down the channel, lands it, and replaces it with a flat pool. Six tests. | M |
+
+### AG-023, as landed
+
+**Two pre-registered predictions, written before the run.** *One: keeping the plug moves no existing
+number and adds no new failure mode*, because it is material the cut already computed in order to
+remove it — nothing new is generated, something is simply no longer thrown away. *Two: the bore then
+conserves volume exactly*, `shards + plug == the cell`, which it could not previously state at all.
+
+**Both confirmed.** All 70 pre-existing tests stayed green with none re-blessed, `fracture_cube`
+reproduces the committed transcript digit for digit, and clippy stayed at exactly the 12-warning
+baseline. The conservation law is now printed in the transcript rather than argued:
+`shards + plugs 0.2493 = the subject 0.2493`. Before this ticket the bore was the one operation in the
+crate that destroyed solid.
+
+**The plug must not be a `ProxyCell` in the proxy, and that is the whole reason `Ejecta` is a separate
+type.** A plug's barrel faces are the *same* rings `clip` handed the shards, reversed — bit-identically
+coplanar, which is exactly what `BondGraph::of` matches on. Returned as a cell it would be bonded to
+every shard around it by a match working perfectly, the plug would join the body island, and the hole
+would be *filled by a piece welded across it*. `a_plug_is_absent_from_the_tree_and_from_the_bonds`
+pins all three halves: not in `fragments`, not a leaf, and the shards still one island without it.
+
+**Six premises were wrong, and five of them were only findable by looking at the picture.**
+
+*One: `audit_proxy` was accidentally coupled to `FragmentGeometry`.* It reads nothing but `.cell`, so
+auditing a plug meant either inventing a `FragmentId` it does not have or copying the function. Split
+into `audit_cell`, which is what it always was.
+
+*Two: the shared integrator treats every chunk as a pebble, and a plug is not one.* Restitution 0.3
+with a drag that only bites during contact meant a landed plug still carried **0.99 of its speed
+sixteen frames after touchdown**, so it skidded and the pool formed the better part of a unit from
+where it came down. A wet lump neither bounces nor skids: it is stopped dead on first contact, in the
+gore system rather than in `integrate`, so there is still one integrator and one chunk type.
+
+*Three: `GORE_SPEED` was wrong by a factor of four, and the failure was invisible in the logs.* Every
+plug is small enough that `heft` saturates at its 2.2 clamp, so 6.5 meant an effective 14.3 and a
+flight of roughly **eight units** — off the far edge of the 14×14 floor. The pools formed correctly
+every time and were simply never on camera, which is the kind of bug a green build cannot report. At
+1.6 the effective 3.5 lands about 1.2 units out.
+
+*Four: a rod freezes on its end.* A plug is as long as the subject is deep and as wide as the calibre,
+so stopping it mid-tumble left it standing upright like a bollard — the single most artificial thing in
+the clip. Its own long axis is rotated onto the horizontal on landing.
+
+*Five: a third of a turn puts the camera on the same side as the gore.* The plugs fly out the exit
+side, so the AG-022 orbit ended with the pools a few tenths of a unit in front of the lens. The orbit
+now backs off to 1.45x and rises while aiming lower, so the exit wounds and the stains they left are
+in the same shot.
+
+*Six: softening **grows** a plug's end discs, where it shrinks a fragment's skin.* Measured 0.244
+against the carve's own 0.089 at the shipped `soften = 0.5` — a disc welded to a barrel ring bulges
+outward when it relaxes, the opposite direction to the effect AG-022 recorded for shards. The test
+measures at 0.0 and says why.
+
+**What is deliberately not here.** The plug is one chunk, not a spray of several: that is the honest
+geometry of the subtraction, and splitting it would mean choosing a fracture for it that the shot did
+not describe. The pools are flat discs of one shared unit-radius circle asset scaled per pool, not
+projected decals — this crate has no floor and no decal pipeline, and the example should not grow one
+to prove a point about geometry. And nothing in the crate moves a plug: `direction` and `exit` are
+facts about the `Bore`, and turning them into a velocity is the caller's, exactly as it is for a
+fragment.
+
 
 ---
 

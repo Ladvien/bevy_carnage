@@ -11,13 +11,13 @@ mod severance;
 mod soup;
 mod tree;
 
-pub use audit::{SolidAudit, SurfaceReport, audit_proxies, audit_proxy, audit_render};
+pub use audit::{SolidAudit, SurfaceReport, audit_cell, audit_proxies, audit_proxy, audit_render};
 pub use bond::{Bond, BondGraph, BondId, BondSet};
 pub use bake::{
-    DetachedChunk, DetachedPart, Fragment, FractureBores, FractureCache, FractureProxy,
+    DetachedChunk, DetachedPart, EjectaChunk, Fragment, FractureBores, FractureCache, FractureProxy,
     FractureSubject, bake_fractures,
 };
-pub use mesh::{Fracture, FragmentGeometry, fracture_mesh};
+pub use mesh::{Ejecta, Fracture, FragmentGeometry, fracture_mesh};
 pub use bore::Bore;
 pub use proxy::ProxyCell;
 pub use severance::{Reach, capsule, directional, radial, spread, swept_triangle};

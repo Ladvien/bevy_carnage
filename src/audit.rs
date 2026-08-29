@@ -31,6 +31,7 @@ use isomesh::validate::{MeshReport, ValidateConfig};
 use isomesh::weld::Welder;
 
 use crate::mesh::FragmentGeometry;
+use crate::proxy::ProxyCell;
 
 /// The distance below which two vertices are the same vertex.
 ///
@@ -353,7 +354,19 @@ fn weld_then_validate(buf: &mut MeshBuffer<f32>) -> Result<MeshReport, String> {
 /// pointed it at the drawn surface, which is why "2 of 12 manifold" read as a defect rather than as a
 /// measurement of the wrong thing.
 pub fn audit_proxy(frag: &FragmentGeometry) -> Result<SolidAudit, String> {
-    let soup = crate::mesh::proxy_soup(&frag.cell);
+    audit_cell(&frag.cell)
+}
+
+/// Audit **one convex cell** as the closed solid it is.
+///
+/// What [`audit_proxy`] actually does, with the fragment taken off the front. It is public because a
+/// fragment is no longer the only thing in this crate that *is* a cell: [`crate::Ejecta`] carries one
+/// too — the plug a bore pushed out — and the claim "every piece of a plane-cut convex solid is a
+/// closed convex solid" is exactly as much a theorem for the material that left as for the material
+/// that stayed. Auditing a plug through a `FragmentGeometry` it does not have would have meant either
+/// a fake id or a second copy of this function.
+pub fn audit_cell(cell: &ProxyCell) -> Result<SolidAudit, String> {
+    let soup = crate::mesh::proxy_soup(cell);
     let mesh = crate::mesh::soup_to_mesh_all_faces(&soup)?;
     let mut buf: MeshBuffer<f32> = MeshBuffer::new();
     if !append(&mut buf, &mesh) {

@@ -30,7 +30,7 @@ use bevy::prelude::*;
 use bevy_autogib::Bore;
 
 mod common;
-use common::body::{self, BodyMaterials, ORIGIN, SHOTS};
+use common::body::{self, BodyMaterials, Chunk, ORIGIN, SHOTS};
 use common::light_and_floor;
 
 /// Rendered flat: see `capture_holes.rs`'s `SOFTEN` for the measurement. Relaxing each shard's skin
@@ -108,8 +108,12 @@ fn main() {
         .init_resource::<Bores>()
         .init_resource::<Dials>()
         .init_resource::<Status>()
+        .init_resource::<body::Thrown>()
         .add_systems(Startup, setup)
-        .add_systems(Update, (aim_marker, fire, hud))
+        // `fire` re-bakes and throws; `integrate` and `bleed` carry what was thrown through its whole
+        // life, from flying chunk to flat stain. Chained so a plug cannot be integrated and settled in
+        // the same frame it was spawned.
+        .add_systems(Update, (aim_marker, fire, integrate, body::bleed, hud).chain())
         .run();
 }
 
@@ -137,6 +141,7 @@ fn setup(world: &mut World) {
     world.insert_resource(materials);
     world.insert_resource(damage);
     body::stand(world, GRANULARITY);
+    body::spawn_gore(world);
     spawn_hud(world);
 }
 
@@ -282,6 +287,13 @@ fn fire(world: &mut World) {
     world.insert_resource(baked);
     world.insert_resource(damage);
     body::stand(world, GRANULARITY);
+    // **After `stand`, and only the plugs not already thrown.** A reset clears the bore list, so the
+    // counter goes back with it and the next shot's gore is thrown fresh.
+    if reset {
+        body::wipe(world);
+        world.resource_mut::<body::Thrown>().0 = 0;
+    }
+    body::spawn_gore(world);
 
     let standing = world.resource::<body::Baked>().tree.roots().len();
     world.resource_mut::<Status>().0 = if reset {
@@ -289,4 +301,15 @@ fn fire(world: &mut World) {
     } else {
         format!("fired: {} hole(s), the proxy is now {standing} cells", bores.len())
     };
+}
+
+/// The example's whole solver for the ejected plugs — the crate names none.
+fn integrate(time: Res<Time>, mut chunks: Query<(&mut Chunk, &mut Transform)>) {
+    let dt = time.delta_secs() * 0.55;
+    if dt <= 0.0 {
+        return;
+    }
+    for (mut chunk, mut transform) in &mut chunks {
+        body::integrate(&mut chunk, &mut transform, dt);
+    }
 }

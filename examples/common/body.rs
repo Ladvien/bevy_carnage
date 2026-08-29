@@ -162,6 +162,28 @@ pub struct Baked {
     pub tree: FragmentTree,
     /// Indexed by [`FragmentId`], parallel to the tree.
     pub parts: Vec<Part>,
+    /// **What the bores pushed out**, in the order the shots were fired. Empty with no bores.
+    ///
+    /// Off the tree and off the bond graph, because the crate keeps it off both — so nothing here has
+    /// to remember that a plug is not a frontier piece.
+    pub gore: Vec<GorePart>,
+}
+
+/// One ejected plug, resolved to handles at bake time exactly like a [`Part`].
+///
+/// **Not a fragment, and the crate refuses to let it be one** — see `bevy_autogib::Ejecta`. It is the
+/// material a channel removed, so it is already outside the subject the moment it exists.
+pub struct GorePart {
+    pub outer: Option<Handle<Mesh>>,
+    pub cap: Option<Handle<Mesh>>,
+    pub center_local: Vec3,
+    pub drop_to_rest: f32,
+    /// The plug's volume — its mass at uniform density, and the size of the pool it leaves.
+    pub volume: f32,
+    pub exit: Vec3,
+    /// The channel's axis, unit. The crate hands this over as geometry; turning it into a velocity
+    /// is this file's job, like every other launch here.
+    pub direction: Vec3,
 }
 
 impl Baked {
@@ -182,13 +204,32 @@ impl Baked {
         let baked = fracture_mesh(&parts, &proxy(), &cut);
 
         info!(
-            "baked {} fragments ({} finest, {} cuts) with {} bonds between them",
+            "baked {} fragments ({} finest, {} cuts) with {} bonds, and {} ejected plug(s)",
             baked.fragments.len(),
             baked.tree.leaves().len(),
             baked.tree.cuts(),
-            baked.bonds.len()
+            baked.bonds.len(),
+            baked.ejecta.len()
         );
         info!("soften {soften:.2} — rounding the drawn surface only; the colliders are unchanged");
+
+        let gore = baked
+            .ejecta
+            .into_iter()
+            .map(|e| {
+                let lowest = e.cell.points().iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+                let meshes = &mut world.resource_mut::<Assets<Mesh>>();
+                GorePart {
+                    outer: e.outer.map(|m| meshes.add(m)),
+                    cap: e.cap.map(|m| meshes.add(m)),
+                    center_local: e.center_local,
+                    drop_to_rest: (e.cell.center().y - lowest).max(0.0),
+                    volume: e.cell.volume().max(1.0e-6),
+                    exit: e.exit,
+                    direction: e.direction,
+                }
+            })
+            .collect();
 
         let parts = baked
             .fragments
@@ -206,7 +247,7 @@ impl Baked {
                 }
             })
             .collect();
-        Baked { tree: baked.tree, parts }
+        Baked { tree: baked.tree, parts, gore }
     }
 
     /// The adjacency for one frontier.
@@ -257,11 +298,104 @@ pub struct Chunk {
     pub drop_to_rest: f32,
 }
 
+/// **A plug in flight** — the material a channel pushed out, on its way to becoming a pool.
+///
+/// Carries a `Chunk` too, so it falls and tumbles through the same integrator every gib uses. What
+/// this adds is the *end* of that life: once it has stopped moving it stops being a mesh and becomes
+/// a flat stain on the floor.
+#[derive(Component)]
+pub struct Gore {
+    /// The plug's volume — how big the pool it leaves will be.
+    pub volume: f32,
+    /// The channel's axis in the plug's **own** local frame, which is the plug's long dimension: the
+    /// mesh is recentred but never rotated, so the crate's `direction` is still the rod's own axis.
+    /// Kept so a landed plug can be laid flat instead of freezing wherever it happened to be pointing.
+    pub axis: Vec3,
+    /// Consecutive frames it has been slow and on the floor. A pool forms past [`GORE_SETTLE`].
+    ///
+    /// Counted in frames rather than seconds deliberately: the recorder runs a fixed 30 Hz and the
+    /// windowed demo runs at whatever the display does, and frames are the one thing both have. It is
+    /// a cosmetic threshold on an object that has already stopped, so the difference does not show.
+    pub settled: u32,
+}
+
+/// **A blood pool: not a mesh gib but a flat stain**, lying on the floor where a plug came to rest.
+///
+/// Deliberately the end of the chain rather than another chunk. A gib that keeps its geometry forever
+/// is what makes a floor look like a bin of debris; real spilled material stops being an object and
+/// becomes a mark. The disc grows for [`POOL_SPREAD_FRAMES`] and then holds, because a stain that
+/// appears at full size reads as a decal being switched on.
+#[derive(Component)]
+pub struct Pool {
+    /// Frames since it formed, while it is still spreading.
+    pub age: u32,
+    /// The radius it spreads to.
+    pub radius: f32,
+}
+
+/// Frames a plug stays a mesh after touching down, before it becomes a pool. Short on purpose: it is
+/// the beat between "it landed" and "it spread", and any longer reads as debris that forgot to melt.
+pub const GORE_SETTLE: u32 = 3;
+/// How long a pool takes to spread to full size.
+pub const POOL_SPREAD_FRAMES: u32 = 10;
+
+/// **How fast a plug leaves.** Faster than a mid-sized gib, because a plug was *pushed* by the thing
+/// that made the channel rather than shaken loose by it — but chosen for the frame, not from
+/// ballistics. Every plug is tiny enough that [`heft`] saturates at its 2.2 clamp, so the effective
+/// launch speed is 2.2x this.
+///
+/// **Measured, because the first number was wrong by a factor of four.** At 6.5 the plugs left at an
+/// effective 14.3 and travelled roughly 8 units before landing — off the far edge of the visible
+/// floor, so the pools formed correctly and were simply never on camera, and the flight itself was two
+/// frames of a streak. At 1.6 the effective 3.5 puts the landing about 1.2 units out, which is on the
+/// floor the camera can see and about a dozen frames of visible arc.
+pub const GORE_SPEED: f32 = 1.6;
+/// How wide the ejection cone is, as a fraction of the axial speed. Zero would send every plug down
+/// the same line, which reads as a mechanism rather than as a spray.
+pub const GORE_SPREAD: f32 = 0.30;
+/// How much bigger a pool is than the cube root of the volume that made it — spilled material
+/// spreads far wider than the lump it came from, and without this a 0.0007-volume plug leaves a stain
+/// you cannot see.
+pub const POOL_SPREAD: f32 = 1.9;
+
+/// Thrown out along the channel, with a hashed cone and spin — deterministic, no RNG dependency.
+///
+/// `direction` is what the crate handed over: the bore's own axis. Everything else here is this
+/// file's opinion, exactly as [`launch`] is for a fragment.
+pub fn launch_gore(seed: u32, direction: Vec3, volume: f32) -> (Vec3, Vec3) {
+    let h = |n: u32| hash_f32(seed.wrapping_mul(2_654_435_761).wrapping_add(n));
+    // A basis across the channel, so the cone is measured off the axis rather than off the world.
+    let aside = if direction.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+    let u = direction.cross(aside).normalize_or_zero();
+    let v = direction.cross(u);
+    let cone = (u * (h(1) - 0.5) + v * (h(2) - 0.5)) * 2.0 * GORE_SPREAD;
+    // A little lift, so a horizontal shot arcs instead of skidding along the floor.
+    let dir = (direction + cone + Vec3::Y * 0.22).normalize_or_zero();
+    let heft = heft(volume);
+    let spin = Vec3::new(h(3) - 0.5, h(4) - 0.5, h(5) - 0.5).normalize_or_zero() * (12.0 + 10.0 * h(6));
+    (dir * GORE_SPEED * heft, spin * heft)
+}
+
+/// How many plugs have already been thrown, so a re-bake does not throw them a second time.
+///
+/// **Every shot re-bakes from scratch**, because a bore is a bake input — so the plug list is rebuilt
+/// each time. It only ever grows by appending, in shot order, so everything past this index is new.
+#[derive(Resource, Default)]
+pub struct Thrown(pub usize);
+
 #[derive(Resource)]
 pub struct BodyMaterials {
     pub skin: Handle<StandardMaterial>,
     pub interior: Handle<StandardMaterial>,
     pub aim: Handle<StandardMaterial>,
+    /// A blood pool. **Darker and wetter than the interior**, because a pool is a film of liquid on a
+    /// lit floor rather than a cut face: the colour drops again and the roughness goes right down, so
+    /// what identifies it is the specular highlight travelling across it as the camera moves.
+    pub pool: Handle<StandardMaterial>,
+    /// One unit-radius disc, scaled per pool. **One mesh for every pool there will ever be** — a
+    /// fresh `Circle` per landing is a new asset per drop of blood, which is how a demo ends up with
+    /// a thousand meshes for a thing that is visually a stain.
+    pub disc: Handle<Mesh>,
 }
 
 impl BodyMaterials {
@@ -280,6 +414,8 @@ impl BodyMaterials {
             // paint.
             interior: material(world, Color::srgb(0.46, 0.07, 0.07), 0.42),
             aim,
+            pool: material(world, Color::srgb(0.24, 0.03, 0.035), 0.18),
+            disc: world.resource_mut::<Assets<Mesh>>().add(Mesh::from(Circle::new(1.0))),
         }
     }
 }
@@ -344,14 +480,182 @@ pub fn stand(world: &mut World, granularity: usize) {
     }
 }
 
-/// Despawn everything the body is currently made of, attached or flying.
+/// Despawn everything the **body** is currently made of, attached or flying.
+///
+/// **Gore and pools are deliberately exempt.** A shot re-bakes the subject, and re-baking must not
+/// recall debris that has already left it: material in the air belongs to the world now, not to the
+/// body it came out of. Without the exemption every new hole would teleport the previous shot's gore
+/// back into the subject and throw it again.
 pub fn clear(world: &mut World) {
     let doomed: Vec<Entity> = world
-        .query_filtered::<Entity, Or<(With<Attached>, With<Chunk>)>>()
+        .query_filtered::<Entity, (Or<(With<Attached>, With<Chunk>)>, Without<Gore>, Without<Pool>)>()
         .iter(world)
         .collect();
     for e in doomed {
         world.entity_mut(e).despawn();
+    }
+}
+
+/// **Despawn the debris too** — every plug in flight and every pool on the floor.
+///
+/// Separate from [`clear`] because they answer different questions. `clear` rebuilds the subject and
+/// must leave debris alone; this is "start over", which means the floor too. A reset that left the
+/// blood behind would say the subject had been shot when it had not.
+pub fn wipe(world: &mut World) {
+    let doomed: Vec<Entity> = world
+        .query_filtered::<Entity, Or<(With<Gore>, With<Pool>)>>()
+        .iter(world)
+        .collect();
+    for e in doomed {
+        world.entity_mut(e).despawn();
+    }
+}
+
+/// **Throw whatever the latest bake ejected and has not been thrown yet.**
+///
+/// Idempotent across re-bakes by construction: [`Thrown`] records how many plugs have gone, the plug
+/// list only grows by appending in shot order, so this spawns exactly the tail. Call it right after
+/// [`stand`], with the fresh [`Baked`] already inserted.
+pub fn spawn_gore(world: &mut World) {
+    let already = world.get_resource::<Thrown>().map_or(0, |t| t.0);
+    let Some(fresh) = world.get_resource::<Baked>().map(|b| {
+        b.gore
+            .iter()
+            .skip(already)
+            .map(|g| {
+                (
+                    g.outer.clone(),
+                    g.cap.clone(),
+                    g.center_local,
+                    g.drop_to_rest,
+                    g.volume,
+                    g.direction,
+                )
+            })
+            .collect::<Vec<_>>()
+    }) else {
+        return;
+    };
+    if fresh.is_empty() {
+        return;
+    }
+    let Some(mats) =
+        world.get_resource::<BodyMaterials>().map(|m| (m.skin.clone(), m.interior.clone()))
+    else {
+        return;
+    };
+
+    for (i, (outer, cap, center, rest, volume, direction)) in fresh.into_iter().enumerate() {
+        // Seeded on the plug's index within the whole run, so the same shot sequence throws the same
+        // way on every run — the property the GIF rests on.
+        let (velocity, spin) = launch_gore((already + i) as u32, direction, volume);
+        let entity = world
+            .spawn((
+                Transform::from_translation(ORIGIN + center),
+                Visibility::default(),
+                Chunk { velocity, spin, drop_to_rest: rest },
+                Gore { volume, axis: direction, settled: 0 },
+            ))
+            .id();
+        world.entity_mut(entity).with_children(|parent| {
+            if let Some(outer) = outer {
+                parent.spawn((Mesh3d(outer), MeshMaterial3d(mats.0.clone())));
+            }
+            if let Some(cap) = cap {
+                parent.spawn((Mesh3d(cap), MeshMaterial3d(mats.1.clone())));
+            }
+        });
+    }
+    let total = world.get_resource::<Baked>().map_or(already, |b| b.gore.len());
+    if let Some(mut thrown) = world.get_resource_mut::<Thrown>() {
+        thrown.0 = total;
+    }
+}
+
+/// **A plug that has stopped stops being a mesh.** Replace each settled [`Gore`] chunk with a flat
+/// [`Pool`], and spread the pools that are still young.
+///
+/// One system for both halves because they are one transition: a gib whose geometry persists forever
+/// is what makes a floor read as a bin of debris, and the fix is not smaller gibs but material that
+/// stops being an object once it has spilled.
+pub fn bleed(world: &mut World) {
+    // Which chunks have come to rest? Read first, mutate after — a plug is despawned in the same
+    // frame it becomes a pool, so the two cannot share a query.
+    let mut landed: Vec<(Entity, Vec3, f32)> = Vec::new();
+    {
+        let mut q = world.query::<(Entity, &mut Gore, &mut Chunk, &mut Transform)>();
+        for (e, mut gore, mut chunk, mut transform) in q.iter_mut(world) {
+            let grounded = transform.translation.y <= chunk.drop_to_rest + 1.0e-3;
+            if grounded {
+                // **A plug does not bounce and does not skid: the first touch is where it stays.**
+                // The shared integrator treats every chunk as a pebble — restitution 0.3 and a drag
+                // that only bites while it is in contact — which for a wet lump of material is wrong
+                // twice over. Measured with it: a plug still carried 0.99 of speed sixteen frames
+                // after landing, so it slid across the floor and the pool formed a metre from where
+                // it came down. Stopping it dead is both the honest reading and what puts the stain
+                // where the shot pointed. Written here rather than in `integrate` so there is still
+                // one integrator, with one chunk type, differing only in what this rule does after it.
+                chunk.velocity = Vec3::ZERO;
+                chunk.spin = Vec3::ZERO;
+                // **And it lies down.** A plug is a rod — as long as the subject is deep and as wide
+                // as the calibre — so freezing it mid-tumble left it standing on one end like a
+                // bollard, which is the single most artificial thing in the clip. Rotate its own long
+                // axis onto the horizontal plane and it flops the way a wet lump does.
+                let world_axis = transform.rotation * gore.axis;
+                let flat = Vec3::new(world_axis.x, 0.0, world_axis.z).normalize_or_zero();
+                if flat != Vec3::ZERO {
+                    transform.rotation =
+                        Quat::from_rotation_arc(world_axis.normalize_or_zero(), flat)
+                            * transform.rotation;
+                }
+                gore.settled += 1;
+            } else {
+                gore.settled = 0;
+            }
+            if gore.settled >= GORE_SETTLE {
+                // Sized by the cube root of the volume, because that is the plug's linear dimension,
+                // times a spread factor: liquid covers far more floor than the lump it came from.
+                let radius = gore.volume.cbrt() * POOL_SPREAD;
+                landed.push((e, transform.translation, radius));
+            }
+        }
+    }
+
+    if !landed.is_empty() {
+        let Some((disc, pool)) =
+            world.get_resource::<BodyMaterials>().map(|m| (m.disc.clone(), m.pool.clone()))
+        else {
+            return;
+        };
+        for (entity, at, radius) in landed {
+            world.entity_mut(entity).despawn();
+            // **A hair above the floor, and rotated flat.** `Circle` faces `+Z`, so a quarter turn
+            // about `X` lays it down; the lift is what keeps it from z-fighting the floor plane.
+            world.spawn((
+                Pool { age: 0, radius },
+                Mesh3d(disc.clone()),
+                MeshMaterial3d(pool.clone()),
+                Transform {
+                    translation: Vec3::new(at.x, 0.006, at.z),
+                    rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+                    scale: Vec3::splat(radius * 0.35),
+                },
+            ));
+        }
+    }
+
+    // Spread the young ones. A stain that appears at full size reads as a decal being switched on.
+    let mut q = world.query::<(&mut Pool, &mut Transform)>();
+    for (mut p, mut transform) in q.iter_mut(world) {
+        if p.age >= POOL_SPREAD_FRAMES {
+            continue;
+        }
+        p.age += 1;
+        let t = p.age as f32 / POOL_SPREAD_FRAMES as f32;
+        // Ease out, so it rushes out and then creeps — which is what a thin liquid does on a flat
+        // surface as surface tension catches up with it.
+        let eased = 1.0 - (1.0 - t) * (1.0 - t);
+        transform.scale = Vec3::splat(p.radius * (0.35 + 0.65 * eased));
     }
 }
 
