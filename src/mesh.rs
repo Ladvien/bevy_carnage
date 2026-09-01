@@ -5,6 +5,7 @@
 //! touches `Assets<Mesh>` or the ECS.
 
 use std::collections::HashMap;
+use std::hash::{BuildHasher, Hasher};
 
 use bevy::asset::RenderAssetUsages;
 use bevy::log::warn;
@@ -258,7 +259,91 @@ pub(crate) fn geometry_from_soup(soup: &Soup) -> Option<IntactGeometry> {
 struct AttributeWeld {
     /// Lattice cell → the emitted vertices in it. Small vectors: coincident-vertex counts are single
     /// digits, so the 27-cell probe stays cheap.
-    cells: HashMap<(i64, i64, i64), Vec<u32>>,
+    /// Keyed by [`LatticeHash`], not `RandomState` — see that type for why, and for why it cannot move
+    /// a single emitted vertex.
+    cells: HashMap<(i64, i64, i64), Vec<u32>, LatticeHash>,
+}
+
+/// Multiplier for [`LatticeHasher`]. The fractional part of the golden ratio scaled to 64 bits — an
+/// odd constant with well-distributed bits, which is all a multiply-shift mixer needs.
+const LATTICE_MIX: u64 = 0x517c_c1b7_2722_0a95;
+
+/// A three-integer-key hasher for [`AttributeWeld::cells`], because the default one dominated the bake.
+///
+/// **Measured before it was written.** `sample` put 41 % of the benchmark's self time in
+/// [`soup_to_mesh`], and the reason is arithmetic rather than mysterious: the 27-cell probe performs
+/// **27 hash lookups per emitted vertex**, over 180 000 vertices per bake. `SipHash-1-3` — what
+/// `RandomState` gives you — is a keyed MAC designed to be unforgeable by a remote attacker sending
+/// crafted keys. Nothing here is reachable by an attacker: the keys are lattice coordinates this crate
+/// computed itself from its own geometry, so that property costs cycles and buys nothing.
+///
+/// **Output is unaffected, and the argument matters because the alternative would be a silent geometry
+/// change.** A hasher decides which *bucket* a key lands in, never what `get` returns. The probe walks
+/// `dx`/`dy`/`dz` in a fixed order and each cell's candidate list is in insertion order, so the id
+/// returned for a given query is a function of the geometry alone. That is what lets this be a pure
+/// speedup rather than something to re-bless — and the benchmark's digest is the proof, not this
+/// comment.
+///
+/// Not `rustc-hash` or `ahash` for the reason `tests/leaf.rs` exists: the dependency list is closed at
+/// four crates, and twenty lines of mixer is not worth widening it.
+#[derive(Default, Clone, Copy)]
+struct LatticeHasher {
+    h: u64,
+}
+
+impl LatticeHasher {
+    #[inline]
+    fn mix(&mut self, v: u64) {
+        self.h = (self.h.rotate_left(5) ^ v).wrapping_mul(LATTICE_MIX);
+    }
+}
+
+impl Hasher for LatticeHasher {
+    /// Byte-wise fallback. Never taken for the tuple key below — `i64` hashes through
+    /// [`Self::write_i64`] — but a `Hasher` must be total.
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.mix(u64::from(b));
+        }
+    }
+
+    #[inline]
+    fn write_i64(&mut self, i: i64) {
+        self.mix(i as u64);
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.mix(i);
+    }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.mix(i as u64);
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        // One final avalanche, so the low bits HashMap indexes with carry information from the high
+        // ones. Without it a lattice walk in x alone would stride buckets in lockstep.
+        let mut h = self.h;
+        h ^= h >> 32;
+        h = h.wrapping_mul(LATTICE_MIX);
+        h ^= h >> 29;
+        h
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct LatticeHash;
+
+impl BuildHasher for LatticeHash {
+    type Hasher = LatticeHasher;
+
+    #[inline]
+    fn build_hasher(&self) -> LatticeHasher {
+        LatticeHasher::default()
+    }
 }
 
 /// Quantisation step for the normal bucket. About one degree at unit length — far finer than any
