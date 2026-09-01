@@ -142,33 +142,79 @@ pub fn droplet_count(w: &Wound, s: &CarnageSettings) -> u32 {
 /// The cone is built on [`crate::soup::plane_basis`], the same basis every other direction in this
 /// crate is derived against, so a spray and a cut face agree about what "sideways" means.
 pub fn droplet(w: &Wound, index: u32, s: &CarnageSettings) -> Droplet {
-    let key = wound_seed(w) ^ index.wrapping_mul(0x9E37_79B9);
-    let t = hash_f32(key);
-    let u = hash_f32(key ^ 0x85EB_CA6B);
-    let v = hash_f32(key ^ 0xC2B2_AE35);
+    Spray::of(w, s).droplet(index, s)
+}
 
-    let diameter = s.droplet_size_min + (s.droplet_size_max - s.droplet_size_min) * t;
-    // The inversion. Largest droplet, slowest speed.
-    let speed =
-        (FORWARD_SPATTER_SPEED + (BACK_SPATTER_SPEED - FORWARD_SPATTER_SPEED) * t) * s.spatter_speed_scale;
+/// **Everything about a wound's spray that does not depend on which droplet you ask for.**
+///
+/// Built once and reused, because every field below used to be recomputed per droplet ordinal, and the
+/// two callers that want a whole spray ([`droplets`] and [`stains`]) ask for hundreds each. Per droplet
+/// that was: one normalisation of the wound normal, one [`plane_basis`] — itself two cross products and
+/// a second normalisation — one `to_radians`, and one [`wound_seed`]. Two square roots and a hash,
+/// repeated for a value that is identical every time. Both callers run over the same ordinals, so the
+/// benchmark's 285 000 droplets cost roughly 570 000 redundant square-root pairs.
+///
+/// **Bit-identical, which is the only reason this is a hoist rather than a change.** Same inputs, same
+/// operations, same order; only the number of times they run differs. [`droplet`] still builds one and
+/// throws it away, so the single-shot public path computes exactly what it always did.
+#[derive(Clone, Copy)]
+struct Spray {
+    /// Unit spray axis, or zero — see the note in [`Spray::of`].
+    axis: Vec3,
+    tangent: Vec3,
+    bitangent: Vec3,
+    /// Cone half-angle, radians.
+    theta_max: f32,
+    /// This wound's seed, mixed with the droplet ordinal to key each draw.
+    seed: u32,
+}
 
-    let axis = w.normal.normalize_or_zero();
-    // A wound with no normal has no direction to spray along; `plane_basis` would hand back a
-    // degenerate frame. Spraying straight up is a fabricated answer, so the honest one is the axis
-    // itself, which for a zero normal is zero and throws blood nowhere.
-    let (tangent, bitangent) = plane_basis(axis);
-    let phi = TAU * u;
-    let theta = s.spatter_cone_deg.to_radians() * v.clamp(0.0, 1.0).sqrt();
-    let dir = (axis * theta.cos()
-        + (tangent * phi.cos() + bitangent * phi.sin()) * theta.sin())
-    .normalize_or_zero();
+impl Spray {
+    fn of(w: &Wound, s: &CarnageSettings) -> Self {
+        // A wound with no normal has no direction to spray along; `plane_basis` would hand back a
+        // degenerate frame. Spraying straight up is a fabricated answer, so the honest one is the axis
+        // itself, which for a zero normal is zero and throws blood nowhere.
+        let axis = w.normal.normalize_or_zero();
+        let (tangent, bitangent) = plane_basis(axis);
+        Self {
+            axis,
+            tangent,
+            bitangent,
+            theta_max: s.spatter_cone_deg.to_radians(),
+            seed: wound_seed(w),
+        }
+    }
 
-    Droplet { dir, speed, diameter }
+    fn droplet(&self, index: u32, s: &CarnageSettings) -> Droplet {
+        let key = self.seed ^ index.wrapping_mul(0x9E37_79B9);
+        let t = hash_f32(key);
+        let u = hash_f32(key ^ 0x85EB_CA6B);
+        let v = hash_f32(key ^ 0xC2B2_AE35);
+
+        let diameter = s.droplet_size_min + (s.droplet_size_max - s.droplet_size_min) * t;
+        // The inversion. Largest droplet, slowest speed.
+        let speed = (FORWARD_SPATTER_SPEED + (BACK_SPATTER_SPEED - FORWARD_SPATTER_SPEED) * t)
+            * s.spatter_speed_scale;
+
+        let phi = TAU * u;
+        let theta = self.theta_max * v.clamp(0.0, 1.0).sqrt();
+        let dir = (self.axis * theta.cos()
+            + (self.tangent * phi.cos() + self.bitangent * phi.sin()) * theta.sin())
+        .normalize_or_zero();
+
+        Droplet { dir, speed, diameter }
+    }
 }
 
 /// The whole spray, in droplet-index order.
 pub fn droplets(w: &Wound, s: &CarnageSettings) -> Vec<Droplet> {
-    (0..droplet_count(w, s)).map(|i| droplet(w, i, s)).collect()
+    let spray = Spray::of(w, s);
+    let n = droplet_count(w, s);
+    let mut out = Vec::with_capacity(n as usize);
+    for i in 0..n {
+        out.push(spray.droplet(i, s));
+    }
+    out
 }
 
 /// Closed-form landing point on a horizontal plane. `None` if it starts at or below the plane.
@@ -234,22 +280,30 @@ pub fn stain_radius(d: &Droplet, impact_speed: f32, s: &CarnageSettings) -> f32 
 /// ordinal, which is total by construction, so this needs no sort — and a caller folding a hash over
 /// the result gets the same digest every run.
 pub fn stains(w: &Wound, s: &CarnageSettings, plane_y: f32) -> Vec<Stain> {
-    let seed = wound_seed(w);
-    (0..droplet_count(w, s))
-        .filter_map(|i| {
-            let d = droplet(w, i, s);
-            let at = landing(w.at, &d, s.gravity, plane_y)?;
-            // Impact speed from the same closed form the landing came from: vertical speed gained
-            // over the drop, horizontal speed unchanged, because the drag dial is a look control on
-            // the particles rather than a second integrator here.
-            let fall = (w.at.y - plane_y).max(0.0);
-            let vy = d.dir.y * d.speed;
-            let impact = (vy * vy + 2.0 * s.gravity * fall).max(0.0).sqrt();
-            let horizontal = (d.dir * d.speed - Vec3::Y * vy).length();
-            let impact_speed = (impact * impact + horizontal * horizontal).sqrt();
-            Some(Stain { at, radius: stain_radius(&d, impact_speed, s), seed: seed ^ i })
-        })
-        .collect()
+    let spray = Spray::of(w, s);
+    // Invariant across the droplet ordinal, and `fall` was being recomputed inside the closure.
+    let fall = (w.at.y - plane_y).max(0.0);
+    let n = droplet_count(w, s);
+    let mut out = Vec::with_capacity(n as usize);
+    for i in 0..n {
+        let d = spray.droplet(i, s);
+        let Some(at) = landing(w.at, &d, s.gravity, plane_y) else {
+            continue;
+        };
+        // Impact speed from the same closed form the landing came from: vertical speed gained
+        // over the drop, horizontal speed unchanged, because the drag dial is a look control on
+        // the particles rather than a second integrator here.
+        let vy = d.dir.y * d.speed;
+        let impact = (vy * vy + 2.0 * s.gravity * fall).max(0.0).sqrt();
+        let horizontal = (d.dir * d.speed - Vec3::Y * vy).length();
+        let impact_speed = (impact * impact + horizontal * horizontal).sqrt();
+        out.push(Stain {
+            at,
+            radius: stain_radius(&d, impact_speed, s),
+            seed: spray.seed ^ i,
+        });
+    }
+    out
 }
 
 #[cfg(test)]
