@@ -659,7 +659,14 @@ pub(crate) fn fracture(
             continue;
         };
         // Tier B: clip only. No `cap_side`, no loop recovery — the cap is `above`/`below`'s new face.
-        let (mut ra, mut rb) = (Soup::default(), Soup::default());
+        //
+        // **Both halves are sized from the parent rather than grown from empty.** A clip sends each
+        // input triangle to one side or splits it across both, so neither half can exceed the parent's
+        // triangle count by more than the straddling ones — reserving that much means `push_tri` never
+        // climbs a reallocation ladder, and every rung of one recopies the whole buffer written so far.
+        // Same mechanism that paid in `mesh::soften`'s subdivision buffer.
+        let reserve = pieces[parent].render.idx.len();
+        let (mut ra, mut rb) = (Soup::with_capacity(reserve), Soup::with_capacity(reserve));
         split_render(&pieces[parent].render, &plane, &mut ra, &mut rb);
 
         // **A sheet goes wholly to one side.** Its centroid lay in the parent cell, so the sign of its
