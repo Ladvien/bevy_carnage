@@ -691,9 +691,10 @@ still naming the old crate fails `cargo test`. It passes.
 **`BACKLOG_ARCHIVE.md` is the one deliberate exception**, with a single line added at its top saying
 so. Rewriting the history of what happened under the old name would make the record lie. **Nothing
 else spells the old name** — including this file and `CLAUDE.md`, whose prose about the vendored era
-now says "this crate's former name" rather than writing it out, so that
-`grep -ri autogib --exclude=BACKLOG_ARCHIVE.md` stays a ratchet rather than becoming a list of
-exceptions.
+says "this crate's former name" rather than writing it out. That is what keeps a case-insensitive
+recursive grep for the former name, with `BACKLOG_ARCHIVE.md` excluded, a *ratchet* that returns
+nothing rather than a list of exceptions to read past — and it is why the check is described here
+instead of quoted, since a quoted one would trip on itself.
 
 ### AG-026 … AG-029, as landed — wounds, spatter, bleed, feel
 
