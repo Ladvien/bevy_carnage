@@ -208,13 +208,18 @@ impl Soup {
         Vtx { pos: self.pos[i], nrm: self.nrm[i], uv: self.uv[i] }
     }
 
+    /// Append one triangle as three fresh vertices.
+    ///
+    /// **Three appends of a slice, not nine of a scalar.** This is the innermost write of the whole
+    /// bake — the midpoint subdivision alone calls it four times per input triangle — and the loop it
+    /// replaces performed nine separate `Vec::push`es, each re-checking capacity and re-reading the
+    /// length. `extend_from_slice` of a three-element array does that once per buffer and copies the
+    /// three together. Same values, same order, same resulting vectors.
     pub(crate) fn push_tri(&mut self, a: Vtx, b: Vtx, c: Vtx, interior: bool) {
         let base = self.pos.len() as u32;
-        for v in [a, b, c] {
-            self.pos.push(v.pos);
-            self.nrm.push(v.nrm);
-            self.uv.push(v.uv);
-        }
+        self.pos.extend_from_slice(&[a.pos, b.pos, c.pos]);
+        self.nrm.extend_from_slice(&[a.nrm, b.nrm, c.nrm]);
+        self.uv.extend_from_slice(&[a.uv, b.uv, c.uv]);
         self.idx.push([base, base + 1, base + 2]);
         self.tri_interior.push(interior);
     }
