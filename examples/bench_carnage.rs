@@ -9,7 +9,8 @@
 //!
 //! # The number this exists to produce
 //!
-//! `carnage_frame_ms` — mean milliseconds of carnage work per simulated tick, over the whole script.
+//! `carnage_frame_ms` — mean milliseconds of carnage work per simulated tick, taken from the fastest
+//! of nine timed reps.
 //! **Lower is better, and the point of lowering it is to afford more gore, not less.** Which is
 //! exactly why the script's *output* is pinned:
 //!
@@ -71,8 +72,21 @@ const SUBJECTS: u32 = 16;
 /// Ticks between deaths. `16 × 12` puts the last death at tick 180, leaving 420 ticks — more than the
 /// shipped 360-tick clot — for every wound to run its full schedule.
 const DEATH_STRIDE: u32 = 12;
-/// Timed repetitions. The reported figure is the **median** rep, so one descheduled run cannot move it.
-const REPS: usize = 5;
+/// Timed repetitions. Nine rather than five because the reported figure is the **fastest** of them,
+/// and the fastest of nine is a better estimate of the unthrottled cost than the fastest of five. Nine
+/// reps of a ~25 ms script is a quarter-second — the accuracy is free.
+const REPS: usize = 9;
+/// Discarded passes before the timed ones. See the comment at the warm-up loop for why it is two.
+const WARMUPS: usize = 2;
+/// How many of the fastest reps must agree for the minimum to count as a plateau.
+const BEST_K: usize = 3;
+/// How far the [`BEST_K`]th-fastest rep may sit above the fastest, as a percentage, before this
+/// benchmark refuses to report at all.
+///
+/// Measured on an idle host: all nine reps inside 0.3 %. Measured forty seconds after a compile on
+/// this fanless host: the fast end had not converged. 5 % is well clear of the first and firmly
+/// excludes the second, and it is tight enough that a genuine 1 % regression is still visible.
+const TIGHT_LIMIT_PCT: f64 = 5.0;
 /// The floor blood lands on, subject-local. Wounds sit above it, so the ballistic solve in
 /// [`bevy_carnage::landing`] has a plane to reach and every droplet resolves to a stain.
 const PLANE_Y: f32 = -0.5;
@@ -478,9 +492,14 @@ fn main() {
     }
     let seen = digest.h;
 
-    // ---- Pass 2: what did it cost? One discarded warm-up, then REPS timed passes.
+    // ---- Pass 2: what did it cost? Discarded warm-ups, then REPS timed passes.
+    //
+    // **Two warm-ups, not one, and the second is not about caches.** One pass is ~25 ms of work —
+    // enough to fault in the code and warm the allocator, not enough to outlast whatever the build
+    // that preceded it left running. The second is there to be thrown away on a machine that has not
+    // finished settling, so the first *timed* rep is not the one paying for it.
     let mut sink_acc = 0.0f32;
-    {
+    for _ in 0..WARMUPS {
         let mut warm = Blackhole::default();
         let _ = scene.run(&mut warm);
         sink_acc += warm.acc;
@@ -493,18 +512,73 @@ fn main() {
         sink_acc += bh.acc;
     }
 
-    // The median rep by total cost. Taking the median of whole runs rather than of individual ticks
-    // keeps every reported figure — mean, p99, max, bake, sim — from the SAME run, so they are
-    // mutually consistent instead of stitched from five different ones.
+    // **The FASTEST rep, not the median, and this was a correction.**
+    //
+    // The first design took the median, on the reasonable-sounding grounds that one descheduled run
+    // should not move the figure. On this host that is the wrong estimator, and four measured runs
+    // said so: the same binary on the same tree reported 122.8 ms idle, 152.3 ms with nothing running
+    // but forty seconds after a compile, and 174.5 ms four seconds after one. The machine is a fanless
+    // MacBook Air, so its *clock ceiling* moves for minutes after a build — and a median tracks the
+    // ceiling instead of the code, which makes cooling down look like an optimisation.
+    //
+    // The minimum does not have that failure. Noise is one-sided: contention and throttling only ever
+    // make a rep slower, never faster, so across enough reps the fastest one is the closest available
+    // estimate of what the work costs at full clock. It is the standard microbenchmark estimator for
+    // exactly this reason.
+    //
+    // Every reported figure still comes from that ONE rep — mean, p99, max, bake, sim — so they stay
+    // mutually consistent instead of being stitched from nine different runs.
     runs.sort_by(|a, b| cmp_f64(&a.total_ms(), &b.total_ms()));
-    let Some(median) = runs.get(REPS / 2) else {
+    let Some(fastest) = runs.first() else {
         eprintln!("bench_carnage: no timed run completed — REPS is {REPS}");
         std::process::exit(1);
     };
 
-    let total = median.total_ms();
-    let mut ticks = median.tick_ms.clone();
+    let total = fastest.total_ms();
+    let mut ticks = fastest.tick_ms.clone();
     ticks.sort_by(cmp_f64);
+
+    // ---- The stability gate. Checked before the carnage gate because a number produced on a machine
+    // this busy is not evidence of anything, whatever the digest says.
+    //
+    // **It asks whether the FASTEST reps agree, not whether all of them do, and that was the third
+    // attempt at this check.** Slowest-minus-fastest was the obvious statistic and it is the wrong one:
+    // contention and throttling produce a long *slow* tail, so that spread is set by the worst rep,
+    // while the figure being reported comes from the best. Measured on this host right after a compile:
+    // slowest-minus-fastest 72 % — rejected — with a fastest rep of 137.4 ms against 122.8 ms idle. The
+    // gate was firing on reps nobody was going to use.
+    //
+    // So: sort ascending, and require the best [`BEST_K`] to sit within [`TIGHT_LIMIT_PCT`] of each
+    // other. If they do, the minimum is a plateau several independent reps found, which is what makes
+    // it an estimate rather than a lucky sample. If they do not, the machine was still moving
+    // underneath the measurement and no single rep means anything.
+    //
+    // The original 168 %-spread run — a `cargo build` on every core — fails this too, and for the right
+    // reason: no two of its reps agreed on anything.
+    let noise = spread(&runs);
+    let noise_pct = if total > 0.0 { noise / total * 100.0 } else { 0.0 };
+    let kth = runs.get(BEST_K - 1).map(Run::total_ms).unwrap_or(total);
+    let tight_pct = if total > 0.0 {
+        (kth - total) / total * 100.0
+    } else {
+        0.0
+    };
+    if tight_pct > TIGHT_LIMIT_PCT {
+        eprintln!();
+        eprintln!("bench_carnage: NO STABLE PLATEAU — refusing to report a timing.");
+        eprintln!();
+        eprintln!("  fastest rep total            {total:>10.3} ms");
+        eprintln!("  {BEST_K}rd-fastest rep total          {kth:>10.3} ms");
+        eprintln!("  best-{BEST_K} spread               {tight_pct:>10.2} % (limit {TIGHT_LIMIT_PCT:.2} %)");
+        eprintln!("  slowest minus fastest        {noise:>10.3} ms  ({noise_pct:.1} %, informational)");
+        eprintln!();
+        eprintln!("  The fastest reps did not agree, so the minimum is a lucky sample rather than a");
+        eprintln!("  measurement. Something else is using the CPU — a compile, a test run, an indexer");
+        eprintln!("  — or this fanless host is still shedding heat from one. Wait and re-run; nothing");
+        eprintln!("  about the code under test is implicated.");
+        eprintln!();
+        std::process::exit(1);
+    }
 
     // ---- The gate. A timing is only meaningful if the carnage is unchanged.
     if seen != GOLDEN_DIGEST || c != GOLDEN_COUNTS {
@@ -552,7 +626,7 @@ fn main() {
     // ---- The report.
     println!();
     println!(
-        "bevy_carnage — {SUBJECTS} bodies, {TICKS} ticks at {HZ} Hz, {REPS} timed reps (median)"
+        "bevy_carnage — {SUBJECTS} bodies, {TICKS} ticks at {HZ} Hz, best of {REPS} timed reps"
     );
     println!(
         "  {} fragments · {} plugs · {} wounds · {} pulses · {} droplets · {} stains",
@@ -568,8 +642,8 @@ fn main() {
         "METRIC carnage_max_ms={:.5}",
         ticks.last().copied().unwrap_or(0.0)
     );
-    println!("METRIC bake_ms={:.3}", median.bake_ms);
-    println!("METRIC sim_ms={:.3}", total - median.bake_ms);
+    println!("METRIC bake_ms={:.3}", fastest.bake_ms);
+    println!("METRIC sim_ms={:.3}", total - fastest.bake_ms);
     println!("METRIC fragments={}", c.fragments);
     println!("METRIC ejecta={}", c.ejecta);
     println!("METRIC bonds={}", c.bonds);
@@ -582,15 +656,17 @@ fn main() {
     println!("ASI reps={REPS}");
     println!("ASI ticks={TICKS}");
     println!("ASI subjects={SUBJECTS}");
-    println!("ASI spread_ms={:.3}", spread(&runs));
+    println!("ASI spread_ms={noise:.3}");
+    println!("ASI noise_pct={noise_pct:.3}");
+    println!("ASI best{BEST_K}_pct={tight_pct:.3}");
     println!("ASI sink={sink_acc:.3}");
 }
 
-/// Slowest timed rep minus fastest, in milliseconds — the honest noise floor of this machine.
+/// Slowest timed rep minus fastest, in milliseconds.
 ///
-/// Printed rather than asserted: a run under load is allowed to be noisy, and a harness that failed on
-/// it would be a harness that only works on an idle box. A spread approaching the metric itself is the
-/// signal that a measured "improvement" is not one.
+/// Informational, and deliberately not the gate: on a throttling host the slow tail is set by reps the
+/// report never uses. The gate is the best-[`BEST_K`] plateau above. This is here so a reader can see
+/// how bad the tail was on a run that still passed.
 fn spread(runs: &[Run]) -> f64 {
     let first = runs.first().map(Run::total_ms).unwrap_or(0.0);
     let last = runs.last().map(Run::total_ms).unwrap_or(0.0);
