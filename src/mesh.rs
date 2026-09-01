@@ -1015,16 +1015,19 @@ pub(crate) fn soften(soup: &Soup, strength: f32) -> Soup {
         (q(p.x), q(p.y), q(p.z))
     };
     // Lattice-keyed and never iterated — ids come from `unique.len()`. See `soup::LatticeHash`.
-    let mut canon: LatticeMap<(i64, i64, i64), usize> =
+    let mut canon: LatticeMap<(i64, i64, i64), u32> =
         LatticeMap::with_capacity_and_hasher(fine.pos.len(), LatticeHash);
     let mut unique: Vec<Vec3> = Vec::new();
-    let of: Vec<usize> = fine
+    // **`u32`, not `usize`.** This is walked four times below — twice building the CSR, once for
+    // normals, once assembling the output — so halving its width halves the bytes those passes touch.
+    // A fine vertex count cannot approach `u32::MAX`: it is three per subdivided triangle.
+    let of: Vec<u32> = fine
         .pos
         .iter()
         .map(|p| {
             *canon.entry(key(*p)).or_insert_with(|| {
                 unique.push(*p);
-                unique.len() - 1
+                unique.len() as u32 - 1
             })
         })
         .collect();
@@ -1044,8 +1047,8 @@ pub(crate) fn soften(soup: &Soup, strength: f32) -> Soup {
         for i in 0..3 {
             let (u, v) = (of[tri[i] as usize], of[tri[(i + 1) % 3] as usize]);
             if u != v {
-                offs[u + 1] += 1;
-                offs[v + 1] += 1;
+                offs[u as usize + 1] += 1;
+                offs[v as usize + 1] += 1;
             }
         }
     }
@@ -1058,7 +1061,10 @@ pub(crate) fn soften(soup: &Soup, strength: f32) -> Soup {
     let mut at: Vec<u32> = offs[..n_unique].to_vec();
     for tri in &fine.idx {
         for i in 0..3 {
-            let (u, v) = (of[tri[i] as usize], of[tri[(i + 1) % 3] as usize]);
+            let (u, v) = (
+                of[tri[i] as usize] as usize,
+                of[tri[(i + 1) % 3] as usize] as usize,
+            );
             if u != v {
                 nbr[at[u] as usize] = v as u32;
                 at[u] += 1;
@@ -1094,25 +1100,38 @@ pub(crate) fn soften(soup: &Soup, strength: f32) -> Soup {
     // of the softening and costs nothing.
     let mut smooth = vec![Vec3::ZERO; unique.len()];
     for tri in &fine.idx {
-        let (i, j, k) = (of[tri[0] as usize], of[tri[1] as usize], of[tri[2] as usize]);
+        let (i, j, k) = (
+            of[tri[0] as usize] as usize,
+            of[tri[1] as usize] as usize,
+            of[tri[2] as usize] as usize,
+        );
         let face = (moved[j] - moved[i]).cross(moved[k] - moved[i]);
         smooth[i] += face;
         smooth[j] += face;
         smooth[k] += face;
     }
 
+    // **Normalised once per welded vertex, not once per reference to one.** There are about six fine
+    // corners per unique vertex, and the old code called `normalize_or_zero` — a square root — for
+    // every corner, so five in six were recomputing a value it already had. Same input, same
+    // operation, same result; just not repeated.
+    let unit: Vec<Vec3> = smooth.iter().map(|n| n.normalize_or_zero()).collect();
+
+    // One pass, filling both attribute buffers together, rather than two walks of `of`.
+    let n_fine = fine.pos.len();
+    let mut out_pos: Vec<Vec3> = Vec::with_capacity(n_fine);
+    let mut out_nrm: Vec<Vec3> = Vec::with_capacity(n_fine);
+    for i in 0..n_fine {
+        let u = of[i] as usize;
+        out_pos.push(moved[u]);
+        // A vertex whose faces cancel has no meaningful average; keep what it had.
+        let n = unit[u];
+        out_nrm.push(if n == Vec3::ZERO { fine.nrm[i] } else { n });
+    }
+
     let mut out = Soup {
-        pos: fine.pos.iter().enumerate().map(|(i, _)| moved[of[i]]).collect(),
-        nrm: fine
-            .nrm
-            .iter()
-            .enumerate()
-            .map(|(i, fallback)| {
-                let n = smooth[of[i]].normalize_or_zero();
-                // A vertex whose faces cancel has no meaningful average; keep what it had.
-                if n == Vec3::ZERO { *fallback } else { n }
-            })
-            .collect(),
+        pos: out_pos,
+        nrm: out_nrm,
         uv: fine.uv.clone(),
         idx: fine.idx.clone(),
         tri_interior: fine.tri_interior.clone(),
