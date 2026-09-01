@@ -50,11 +50,11 @@ use std::cmp::Ordering;
 use std::time::{Duration, Instant};
 
 use bevy::math::{Mat4, Vec3, primitives::Cuboid};
-use bevy::mesh::Mesh;
+use bevy::mesh::{Mesh, VertexAttributeValues};
 use bevy_carnage::{
-    Bleed, Bore, CarnageSettings, CutSettings, Droplet, ProxyCell, Stain, Wound, clotted, droplets,
-    fracture_mesh, hash_f32 as unit, hitstop_ticks, pulse_wound, radial, shake_offset,
-    stains, trauma_for, wound_of_channel, wounds_from_reach,
+    Bleed, Bore, CarnageSettings, CutSettings, Droplet, Ejecta, FragmentGeometry, ProxyCell, Stain,
+    Wound, clotted, droplets, fracture_mesh, hash_f32 as unit, hitstop_ticks, pulse_wound, radial,
+    shake_offset, stains, trauma_for, wound_of_channel, wounds_from_reach,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -130,11 +130,26 @@ const HEAD_OFFSET: Vec3 = Vec3::new(0.0, 0.67, 0.0);
 /// it at all, and the hashed pass with no timing significance. A `bool` parameter would put a branch
 /// on the inner droplet loop, which is the one loop that must stay honest.
 trait Sink {
-    fn fragment(&mut self, center: Vec3);
+    /// A spawnable piece, cell **and** drawn surface.
+    ///
+    /// **Takes the whole fragment, not just its centre, and that was a hole worth closing.** The first
+    /// version of this trait folded `center_local` alone — which comes from the convex cell — so the
+    /// digest never observed `outer` or `cap` at all. A change that stopped building the drawn meshes
+    /// entirely would have passed the gate and reported a large, meaningless win, and deferring mesh
+    /// construction is the single most obvious thing to try against a bake that is 88 % of the cost.
+    /// A benchmark whose gate cannot see the first optimisation anyone would attempt is not a gate.
+    fn fragment(&mut self, f: &FragmentGeometry);
+    /// A plug a bore pushed out: debris, with its own drawn surface.
+    fn plug(&mut self, p: &Ejecta);
     fn wound(&mut self, w: &Wound);
     fn stain(&mut self, s: &Stain);
     fn droplet(&mut self, d: &Droplet);
     fn shake(&mut self, offset: Vec3);
+}
+
+/// Triangles a mesh draws, or zero if it has no indices.
+fn tris(mesh: Option<&Mesh>) -> u64 {
+    mesh.and_then(Mesh::indices).map_or(0, |i| i.len() as u64 / 3)
 }
 
 /// FNV-1a over the raw bits of every emitted value, in emission order.
@@ -172,11 +187,39 @@ impl Digest {
         self.f32(v.y);
         self.f32(v.z);
     }
+
+    /// Every vertex position a mesh carries, in buffer order, plus its triangle count.
+    ///
+    /// **Only the untimed pass does this.** Folding a few hundred thousand floats into a hash is real
+    /// work, and doing it inside the timed region would make the harness measure itself.
+    fn mesh(&mut self, mesh: Option<&Mesh>) {
+        self.u64(tris(mesh));
+        let Some(m) = mesh else { return };
+        let Some(VertexAttributeValues::Float32x3(p)) = m.attribute(Mesh::ATTRIBUTE_POSITION) else {
+            return;
+        };
+        for q in p {
+            self.f32(q[0]);
+            self.f32(q[1]);
+            self.f32(q[2]);
+        }
+    }
 }
 
 impl Sink for Digest {
-    fn fragment(&mut self, center: Vec3) {
-        self.vec3(center);
+    fn fragment(&mut self, f: &FragmentGeometry) {
+        self.vec3(f.center_local);
+        self.vec3(f.half_extents);
+        self.mesh(f.outer.as_ref());
+        self.mesh(f.cap.as_ref());
+    }
+    fn plug(&mut self, p: &Ejecta) {
+        self.vec3(p.center_local);
+        self.vec3(p.half_extents);
+        self.vec3(p.exit);
+        self.vec3(p.direction);
+        self.mesh(p.outer.as_ref());
+        self.mesh(p.cap.as_ref());
     }
     fn wound(&mut self, w: &Wound) {
         self.vec3(w.at);
@@ -211,8 +254,11 @@ struct Blackhole {
 }
 
 impl Sink for Blackhole {
-    fn fragment(&mut self, center: Vec3) {
-        self.acc += center.x;
+    fn fragment(&mut self, f: &FragmentGeometry) {
+        self.acc += f.center_local.x + f.half_extents.x + tris(f.outer.as_ref()) as f32;
+    }
+    fn plug(&mut self, p: &Ejecta) {
+        self.acc += p.exit.x + tris(p.cap.as_ref()) as f32;
     }
     fn wound(&mut self, w: &Wound) {
         self.acc += w.area + w.severity;
@@ -238,6 +284,14 @@ struct Counts {
     pulses: u64,
     droplets: u64,
     stains: u64,
+    /// Triangles of the subject's own skin, summed over every spawned piece and plug.
+    skin_tris: u64,
+    /// Triangles of newly-created cut surface — the raw interior, the thing that reads as severed.
+    ///
+    /// **Counted separately from the skin because they are the two halves of the crate's premise**, and
+    /// because a change that quietly stopped capping would be invisible in a combined total that the
+    /// skin dominates.
+    cap_tris: u64,
     /// Summed [`hitstop_ticks`], so the game-feel curves are inside the golden too.
     hitstop: u64,
 }
@@ -344,7 +398,9 @@ impl Scene {
         counts.bonds += baked.bonds.len() as u64;
         for frag in baked.leaves() {
             counts.fragments += 1;
-            sink.fragment(frag.center_local);
+            counts.skin_tris += tris(frag.outer.as_ref());
+            counts.cap_tris += tris(frag.cap.as_ref());
+            sink.fragment(frag);
         }
 
         // Two sources of wound, and they are genuinely different events: a channel left an interior
@@ -352,6 +408,9 @@ impl Scene {
         let mut fresh: Vec<Wound> = Vec::with_capacity(baked.ejecta.len() + 8);
         for plug in &baked.ejecta {
             counts.ejecta += 1;
+            counts.skin_tris += tris(plug.outer.as_ref());
+            counts.cap_tris += tris(plug.cap.as_ref());
+            sink.plug(plug);
             fresh.push(wound_of_channel(&plug.cell, plug.exit, plug.direction));
         }
 
@@ -436,17 +495,27 @@ impl Scene {
 
 /// FNV-1a over every emitted value, then the counts.
 ///
-/// **Blessed 2026-09-01 against the vendored tip**, first run of this harness. It is a fact about the
-/// current fracture, spatter and bleed code, not a target — if it moves, the two timings either side
-/// of the move are measuring different massacres.
-const GOLDEN_DIGEST: u64 = 0xcbfa_b690_828e_1761;
+/// **Blessed 2026-09-01 against the vendored tip.** It is a fact about the current fracture, spatter
+/// and bleed code, not a target — if it moves, the two timings either side of the move are measuring
+/// different massacres.
+///
+/// Re-blessed once already, and the reason is the point of the whole gate: the first version folded
+/// only `center_local`, which comes from the convex cell, so it never observed `outer` or `cap`. It
+/// would have passed a change that stopped building the drawn meshes altogether — which is exactly the
+/// first thing anyone would try against a bake that is 88 % of the cost.
+const GOLDEN_DIGEST: u64 = 0x80d7_2de3_5f4b_1306;
 
 /// What the script is supposed to produce. Checked field by field so a failure names the thing that
 /// moved instead of just saying a hash did.
 ///
-/// `ejecta` is 156 rather than 32 for a reason worth writing down: sixteen bodies take two channels
-/// each, and every plug then breaks up under the shipped `Bore::shatter` of 4 instead of leaving as
-/// one dowel — so a channel yields about five chunks, not one.
+/// Two of these are worth reading rather than scrolling past:
+///
+/// - **`ejecta` is 156, not 32.** Sixteen bodies take two channels each, and every plug then breaks up
+///   under the shipped `Bore::shatter` of 4 rather than leaving as one dowel — about five chunks per
+///   channel.
+/// - **`cap_tris` is 5.6x `skin_tris`.** The drawn surface of a fractured body is overwhelmingly
+///   newly-created cut face, not the subject's own skin, because `soften` 0.5 relieves every cap. So
+///   anything that touches cap generation moves far more triangles than its name suggests.
 const GOLDEN_COUNTS: Counts = Counts {
     fragments: 274,
     ejecta: 156,
@@ -455,6 +524,8 @@ const GOLDEN_COUNTS: Counts = Counts {
     pulses: 4370,
     droplets: 284_983,
     stains: 320_605,
+    skin_tris: 27_374,
+    cap_tris: 153_704,
     hitstop: 1024,
 };
 
@@ -486,6 +557,8 @@ fn main() {
         c.pulses,
         c.droplets,
         c.stains,
+        c.skin_tris,
+        c.cap_tris,
         c.hitstop,
     ] {
         digest.u64(v);
@@ -590,7 +663,7 @@ fn main() {
         eprintln!();
         eprintln!("                    expected              actual");
         eprintln!("  digest      {:#018x}  {:#018x}", GOLDEN_DIGEST, seen);
-        let rows: [(&str, u64, u64); 8] = [
+        let rows: [(&str, u64, u64); 10] = [
             ("fragments", GOLDEN_COUNTS.fragments, c.fragments),
             ("ejecta", GOLDEN_COUNTS.ejecta, c.ejecta),
             ("bonds", GOLDEN_COUNTS.bonds, c.bonds),
@@ -598,6 +671,8 @@ fn main() {
             ("pulses", GOLDEN_COUNTS.pulses, c.pulses),
             ("droplets", GOLDEN_COUNTS.droplets, c.droplets),
             ("stains", GOLDEN_COUNTS.stains, c.stains),
+            ("skin_tris", GOLDEN_COUNTS.skin_tris, c.skin_tris),
+            ("cap_tris", GOLDEN_COUNTS.cap_tris, c.cap_tris),
             ("hitstop", GOLDEN_COUNTS.hitstop, c.hitstop),
         ];
         for (name, want, got) in rows {
@@ -617,6 +692,8 @@ fn main() {
         eprintln!("        pulses: {},", c.pulses);
         eprintln!("        droplets: {},", c.droplets);
         eprintln!("        stains: {},", c.stains);
+        eprintln!("        skin_tris: {},", c.skin_tris);
+        eprintln!("        cap_tris: {},", c.cap_tris);
         eprintln!("        hitstop: {},", c.hitstop);
         eprintln!("    }};");
         eprintln!();
@@ -631,6 +708,10 @@ fn main() {
     println!(
         "  {} fragments · {} plugs · {} wounds · {} pulses · {} droplets · {} stains",
         c.fragments, c.ejecta, c.wounds, c.pulses, c.droplets, c.stains
+    );
+    println!(
+        "  {} skin triangles · {} cut-face triangles drawn",
+        c.skin_tris, c.cap_tris
     );
     println!("  digest {seen:#018x} — unchanged, so the timing below is comparable");
     println!();
@@ -651,6 +732,8 @@ fn main() {
     println!("METRIC pulses={}", c.pulses);
     println!("METRIC droplets={}", c.droplets);
     println!("METRIC stains={}", c.stains);
+    println!("METRIC skin_tris={}", c.skin_tris);
+    println!("METRIC cap_tris={}", c.cap_tris);
 
     println!("ASI digest={seen:#018x}");
     println!("ASI reps={REPS}");
