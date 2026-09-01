@@ -89,12 +89,27 @@ const BEST_K: usize = 3;
 const TIGHT_LIMIT_PCT: f64 = 5.0;
 /// The floor blood lands on, subject-local. Wounds sit above it, so the ballistic solve in
 /// [`bevy_carnage::landing`] has a plane to reach and every droplet resolves to a stain.
-const PLANE_Y: f32 = -0.5;
+/// **Below the subject's lowest point, which is the soles at `y = -0.92`.** It was `-0.5`, which sat
+/// *inside* the legs once the subject became a humanoid — a wound below the plane has no landing, so
+/// half the spray would have silently stopped producing stains.
+const PLANE_Y: f32 = -0.95;
 
 /// Target fragment count per body — the finest granularity the bake cuts to.
-const TARGET_PIECES: usize = 12;
+///
+/// **34, and the previous 12 was a bug in this script rather than a taste choice.** `bore::apply`
+/// subtracts the two channels below from the proxy and hands back roughly sixteen root cells, so a
+/// target of 12 was already exceeded before the recursive cut loop was entered and **it performed zero
+/// cuts**. Instrumented, on the old settings: `nodes=16 leaves=16 interior=0`. The benchmark was
+/// therefore measuring bore subtraction plus the emit of sixteen root pieces, and never touching the
+/// plane cutter, the [`bevy_carnage::FragmentTree`], or any frontier query — which is most of what the
+/// crate is. 34 is what this crate's own demo subject uses (`examples/common/body.rs`), and it is
+/// comfortably above the bored root count, so the hierarchy is real.
+const TARGET_PIECES: usize = 34;
 /// Stop cutting a piece once its extent drops below this fraction of the whole.
-const MIN_FRACTION: f32 = 0.15;
+///
+/// 0.08 rather than 0.15, matching the demo subject: at 0.15 the volume floor stops the cut loop early
+/// on limb cells, which would re-introduce the same "target never binds" problem from the other side.
+const MIN_FRACTION: f32 = 0.08;
 /// Slack, so `TARGET_PIECES` is what binds.
 const MAX_DEPTH: u16 = 64;
 /// Tier-B rounding. Non-zero because the shipped look is non-zero, and softening costs real time in
@@ -117,8 +132,6 @@ const SEVER_THRESHOLD: f32 = 0.35;
 /// for a real gunshot, absurd on a 1.8 m body, and it would throw every stain outside any floor.
 const SPATTER_SPEED_SCALE: f32 = 0.25;
 
-/// Where the head sits above the torso origin.
-const HEAD_OFFSET: Vec3 = Vec3::new(0.0, 0.67, 0.0);
 
 // ---------------------------------------------------------------------------------------------
 // Observation. Two sinks over one script, so the timed pass and the hashed pass cannot diverge.
@@ -319,29 +332,61 @@ fn ms(d: Duration) -> f64 {
 // The scene, and the script over it.
 // ---------------------------------------------------------------------------------------------
 
-/// The subject every body in the massacre is a copy of: a torso box and a head box, each with its own
-/// transform, because that is the shape the ECS bake actually sees. A character is never one mesh.
+/// The subject every body in the massacre is a copy of: **a blocked-out humanoid, one convex cell per
+/// body part**, exactly the decomposition this crate's own demo subject uses
+/// (`examples/common/body.rs`). Six shells, never unioned — which is what keeps a head separable from
+/// a torso, and what makes the bond graph a graph rather than a line.
 ///
-/// **One geometry, sixteen seeds.** Varying the mesh per body would vary the bake cost per body and
-/// make the benchmark's variance a property of the fixture rather than of the code under test; varying
-/// the seed varies the cut pattern, which is the thing worth varying.
+/// **It was two boxes, and that was too easy a subject to measure against.** Six cells give the cut
+/// loop somewhere to go, the tree real depth, and the bond graph real branching; two gave a target of
+/// twelve nothing to bind against once the bores had already produced sixteen roots.
+///
+/// **One geometry, sixteen seeds.** Varying the mesh per body would make the benchmark's variance a
+/// property of the fixture rather than of the code under test; varying the seed varies the cut pattern,
+/// which is the thing worth varying.
 struct Scene {
-    torso: Mesh,
-    head: Mesh,
-    /// One convex cell per shell, never unioned — that is what keeps the head separable from the torso.
+    /// One box mesh per part, parallel to `proxy`.
+    meshes: Vec<Mesh>,
+    /// Where each part sits, parallel to `meshes`.
+    offsets: Vec<Vec3>,
+    /// One convex cell per shell, never unioned.
     proxy: Vec<ProxyCell>,
     settings: CarnageSettings,
 }
 
+/// `(centre, half-extent)` per body part, subject-local. Copied from the demo subject so the benchmark
+/// and the recordings describe the same shape.
+const PARTS: [(Vec3, Vec3); 6] = [
+    // torso
+    (Vec3::new(0.00, 0.00, 0.0), Vec3::new(0.22, 0.32, 0.14)),
+    // head
+    (Vec3::new(0.00, 0.46, 0.0), Vec3::new(0.13, 0.14, 0.13)),
+    // arm.L / arm.R
+    (Vec3::new(-0.32, 0.06, 0.0), Vec3::new(0.10, 0.26, 0.10)),
+    (Vec3::new(0.32, 0.06, 0.0), Vec3::new(0.10, 0.26, 0.10)),
+    // leg.L / leg.R
+    (Vec3::new(-0.13, -0.62, 0.0), Vec3::new(0.11, 0.30, 0.12)),
+    (Vec3::new(0.13, -0.62, 0.0), Vec3::new(0.11, 0.30, 0.12)),
+];
+
 impl Scene {
     fn new() -> Self {
+        let mut meshes = Vec::with_capacity(PARTS.len());
+        let mut offsets = Vec::with_capacity(PARTS.len());
+        let mut proxy = Vec::with_capacity(PARTS.len());
+        for (centre, half) in PARTS {
+            meshes.push(Mesh::from(Cuboid::new(
+                half.x * 2.0,
+                half.y * 2.0,
+                half.z * 2.0,
+            )));
+            offsets.push(centre);
+            proxy.push(ProxyCell::from_box(centre, half));
+        }
         Self {
-            torso: Mesh::from(Cuboid::new(0.6, 1.0, 0.35)),
-            head: Mesh::from(Cuboid::new(0.34, 0.34, 0.34)),
-            proxy: vec![
-                ProxyCell::from_box(Vec3::ZERO, Vec3::new(0.3, 0.5, 0.175)),
-                ProxyCell::from_box(HEAD_OFFSET, Vec3::splat(0.17)),
-            ],
+            meshes,
+            offsets,
+            proxy,
             settings: CarnageSettings {
                 spatter_speed_scale: SPATTER_SPEED_SCALE,
                 ..CarnageSettings::default()
@@ -350,11 +395,16 @@ impl Scene {
     }
 
     /// The same `(&Mesh, Mat4)` pairs the ECS bake assembles by walking a scene's children.
-    fn parts(&self) -> [(&Mesh, Mat4); 2] {
-        [
-            (&self.torso, Mat4::IDENTITY),
-            (&self.head, Mat4::from_translation(HEAD_OFFSET)),
-        ]
+    ///
+    /// **Order is load-bearing** — [`fracture_mesh`] says so: cut planes are placed relative to cell
+    /// centroids and the payload's vertex order decides float sums downstream. `PARTS` is a `const`
+    /// array, so the order is authored and fixed.
+    fn parts(&self) -> Vec<(&Mesh, Mat4)> {
+        self.meshes
+            .iter()
+            .zip(&self.offsets)
+            .map(|(m, c)| (m, Mat4::from_translation(*c)))
+            .collect()
     }
 
     /// Two channels front-to-back through the torso, placed by the subject's own hash.
@@ -495,38 +545,41 @@ impl Scene {
 
 /// FNV-1a over every emitted value, then the counts.
 ///
-/// **Blessed 2026-09-01 against the vendored tip.** It is a fact about the current fracture, spatter
-/// and bleed code, not a target — if it moves, the two timings either side of the move are measuring
-/// different massacres.
+/// It is a fact about the current fracture, spatter and bleed code, not a target — if it moves, the two
+/// timings either side of the move are measuring different massacres.
 ///
-/// Re-blessed once already, and the reason is the point of the whole gate: the first version folded
-/// only `center_local`, which comes from the convex cell, so it never observed `outer` or `cap`. It
-/// would have passed a change that stopped building the drawn meshes altogether — which is exactly the
-/// first thing anyone would try against a bake that is 88 % of the cost.
-const GOLDEN_DIGEST: u64 = 0x80d7_2de3_5f4b_1306;
+/// **Re-blessed twice, and both reasons are worth keeping.** The first version folded only
+/// `center_local`, which comes from the convex cell, so it never observed `outer` or `cap` — it would
+/// have passed a change that stopped building the drawn meshes altogether. The second re-bless is this
+/// one: the *workload* was wrong. `bore::apply` handed back ~16 root cells against a `TARGET_PIECES` of
+/// 12, so the recursive cut loop performed **zero cuts** (`nodes=16 leaves=16 interior=0`) and the
+/// benchmark never touched the plane cutter, the tree, or a frontier query. Fixed by a six-cell
+/// humanoid subject and a target of 34, which now binds exactly: 544 = 34 x 16.
+const GOLDEN_DIGEST: u64 = 0xb672_df83_2d78_b94c;
 
 /// What the script is supposed to produce. Checked field by field so a failure names the thing that
 /// moved instead of just saying a hash did.
 ///
-/// Two of these are worth reading rather than scrolling past:
+/// Three of these are worth reading rather than scrolling past:
 ///
-/// - **`ejecta` is 156, not 32.** Sixteen bodies take two channels each, and every plug then breaks up
-///   under the shipped `Bore::shatter` of 4 rather than leaving as one dowel — about five chunks per
-///   channel.
-/// - **`cap_tris` is 5.6x `skin_tris`.** The drawn surface of a fractured body is overwhelmingly
-///   newly-created cut face, not the subject's own skin, because `soften` 0.5 relieves every cap. So
-///   anything that touches cap generation moves far more triangles than its name suggests.
+/// - **`fragments` is 544, exactly `TARGET_PIECES * SUBJECTS`.** That equality is the evidence the cut
+///   loop is doing its job; when it was 274 against a target of 12, the target was not binding at all.
+/// - **`bonds` is 1164 against the old 417.** Six shells cut to 34 pieces give the bond graph real
+///   branching, which is what makes `radial` + `wounds_from_reach` a meaningful query.
+/// - **`cap_tris` is 3.4x `skin_tris`.** The drawn surface of a fractured body is mostly
+///   newly-created cut face, because `soften` 0.5 relieves every cap — so anything touching cap
+///   generation moves far more triangles than its name suggests.
 const GOLDEN_COUNTS: Counts = Counts {
-    fragments: 274,
-    ejecta: 156,
-    bonds: 417,
-    wounds: 437,
-    pulses: 4370,
-    droplets: 284_983,
-    stains: 320_605,
-    skin_tris: 27_374,
-    cap_tris: 153_704,
-    hitstop: 1024,
+    fragments: 544,
+    ejecta: 172,
+    bonds: 1164,
+    wounds: 865,
+    pulses: 8650,
+    droplets: 295_100,
+    stains: 331_990,
+    skin_tris: 73_660,
+    cap_tris: 250_942,
+    hitstop: 1792,
 };
 
 fn percentile(sorted: &[f64], q: f64) -> f64 {
