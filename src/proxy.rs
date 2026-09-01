@@ -89,16 +89,16 @@ impl ProxyCell {
     /// caller can act on it.
     pub fn new(verts: Vec<Vec3>, faces: Vec<Vec<u32>>) -> Option<Self> {
         if faces.len() < 4 {
-            warn!("autogib: proxy cell has {} faces; a closed polyhedron needs at least 4", faces.len());
+            warn!("carnage: proxy cell has {} faces; a closed polyhedron needs at least 4", faces.len());
             return None;
         }
         for (i, f) in faces.iter().enumerate() {
             if f.len() < 3 {
-                warn!("autogib: proxy cell face {i} has {} vertices, needs at least 3", f.len());
+                warn!("carnage: proxy cell face {i} has {} vertices, needs at least 3", f.len());
                 return None;
             }
             if f.iter().any(|&v| v as usize >= verts.len()) {
-                warn!("autogib: proxy cell face {i} indexes outside its {} vertices", verts.len());
+                warn!("carnage: proxy cell face {i} indexes outside its {} vertices", verts.len());
                 return None;
             }
         }
@@ -136,13 +136,13 @@ impl ProxyCell {
 
         for fi in 0..self.faces.len() {
             let Some((o, n)) = self.face_plane(fi) else {
-                warn!("autogib: proxy cell face {fi} is degenerate — it encloses no area");
+                warn!("carnage: proxy cell face {fi} is degenerate — it encloses no area");
                 return None;
             };
             let worst = self.verts.iter().map(|v| (*v - o).dot(n)).fold(f32::NEG_INFINITY, f32::max);
             if worst > tol {
                 warn!(
-                    "autogib: proxy cell is not convex — a vertex sits {worst} in front of face {fi} \
+                    "carnage: proxy cell is not convex — a vertex sits {worst} in front of face {fi} \
                      (tolerance {tol}). Refusing it rather than cutting a shape that is not the one you \
                      described; every cut face of a concave cell is concave too, and the cap fan over \
                      one folds."

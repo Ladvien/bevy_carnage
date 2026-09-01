@@ -30,10 +30,10 @@
 //!
 //! Needs a GPU.
 //!
-//! Run: `cargo run -p bevy_autogib --example bullet_holes`
+//! Run: `cargo run -p bevy_carnage --example bullet_holes`
 
 use bevy::prelude::*;
-use bevy_autogib::Bore;
+use bevy_carnage::Bore;
 
 mod common;
 use common::body::{self, BodyMaterials, Chunk, ORIGIN, SHOTS};
@@ -130,7 +130,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "bevy_autogib — bullet holes (Space to fire, arrows to aim, R reset)".into(),
+                title: "bevy_carnage — bullet holes (Space to fire, arrows to aim, R reset)".into(),
                 resolution: (960u32, 680u32).into(),
                 ..default()
             }),

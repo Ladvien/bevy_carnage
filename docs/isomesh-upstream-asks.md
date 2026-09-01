@@ -1,8 +1,8 @@
-# What `bevy_autogib` needs from `isomesh`
+# What `bevy_carnage` needs from `isomesh`
 
 Written from the consuming side. The asks were first written against `isomesh` at `4369e3c`; the rev
 `Cargo.toml` pins today is `aa82b0b` (`0.0.10`+), and every verdict below has been re-checked there. Each ask
-says what autogib does with it and what stays blocked without it, so the priority argument is legible
+says what carnage does with it and what stays blocked without it, so the priority argument is legible
 rather than asserted.
 
 > **Status. Updated by AG-021, which moved the pin to `aa82b0b` (`origin/main`, `0.0.10` plus the
@@ -33,7 +33,7 @@ rather than asserted.
 > audit — `signed_distance_from_mesh_winding` and `SampledField` did not exist at `4369e3c`. They exist
 > now. So the claim we corrected was wrong about *when*, not about *what*.
 
-**Context.** autogib pre-fractures a mesh by recursively plane-cutting a triangle soup and capping each
+**Context.** carnage pre-fractures a mesh by recursively plane-cutting a triangle soup and capping each
 cut. isomesh is now a real dependency of it (`no_std`, one transitive dep, `[f32; 3]` public API — that
 last property is why it was admissible at all: a crate pinning `glam` would have been refused, because
 Bevy 0.19 wants 0.32 and `parry3d` wants 0.33). It is used today only to *measure* fractures. Asks 1
@@ -48,15 +48,15 @@ nowhere.
 
 **Cost:** a visibility change and doc comments. No new code, no new dependency, no new failure mode.
 
-**Why autogib needs it.** These are the unsigned half of a mesh field: a CSR uniform grid anchored at
+**Why carnage needs it.** These are the unsigned half of a mesh field: a CSR uniform grid anchored at
 the mesh AABB, plus Ericson §5.1.5 point-triangle distance with the region/Voronoi classification. It
-is the most portable geometry in the repo and autogib would otherwise reimplement it worse.
+is the most portable geometry in the repo and carnage would otherwise reimplement it worse.
 
 **One addition worth making while it is open:** `nearest_distance_squared` returns a scalar only. A
 variant returning the winning triangle index and the closest point would serve normal reconstruction
 and would cost nothing extra at the query site — the information is already computed and discarded.
 
-**Blocked without it:** ask 2, and therefore autogib's whole SDF fracture backend — which is itself no
+**Blocked without it:** ask 2, and therefore carnage's whole SDF fracture backend — which is itself no
 longer a blocker; see the re-scoping note on ask 2.
 
 > **Not granted as written, and worth understanding why.** At `HEAD`, `TriangleGrid` and
@@ -71,7 +71,7 @@ longer a blocker; see the re-scoping note on ask 2.
 ## Ask 2 — A mesh field: distance magnitude × winding-number sign
 
 > **Re-scoped. This was "the only hard blocker"; it is now optional.** The reason is not that isomesh
-> changed — it is that autogib's critical path did. Tier A/B (AG-001) repairs the cutter by cutting a
+> changed — it is that carnage's critical path did. Tier A/B (AG-001) repairs the cutter by cutting a
 > convex proxy, so an SDF backend stops being the route to correct fragments and becomes one possible
 > route to a *different* kind of fragment. Nothing below is withdrawn; it is simply no longer blocking.
 >
@@ -85,7 +85,7 @@ longer a blocker; see the re-scoping note on ask 2.
 > written the same refutation into its own tree (`construct/from_mesh.rs:458-465`).
 
 `S-007` ("Mesh → SDF by generalized winding number") is blocked by `S-006`, which is blocked by
-`S-001` (exact Euclidean distance transform). autogib wants none of that chain: not a sampled distance
+`S-001` (exact Euclidean distance transform). carnage wants none of that chain: not a sampled distance
 *volume*, but a `impl Sdf` whose magnitude comes from ask 1's grid and whose sign comes from a winding
 number.
 
@@ -102,13 +102,13 @@ expansions "very imprecise… not useful for applications"); prefer Antipodal or
 (`10.1145/3811339`); and use GWN to *classify points*, never to repair meshes (Takayama et al. 2014,
 the GWN authors' own paper, calls the orientation-repair application "fundamentally flawed").
 
-**The property that makes this cheap for autogib specifically:** the exact formulations reduce the
+**The property that makes this cheap for carnage specifically:** the exact formulations reduce the
 winding number to one ray-surface intersection plus a sum over **boundary** edges, so cost scales with
-holes rather than triangles. autogib's input is artist-exported glTF characters — nearly closed, with
+holes rather than triangles. carnage's input is artist-exported glTF characters — nearly closed, with
 a handful of seams where a torso, a head and a held item meet. Nearly closed is nearly free.
 
-**Why the pseudonormal route (`S-006`) does not serve autogib.** Bærentzen & Aanæs is a proof, and the
-ticket is right that it is the correct tool for geometry isomesh produced itself. autogib's input is
+**Why the pseudonormal route (`S-006`) does not serve carnage.** Bærentzen & Aanæs is a proof, and the
+ticket is right that it is the correct tool for geometry isomesh produced itself. carnage's input is
 the opposite case: S-007's framing, "for imported or damaged input", is a precise description of it.
 A character merged from several closed shells is non-manifold exactly where those shells meet, and
 that is where the pseudonormal's precondition fails.
@@ -118,7 +118,7 @@ note at the top of this ask.
 
 > **Upstream has measured this and the answer is no, at least in the shape asked for.** `HEAD` grew a
 > `MeshField` (`construct/from_mesh.rs:501`), but it is **pseudonormal-signed**, which is the `S-006`
-> route this ask argues does not serve autogib: it requires closed, consistently oriented input, and
+> route this ask argues does not serve carnage: it requires closed, consistently oriented input, and
 > "an open mesh has boundary edges whose pseudonormal answers a question that has no answer, because
 > there is no inside" (`from_mesh.rs:480-495`). The winding-number variant exists only as a *batch*
 > function over a grid, and upstream records why an on-demand twin is not viable: `winding_numbers`
@@ -127,7 +127,7 @@ note at the top of this ask.
 > it."
 >
 > So if the pin ever moves, the SDF backend is unblocked **by a different route than this ask
-> describes** — a batch GWN field over a grid, which is precisely the thing this ask said autogib did
+> describes** — a batch GWN field over a grid, which is precisely the thing this ask said carnage did
 > not want. That trade deserves re-deciding on its merits rather than being inherited.
 
 ---
@@ -140,7 +140,7 @@ note at the top of this ask.
 silently discarded. That is correct for isomesh's own extractors, whose output has no hard edges to
 lose, and it is the wrong default for any consumer that has them.
 
-**Measured on autogib's side:** a position-only weld of a fracture fragment destroys the crease between
+**Measured on carnage's side:** a position-only weld of a fracture fragment destroys the crease between
 the subject's outer skin and the cut face — which is the entire visual read the crate exists to
 produce — and, on a fragment cut more than once, the creases between cut faces of different planes too.
 `Mesh::from(Cuboid)` is 24 vertices, three per corner with distinct normals *and* distinct UVs; a
@@ -158,7 +158,7 @@ before `remap` is written.
    (its 27-cell probe is epsilon-correct in a way a bare quantised key is not, because two positions
    one ULP apart can straddle a lattice boundary), and the caller re-splits on `(class, normal, uv)`.
 
-**Not blocked without it** — autogib can write its own composite key — but every consumer with hard
+**Not blocked without it** — carnage can write its own composite key — but every consumer with hard
 edges will hit this, and each will solve it differently.
 
 > **Granted, at `HEAD`.** `weld_split_by` (`weld.rs:338`) is option 1 above: weld positions, then split
@@ -173,12 +173,12 @@ edges will hit this, and each will solve it differently.
 
 **Where:** absent. `README.md:65` lists it under "Not yet"; `parry3d` is a dev-dependency only.
 
-autogib currently hands each shard a box collider sized from its half-extents, which is a poor fit for
-a plane-cut shard. Müller, Chentanez & Kim 2013 — already cited in autogib's own README — is
+carnage currently hands each shard a box collider sized from its half-extents, which is a poor fit for
+a plane-cut shard. Müller, Chentanez & Kim 2013 — already cited in carnage's own README — is
 specifically about approximate convex decomposition for fracture, so this is the collider answer the
 literature points at for exactly this workload.
 
-**Until it exists**, autogib reports `collider::readiness()` per shard and leaves the collider choice to
+**Until it exists**, carnage reports `collider::readiness()` per shard and leaves the collider choice to
 the caller, which is the right boundary anyway: the crate hands out a mesh and stops. That is a stable
 position, not a holding pattern — so this is the lowest-priority ask here, and it is listed because it
 is the honest answer to "what would make the colliders good" rather than because it blocks anything.
@@ -189,14 +189,14 @@ is the honest answer to "what would make the colliders good" rather than because
 
 **Where:** `crates/isomesh/src/validate/self_intersection.rs:266-269`, and isomesh's own `M-83`.
 
-`self_intersections` skips any triangle pair sharing a vertex index. autogib's caps are fans around a
+`self_intersections` skips any triangle pair sharing a vertex index. carnage's caps are fans around a
 shared apex, so every intra-fan pair is skipped — and a fan fold is the single most likely defect in
 any capping or Steiner-fan triangulator, in both crates. isomesh already knows this about itself; M-83
 records that the counter is blind to folds inside a Steiner fan.
 
 An opt-in mode that tests vertex-adjacent (but not edge-adjacent) pairs would serve both.
 
-**Not blocked without it.** autogib found its fan fold by another route, and that route is worth
+**Not blocked without it.** carnage found its fan fold by another route, and that route is worth
 passing back upstream — but **it is a sufficient condition, not an equivalence**, and an earlier
 revision of this document offered it as one. Scoped correctly:
 
@@ -218,7 +218,7 @@ revision of this document offered it as one. Scoped correctly:
    consistently oriented, and the fan still folds. A pentagram `{5/2}` is the minimal witness — fanned
    from its centre it covers the inner pentagon twice, so emitted area exceeds the star's true area by
    exactly the inner pentagon's area, while `inconsistently_oriented_edges`, `non_manifold_edges` and
-   `non_manifold_vertices` are **all zero**. autogib commits it as
+   `non_manifold_vertices` are **all zero**. carnage commits it as
    `known_defect_a_doubly_wound_fan_folds_with_every_counter_at_zero`.
 
 So `MeshReport` detects *one common class* of fan fold topologically, tolerance-free and with no narrow
@@ -262,7 +262,7 @@ fields are new. None is adopted by AG-021, and each refusal has a reason rather 
   and `asymmetry` would be this crate's first defect measure that is not a topological count.
 - **`MeshReport::mean_ratio` and `MeshReport::irregular_vertices` — already computed, not surfaced.**
   Both fall out of the `validate_indexed` call `audit.rs:337` already makes, so exposing them costs no
-  compute — but it is a public API addition to `bevy_autogib` (the audit types are re-exported at
+  compute — but it is a public API addition to `bevy_carnage` (the audit types are re-exported at
   `src/lib.rs:13`) and belongs in a ticket of its own. `mean_ratio` is the Grosso & Zint mean-ratio
   quality `q = 4√3·A / Σᵢlᵢ²`, 1 for equilateral and 0 for degenerate, which is a real question about
   cap and fan triangles. `irregular_vertices` counts referenced vertices with edge valence ≠ 6, a

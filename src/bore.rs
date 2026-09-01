@@ -133,19 +133,19 @@ pub(crate) fn prism(bore: &Bore) -> Option<Vec<Plane>> {
     let axis = bore.to - bore.from;
     let len = axis.length();
     if !len.is_finite() || len <= EPS {
-        warn!("autogib: bore from {:?} to {:?} has no length; refusing it", bore.from, bore.to);
+        warn!("carnage: bore from {:?} to {:?} has no length; refusing it", bore.from, bore.to);
         return None;
     }
     if !bore.radius.is_finite() || bore.radius < MIN_RADIUS {
         warn!(
-            "autogib: bore radius {} is below MIN_RADIUS {MIN_RADIUS}; a channel that narrow loses \
+            "carnage: bore radius {} is below MIN_RADIUS {MIN_RADIUS}; a channel that narrow loses \
              the skin at its own rim. Refusing it.",
             bore.radius
         );
         return None;
     }
     if !(3..=MAX_SIDES).contains(&bore.sides) {
-        warn!("autogib: bore has {} sides; a channel needs 3..={MAX_SIDES}", bore.sides);
+        warn!("carnage: bore has {} sides; a channel needs 3..={MAX_SIDES}", bore.sides);
         return None;
     }
     // Clamped rather than refused, matching `weak_axis` and `soften`: a *look* dial out of range has
@@ -198,7 +198,7 @@ pub(crate) fn prism(bore: &Bore) -> Option<Vec<Plane>> {
 
     if planes.len() < 5 {
         warn!(
-            "autogib: bore from {:?} to {:?} collapsed to {} usable planes; that is not a channel. \
+            "carnage: bore from {:?} to {:?} collapsed to {} usable planes; that is not a channel. \
              Refusing it.",
             bore.from,
             bore.to,
@@ -441,7 +441,7 @@ pub(crate) fn apply(
         }
         if mine.is_empty() {
             warn!(
-                "autogib: a bore from {:?} to {:?} (radius {}) reached no proxy cell; nothing was \
+                "carnage: a bore from {:?} to {:?} (radius {}) reached no proxy cell; nothing was \
                  carved",
                 bore.from, bore.to, bore.radius
             );
@@ -454,14 +454,14 @@ pub(crate) fn apply(
 
     if !landed.is_empty() {
         info!(
-            "autogib: bored {} channel(s); {cells_before} cells became {}, ejecting {} plug(s) \
+            "carnage: bored {} channel(s); {cells_before} cells became {}, ejecting {} plug(s) \
              holding {ejected} of volume",
             landed.len(),
             cells.len(),
             plugs.len()
         );
         if consumed > 0 {
-            info!("autogib: {consumed} of those cells were swallowed whole and left as plugs");
+            info!("carnage: {consumed} of those cells were swallowed whole and left as plugs");
         }
     }
     (cells, landed, plugs)

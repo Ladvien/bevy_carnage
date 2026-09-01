@@ -1,11 +1,11 @@
 [package]
-name = "bevy_autogib"
+name = "bevy_carnage"
 version = "0.1.0"
 edition = "2024"
-description = "Runtime mesh fracture for Bevy: recursively plane-cut a character's own meshes into watertight-capped chunks, bake them once per source asset, and swap them in when it dies."
+description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/Ladvien/bevy_autogib"
-keywords = ["bevy", "gamedev", "fracture", "destruction", "mesh"]
+repository = "https://github.com/Ladvien/bevy_carnage"
+keywords = ["bevy", "gamedev", "gore", "fracture", "destruction"]
 categories = ["game-development", "graphics"]
 publish = false
 
@@ -21,7 +21,7 @@ bevy = { version = "0.19.0", default-features = false, features = [
     # `WorldAsset` — the scene handle a subject is keyed by. It lives in
     # `bevy_world_serialization`, NOT `bevy_scene`, and naming the wrong one here still built for a
     # long time: `cargo test` pulls the dev-dependency full umbrella, which enables everything, so the
-    # gap only appears in a build that does not. `cargo build --release -p bevy_autogib` is the check.
+    # gap only appears in a build that does not. `cargo build --release -p bevy_carnage` is the check.
     "bevy_world_serialization",
     "bevy_scene",   # the scene types `bevy_world_serialization` is layered over
     "bevy_log",     # warn!/error!/info! — a refusal has to be visible
@@ -81,6 +81,23 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 # machine, and that cost a session once already.
 isomesh = { git = "https://github.com/Ladvien/isomesh", rev = "aa82b0b", default-features = false }
 
+# **GPU blood, and it is optional for a reason the CI enforces.** `bevy_hanabi` compiles particle
+# effects to compute shaders, which means it drags in `bevy_render` and the whole GPU stack — exactly
+# what the trimmed `bevy` above exists to keep out of a consumer that only wants the bake. Behind the
+# `vfx` feature the crate's default-off build is unchanged, and `cargo build --release
+# --no-default-features --features serde` still resolves no render crate at all.
+#
+# **Admitted on the same terms as `isomesh`, and it passes them for a sharper reason: it cannot
+# report.** Hanabi 0.19 has no GPU→CPU readback path whatsoever, so a particle's position is
+# physically unable to reach a golden, a hash or a simulation. The determinism half of this crate
+# cannot see it even by mistake — the library enforces the write-only rule that the contract states.
+#
+# Version matched deliberately: hanabi 0.19 targets bevy 0.19 (its README's compatibility table reads
+# `| 0.19 | 0.19 |`), and both resolve the same `wgpu`/`naga` 29 that `bevy 0.19.1` pins in this
+# lockfile — checked, not assumed, because a mismatched `wgpu` is the one conflict a vendored fork
+# would be tempting for and a vendored Hanabi is worse than no GPU blood.
+bevy_hanabi = { version = "0.19", default-features = false, features = ["3d"], optional = true }
+
 # **Examples only.** The crate's own `bevy` above is trimmed to what a bake needs. A runnable example
 # additionally needs a window, an event loop (winit) and the 3D render pipeline, so it takes the full
 # umbrella here, where it cannot reach a consumer's dependency graph. `tests/leaf.rs` reads
@@ -96,7 +113,24 @@ bevy = { version = "0.19.0" }
 ron = { version = "0.12" }
 
 [features]
-default = ["serde"]
+default = ["serde", "vfx"]
+
+# **The GPU half.** Particle effects and stain decals: everything that renders and nothing that
+# decides. Gated so a headless harness can take the deterministic half alone — which is also what
+# keeps `bevy_hanabi` and `bevy_render` out of the lean build the CI's `cargo build --release` step
+# exists to defend.
+#
+# The `bevy/*` features are the ones the render path needs and that the trimmed base deliberately
+# omits: `bevy_render` for the pipeline, `bevy_core_pipeline` for the depth prepass a forward decal
+# requires, `bevy_image` for the procedurally generated splat texture, and `bevy_camera` for the
+# camera types Hanabi's extraction reads.
+vfx = [
+    "dep:bevy_hanabi",
+    "bevy/bevy_render",
+    "bevy/bevy_core_pipeline",
+    "bevy/bevy_image",
+    "bevy/bevy_camera",
+]
 
 # **The vertex-soup sort's runtime tie check.** Off in a release build (it costs a pass over the parts
 # list); on automatically under `debug_assertions`; and turned on explicitly by a test harness that

@@ -21,7 +21,7 @@
 //!   R               reset
 //! ```
 //!
-//! **Nothing here is in the crate.** `bevy_autogib` hands out a reach — a severity per bond — and
+//! **Nothing here is in the crate.** `bevy_carnage` hands out a reach — a severity per bond — and
 //! `common::body` picks the threshold at which one gives way, decides which island is still "the
 //! body", and throws the rest. A game scales that severity by material and by how much damage the
 //! blow carried; none of those are facts the crate has.
@@ -31,7 +31,7 @@
 //!
 //! Needs a GPU.
 //!
-//! Run: `cargo run -p bevy_autogib --example sever`
+//! Run: `cargo run -p bevy_carnage --example sever`
 
 use bevy::prelude::*;
 
@@ -82,7 +82,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "bevy_autogib — sever (1-5 to hit, arrows to aim, G granularity, R reset)"
+                title: "bevy_carnage — sever (1-5 to hit, arrows to aim, G granularity, R reset)"
                     .into(),
                 resolution: (960u32, 680u32).into(),
                 ..default()

@@ -9,7 +9,7 @@
 //! There is no physics engine here, and that is the point of the example rather than a shortcut. This
 //! crate hands you a mesh, a local centre and a half-extent per piece and stops; everything below
 //! `integrate` — gravity, the bounce, the spin — is thirty lines the example owns. Swap in Avian,
-//! Rapier or your own solver and nothing in `bevy_autogib` changes.
+//! Rapier or your own solver and nothing in `bevy_carnage` changes.
 //!
 //! Note the two materials. Each fragment comes back as two meshes — the subject's own outer skin and
 //! the cut faces alone — and that contrast is the entire visual read. Give the cap the same material
@@ -28,11 +28,11 @@
 //!
 //! This is the only example here that needs a GPU.
 //!
-//! Run: `cargo run -p bevy_autogib --example explode`
+//! Run: `cargo run -p bevy_carnage --example explode`
 
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
-use bevy_autogib::{CutSettings, fracture_mesh, hash_f32};
+use bevy_carnage::{CutSettings, fracture_mesh, hash_f32};
 
 mod common;
 use common::body;
@@ -73,7 +73,7 @@ const INTACT_SECS: f32 = 2.5;
 const BROKEN_SECS: f32 = 7.0;
 
 /// The example's own physics. In a real game this is a rigid body from whichever solver you use —
-/// `bevy_autogib` never names one.
+/// `bevy_carnage` never names one.
 #[derive(Component)]
 struct Chunk {
     velocity: Vec3,
@@ -117,7 +117,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "bevy_autogib — prefracture and swap (Space to break)".into(),
+                title: "bevy_carnage — prefracture and swap (Space to break)".into(),
                 // 0.19 takes physical pixels as `u32` — there is no `(f32, f32)` conversion.
                 resolution: (900u32, 640u32).into(),
                 ..default()

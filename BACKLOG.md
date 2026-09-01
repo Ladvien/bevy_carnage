@@ -1,35 +1,41 @@
-# bevy_autogib — BACKLOG
+# bevy_carnage — BACKLOG
 
-**Updated:** 2026-08-29
+**Updated:** 2026-09-01
 **Companions:** `CLAUDE.md` (rules), `README.md` (what the crate promises),
 `docs/research-brief.md` (the open problems), `docs/isomesh-upstream-asks.md` (what we need from the
 validator).
 
-**15 tickets archived, 10 landed this phase (AG-015 … AG-024), 0 open.** The architectural change this backlog opened with
-has landed: the crate no longer cuts the triangle soup. It cuts a caller-supplied convex proxy and
-carries the render triangles along as a payload.
+**15 tickets archived, 10 landed in phase 3 (AG-015 … AG-024), 7 landed in phase 4 (AG-025 … AG-031), 0 open.**
+The architectural change this backlog opened with has landed: the crate no longer cuts the triangle
+soup. It cuts a caller-supplied convex proxy and carries the render triangles along as a payload.
 
-**Phase 3 opens the crate to gameplay-driven fracture** — see "Phase 3" below. It answers
+**Phase 3 opened the crate to gameplay-driven fracture** — see "Phase 3" below. It answers
 `docs/research-brief.md`'s P4, which had been ranked last and never worked.
+
+**Phase 4 renamed the crate and built the layer the new name promises** — wounds, a literature-grounded
+spatter model, a pulsatile bleed schedule, pure game-feel curves, GPU blood behind a feature, and a
+headless recorder whose printed digest is the determinism check for all of it. See "Phase 4".
 
 **What survives here is the reasoning, not a work queue.** The sections below — the architecture
 argument, and the two corrections carried in from research — are kept because they explain *why* the
 crate is shaped as it is, and because both corrections turned out to need corrections of their own.
-Every ticket, with what it cost and what it falsified, is in `BACKLOG_ARCHIVE.md`.
+Every ticket, with what it cost and what it falsified, is in `BACKLOG_ARCHIVE.md` (phases 1–2) or in
+the phase sections below.
 
-**One piece of history worth keeping at the top, and it needed a correction of its own.** The monorepo
-is the source of truth: this crate is a `foundation_vs_slop` workspace member at `crates/bevy_autogib/`,
-depended on by `path`, and [`Ladvien/bevy_autogib`](https://github.com/Ladvien/bevy_autogib) is a
-`git subtree split` **history mirror** of that directory, resynced by `scripts/mirror_crates.sh` — which
-says in as many words that "the monorepo is the source of truth; nothing is ever edited on the far side
-and nothing is ever pulled back". An earlier revision of this section claimed the reverse: that the
-mirror was an independent repository the monorepo consumed as a pinned git dependency, and that a
-`crates/bevy_autogib/` in a monorepo checkout "is a corpse". AG-021 corrected it. What survives from
-that note is the *reading* hazard, which is real and cost a session: a `subtree split` carries only
-commits, so everything these tickets called "Stage 1" (the audit harness, the `isomesh` dependency,
-both research docs, this file) was invisible on the mirror for as long as it lived untracked in the
-monorepo working tree — which is why nine of the original eleven tickets named files that did not exist
-there. See `BACKLOG_ARCHIVE.md`, A-1.
+**One piece of history worth keeping at the top, and it has now needed two corrections.** **This
+repository is the source of truth**: `foundation_vs_slop` is an ordinary consumer that depends on the
+crate as a git dependency pinned to a rev, and there is no copy of it inside that checkout to edit.
+Two earlier arrangements are recorded because each cost a session, and neither is live: the crate first
+lived only here while the monorepo consumed it by rev; then it was vendored into the monorepo under
+this crate's former name as a workspace member, with this repository re-derived by `git subtree split`
+(`scripts/mirror_crates.sh`) and never pulled back; then the vendored copy was deleted and the git
+dependency restored. An earlier revision of this section asserted the middle arrangement as permanent.
+What survives from that note is the *reading* hazard, which is real and cost a session: a
+`subtree split` carries only commits, so everything these tickets called "Stage 1" (the audit harness,
+the `isomesh` dependency, both research docs, this file) was invisible on the far side for as long as it
+lived untracked in a working tree — which is why nine of the original eleven tickets named files that
+did not exist there. See `BACKLOG_ARCHIVE.md`, A-1. **Whichever direction is live, read the tree you
+are about to change, not a copy of it.**
 
 ---
 
@@ -56,7 +62,7 @@ there. See `BACKLOG_ARCHIVE.md`, A-1.
   (`bond.rs:588`). Nothing in `soup.rs` at all. A stale baseline is where a real new warning hides.
   *The bare, `-p`-less form of every command in this section is the
   **mirror's**, where this crate is the whole repository. In a `foundation_vs_slop` checkout it is a
-  workspace member, so each one takes `-p bevy_autogib`.*
+  workspace member, so each one takes `-p bevy_carnage`.*
 - **`cargo build --release` passes.** Not redundant with `cargo test`: the dev-dependency pulls the full
   `bevy` umbrella and enables features the trimmed `[dependencies]` set does not. A missing feature is
   only visible in the release build.
@@ -130,7 +136,7 @@ Both were reported to us as fact and both are **false**. They failed the same wa
 implementation**. Recorded here because the cost of re-checking is small and the cost of building on
 them is not.
 
-1. **"`isomesh` is not in `bevy_autogib`'s `Cargo.toml`; it appears in test usage only."** False as a
+1. **"`isomesh` is not in `bevy_carnage`'s `Cargo.toml`; it appears in test usage only."** False as a
    statement about the crate, and **the reading that produced it was fair**. It is a real
    `[dependencies]` entry pinned to `rev = "4369e3c"`, with `ALLOWED_DEPS` widened in the same commit —
    but at the time that entry existed only in the monorepo's *working tree*. It was in no commit, in
@@ -395,14 +401,14 @@ non-positive volume, which is exactly the inconsistently-oriented fragment that 
 **Two stale claims were corrected while the files were open, both of which actively misdirected.**
 
 *Which repository owns the crate.* This file, `CLAUDE.md` and `README.md` each asserted that
-`Ladvien/bevy_autogib` is the source of truth and that a `crates/bevy_autogib/` in a monorepo checkout
+`Ladvien/bevy_carnage` is the source of truth and that a `crates/bevy_carnage/` in a monorepo checkout
 "is a corpse". The tooling says otherwise: `scripts/mirror_crates.sh` states "the monorepo is the source
-of truth; nothing is ever edited on the far side and nothing is ever pulled back", `bevy_autogib` is in
-its `CRATES` and `PUBLIC_CRATES` lists, the root `Cargo.toml` lists `crates/bevy_autogib` as a workspace
+of truth; nothing is ever edited on the far side and nothing is ever pulled back", `bevy_carnage` is in
+its `CRATES` and `PUBLIC_CRATES` lists, the root `Cargo.toml` lists `crates/bevy_carnage` as a workspace
 member and depends on it by `path`, and there is no standalone checkout of the mirror on this machine.
 The corpse was the live copy. All three notes now say: the monorepo is the source of truth, the mirror is
 a `git subtree split` of it, and the bare `-p`-less build commands are the *mirror's* form — in a
-monorepo checkout every one of them takes `-p bevy_autogib`. The *reading* hazard the old note was
+monorepo checkout every one of them takes `-p bevy_carnage`. The *reading* hazard the old note was
 reaching for survives, because it is real: a `subtree split` carries only commits, so anything
 uncommitted in the monorepo working tree cannot appear on the mirror at all.
 
@@ -665,6 +671,78 @@ floor. That is the whole feature driven by real X key events through the real ap
 **Still deliberately absent.** The pools are flat discs of one shared unit-radius circle asset scaled
 per pool, not projected decals; and nothing in the crate moves a plug or its pieces.
 
+
+---
+
+## Phase 4 — the crate became `bevy_carnage`, and grew the layer the name promises
+
+**AG-025 … AG-031, all landed.** The crate could already cut a subject apart, sever it by region
+query, bond the pieces, bore channels through it and eject the plugs. What it could not do was say
+anything about what came *out*, which is most of what a gore crate is for. Renamed, then extended in
+place.
+
+### AG-025, as landed — the rename
+
+150 occurrences of the old name across 23 tracked files, plus the GitHub repo and `.serena/project.yml`.
+Mechanical, and the completeness check is not a count: `src/lib.rs` opens with
+`#![doc = include_str!("../README.md")]`, so every README code fence is a compiled doctest and a fence
+still naming the old crate fails `cargo test`. It passes.
+
+**`BACKLOG_ARCHIVE.md` is the one deliberate exception**, with a single line added at its top saying
+so. Rewriting the history of what happened under the old name would make the record lie. **Nothing
+else spells the old name** — including this file and `CLAUDE.md`, whose prose about the vendored era
+now says "this crate's former name" rather than writing it out, so that
+`grep -ri autogib --exclude=BACKLOG_ARCHIVE.md` stays a ratchet rather than becoming a list of
+exceptions.
+
+### AG-026 … AG-029, as landed — wounds, spatter, bleed, feel
+
+Four modules, 33 tests, one golden. `src/order.rs` was promoted out of `bake.rs` first, because the
+new folds need the same checked total-order sort the vertex soup does and two copies of it would drift.
+
+**The spatter model is a reduction of a measurement.** Comiskey, Yarin & Attinger 2018 show blood
+disintegrating by percolation, so droplet size and initial speed are **inversely** correlated. One
+random draw sets the size fraction and the speed is the inverse of the same number, on the CPU and in
+the shader both, and a test asserts the correlation (Pearson `r < -0.9`) instead of a comment claiming
+it. The first GPU pass omitted it — all droplets one size — and looked exactly like confetti, which is
+the failure the paper's own framing predicts.
+
+### AG-030, as landed — GPU blood behind a feature
+
+`bevy_hanabi 0.19` resolves against `bevy 0.19.1` with no `wgpu` conflict, and
+`cargo tree --no-default-features --features serde | grep -c hanabi` prints `0`. `tests/leaf.rs`'s
+`ALLOWED_DEPS` was widened in the same commit with the review its own assertion message demands, on
+two terms: it is optional, and **it cannot report** — Hanabi 0.19 has no public GPU→CPU readback path
+at all, so the "cosmetic output never re-enters the deterministic half" rule is enforced by the library
+rather than by anyone remembering it.
+
+### AG-031, as landed — the demos, and the digest
+
+`examples/carnage.rs` (interactive) and `examples/capture_carnage.rs` (headless). The recorder prints
+one line two runs must agree on:
+
+```text
+carnage: frames=382 wounds=253 stains=26892 digest=c7fde149e80f1b13
+```
+
+FNV-1a over every stain position in placement order, so it covers the bake, the bond graph, wound
+extraction and its sort, the wound seed, the droplet draws, the ballistic solve and the pulse schedule.
+Measured: identical twice, and the 382 rendered PNGs are byte-identical too.
+
+### What this phase falsified, and it was mostly the plan's own premises
+
+| prediction | outcome |
+|---|---|
+| the two local commits carry work the publish lacks, so replay them onto it | **falsified** — the publish had already absorbed both under different hashes. All 139 local-only lines were *older* variants (`bake(world, soften)` vs `bake(world, soften, &[])`, `face_cut: Vec<bool>` vs `FaceKind`, isomesh `22c3b35` vs `aa82b0b`, "Eleven dials" vs twelve). The cherry-pick conflicted in `src/lib.rs`, `mesh.rs`, `proxy.rs` and `soup.rs` — exactly the fracture-geometry merge that must never be guessed at. Took the publish verbatim; nothing was lost, and that was checked rather than assumed. |
+| `EffectTtl` is a Hanabi type | **falsified** — it does not exist in 0.19. It is this crate's own component, and it has to be: `EffectSpawner::has_completed()` reports the *spawner* finished, which for a one-shot burst is almost immediately, so despawning on it alone cuts the spray off mid-flight. Both conditions are required. |
+| `spatter_speed_scale = 1.0` is a sensible shipped default | **falsified by arithmetic.** At 1.0 the paper's measured 40 m/s under the examples' 18 m/s² gravity throws a droplet `40²/(2·18) ≈ 44` metres. Correct for a gunshot, a fountain leaving frame on a 1.8 m subject. The default stayed at 1.0 — the constants are *measurements* and a default that quietly divided them would make them lie — and both examples set 0.25, which is where a look decision belongs. |
+| a wound's area and normal can be approximated where the harness has dropped the cell | **falsified twice, visibly.** Averaging the cut-face area over every part made a fingertip bleed like a torso; a `Vec3::Y` pulse normal made every resting gib fountain straight up. Both were invented numbers, and the real ones were one field away — `Chunk` now carries its `FragmentId`, and `GorePart` its `ProxyCell`. |
+| the examples were verified by compiling and by the recorder | **falsified on first run.** `examples/carnage.rs` panicked on keys `6` and `R`: `body::Thrown` is not `init_resource`d by `common::body` (a plug counter is the caller's bookkeeping) and nothing had run those paths. The recorder could not have found it — it initialises the resource itself. Fixed, then re-run: key `6` bores a channel and ejects a plug, `R` resets, no panic. **Compiling an example is not running one**, which is the same lesson AG-024's followup recorded and the second time it has been paid for. |
+
+### Still deliberately absent
+
+Nothing in this crate applies trauma, hit stop or shake; `feel.rs` returns numbers and the caller moves
+its own camera. Nothing writes `Time<Virtual>`. Nothing reads a particle back.
 
 
 ---

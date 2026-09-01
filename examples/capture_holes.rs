@@ -27,7 +27,7 @@ use bevy::prelude::*;
 mod common;
 use common::body::{self, Chunk, ORIGIN, SHOTS};
 use common::{Recorder, arg, light_and_floor};
-use bevy_autogib::Bore;
+use bevy_carnage::Bore;
 
 /// Capture size, matching the other recorders so the GIFs sit together on a page.
 const WIDTH: u32 = 720;

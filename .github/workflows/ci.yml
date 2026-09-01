@@ -1,8 +1,8 @@
-# CI for the standalone `bevy_autogib` mirror.
+# CI for the standalone `bevy_carnage` mirror.
 #
 # **This path is inert upstream and live here.** GitHub only reads workflows from `.github/` at a
 # repository root, so in the monorepo this file is an ordinary text file that nothing runs. The
-# `git subtree split` that produces the mirror lifts `crates/bevy_autogib/` to the root — and this
+# `git subtree split` that produces the mirror lifts `crates/bevy_carnage/` to the root — and this
 # file with it — so it becomes the mirror's CI without the monorepo ever gaining a second workflow.
 name: CI
 

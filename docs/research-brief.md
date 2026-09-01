@@ -10,7 +10,7 @@ not have.
 
 ## The system, in one paragraph
 
-`bevy_autogib` pre-fractures a game asset once, at bake time, and swaps the pieces in when the thing
+`bevy_carnage` pre-fractures a game asset once, at bake time, and swaps the pieces in when the thing
 dies. It merges whatever meshes an entity actually loaded into one triangle soup, then recursively
 plane-cuts it: pick the largest piece, cut it with a pseudorandom plane through its centroid
 (Sutherland–Hodgman triangle clip), recover the cut boundary as welded loops, and cap each loop.

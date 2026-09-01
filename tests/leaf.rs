@@ -1,7 +1,8 @@
 //! **The crate boundary, enforced.**
 //!
-//! `bevy_autogib` breaks meshes. It takes `bevy` (a trimmed feature set) and optionally `serde` — and
-//! it must never learn anything about a particular game.
+//! `bevy_carnage` breaks meshes and bleeds them. It takes `bevy` (a trimmed feature set), optionally
+//! `serde`, and optionally `bevy_hanabi` behind the `vfx` feature — and it must never learn anything
+//! about a particular game.
 //!
 //! The source scan below forbids more than crate names. `GoreSettings`, `FigurineSource`, `GunModel`,
 //! `SquadMember` and `Dungeon` are there because each is a specific temptation this crate already
@@ -15,12 +16,17 @@
 //! engine on the caller's behalf, and a fracture library that only works with one solver is not a
 //! fracture library.
 //!
+//! `MainCamera` is forbidden for a reason `feel.rs` states in as many words: this crate returns a
+//! shake offset and a trauma number, and the caller moves its own camera. A crate that reached for a
+//! camera would be a second writer of a transform the consumer already owns.
+//!
 //! `bevy_app` is not forbidden here (the trimmed `bevy` umbrella pulls it, and this crate does register
-//! a plugin), but the plugin still configures no run condition: the caller keeps its schedule.
+//! two plugins), but neither configures a run condition: the caller keeps its schedule.
 
 use std::path::{Path, PathBuf};
 
-/// Everything `bevy_autogib` is allowed to depend on. An engine, a serializer, and a mesh validator.
+/// Everything `bevy_carnage` is allowed to depend on. An engine, a serializer, a mesh validator, and
+/// a particle system.
 ///
 /// **`isomesh` was added deliberately, and this comment is the review the assertion below asks for.**
 /// It buys the one thing this crate could never do for itself — say whether a fragment is closed,
@@ -31,7 +37,25 @@ use std::path::{Path, PathBuf};
 ///
 /// Note what it is *not*: a geometry backend this crate cannot work without. The fracture is still
 /// `soup.rs` and owes `isomesh` nothing — it is a second opinion about the output, not a source of it.
-const ALLOWED_DEPS: &[&str] = &["bevy", "serde", "isomesh"];
+///
+/// **`bevy_hanabi` was added in AG-030, and it is admitted on two terms rather than one.**
+///
+/// First, **it is optional and behind the `vfx` feature**, so the deterministic half of this crate
+/// never sees it. `cargo build --release --no-default-features --features serde` resolves no
+/// `bevy_hanabi` and no `bevy_render` at all — that is the property the CI's plain `cargo build` step
+/// exists to defend, and a mandatory particle dependency would have destroyed it.
+///
+/// Second — and this is the sharper reason — **it renders and it cannot report.** Hanabi 0.19 has no
+/// public GPU→CPU readback path whatsoever: its only `map_async` is behind
+/// `#[cfg(all(test, feature = "gpu_tests"))]`, and its `copy_buffer_to_buffer` calls are internal
+/// buffer reallocation. So a particle's position is *physically unable* to reach a golden, a hash, or
+/// a simulation, and the crate's "cosmetic output never re-enters the deterministic half" rule ends up
+/// enforced by the library rather than by anyone remembering it. A particle system that offered
+/// readback would have needed a different answer here, however good its visuals were.
+///
+/// Note what it is *not*, again: a source of truth about anything. Where blood *lands* is
+/// `spatter.rs`, on the CPU, from `hash_f32`, and it is available with `vfx` off entirely.
+const ALLOWED_DEPS: &[&str] = &["bevy", "serde", "isomesh", "bevy_hanabi"];
 
 /// Names that would mean the boundary has been crossed. The first three are crates; the rest are
 /// identifiers from the game this was extracted from, checked as substrings because re-introducing one
@@ -147,7 +171,7 @@ fn no_source_file_reaches_for_a_game() {
 
     assert!(
         offenders.is_empty(),
-        "bevy_autogib must stay game-free, but {} line(s) reference a game or a physics engine.\n  {}\n\n\
+        "bevy_carnage must stay game-free, but {} line(s) reference a game or a physics engine.\n  {}\n\n\
          This crate is what lets a fracture be reused by a project that has no guns, no squad, and a \
          different solver. If a concept genuinely needs to cross the boundary, the answer is a neutral \
          name here and the game's vocabulary in the caller's facade — not a dependency.",
@@ -159,14 +183,14 @@ fn no_source_file_reaches_for_a_game() {
 #[test]
 fn the_dependency_list_stays_closed() {
     let manifest = std::fs::read_to_string(crate_root().join("Cargo.toml"))
-        .expect("bevy_autogib must have a Cargo.toml");
+        .expect("bevy_carnage must have a Cargo.toml");
 
     // Only the `[dependencies]` table — a dev-dependency on something heavier would be a different
     // (and much less alarming) conversation.
     let deps = manifest
         .split("[dependencies]")
         .nth(1)
-        .expect("bevy_autogib must declare a [dependencies] table");
+        .expect("bevy_carnage must declare a [dependencies] table");
     let deps = deps.split("\n[").next().unwrap_or(deps);
 
     for line in deps.lines() {
@@ -188,14 +212,14 @@ fn the_dependency_list_stays_closed() {
         }
         assert!(
             ALLOWED_DEPS.contains(&name),
-            "bevy_autogib declares `{name}`, which is not in its allowed set {ALLOWED_DEPS:?}.\n\
+            "bevy_carnage declares `{name}`, which is not in its allowed set {ALLOWED_DEPS:?}.\n\
              Widening this is a design decision, not a convenience. If it is genuinely warranted, add \
              it to ALLOWED_DEPS in this test in the same commit, so the change is visible in review."
         );
         for marker in FORBIDDEN_DEP_MARKERS {
             assert!(
                 !name.contains(marker),
-                "bevy_autogib declares `{name}` — the crate exists precisely so it does not depend on \
+                "bevy_carnage declares `{name}` — the crate exists precisely so it does not depend on \
                  a game or a solver."
             );
         }

@@ -1,5 +1,7 @@
 # bevy_autogib — BACKLOG ARCHIVE
 
+Everything below happened while this crate was named bevy_autogib; it became bevy_carnage in AG-025.
+
 Completed tickets, newest last. **The annotation is the point; the checkmark is not.** Every entry
 records what actually happened — amendments, deviations, and above all *falsified premises*, including
 the ones that were falsified in our own favour.

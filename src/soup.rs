@@ -467,11 +467,11 @@ pub(crate) fn fracture(
         }
     }
     if carried > 0 {
-        info!("autogib: carrying {carried} open shell(s) whole rather than cutting them");
+        info!("carnage: carrying {carried} open shell(s) whole rather than cutting them");
     }
     if homeless > 0 {
         warn!(
-            "autogib: {homeless} of {} triangles lie outside every proxy cell and were dropped — the \
+            "carnage: {homeless} of {} triangles lie outside every proxy cell and were dropped — the \
              proxy does not cover the mesh",
             considered
         );

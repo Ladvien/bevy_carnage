@@ -30,6 +30,12 @@ FONT=${FONT:?set FONT to a regular-weight .ttf — see docs/DEMOS.md}
 BOLD=${BOLD:?set BOLD to a bold-weight .ttf — see docs/DEMOS.md}
 WIDTH=${WIDTH:-640}
 FPS=${FPS:-30}
+# **Keep every Nth frame.** A GIF stores whole frames, so its size is very nearly linear in frame
+# count — and a clip that has to run long enough to *show* something (a wound bleeding until it clots
+# takes six seconds) is otherwise several times the size of the short ones for no extra information.
+# `STRIDE=2` with `FPS` left alone halves the file and plays at half speed; pair it with a doubled
+# `FPS` to keep real-time speed, which is what `docs/DEMOS.md`'s carnage recipe does.
+STRIDE=${STRIDE:-1}
 
 [ -d "$FRAMES" ] || { echo "gif.sh: no such directory: $FRAMES" >&2; exit 1; }
 count=$(find "$FRAMES" -name 'frame*.png' | wc -l | tr -d ' ')
@@ -42,8 +48,14 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 # Two-pass palette: one palette for the whole clip, so colours do not shift frame to frame.
+# `select` runs before `scale` so the dropped frames are never resized, and `setpts` re-times what is
+# left — without it ffmpeg keeps the original timestamps and the gap shows as a stutter.
+decimate=""
+if [ "$STRIDE" -gt 1 ]; then
+    decimate="select='not(mod(n\,${STRIDE}))',setpts=N/FRAME_RATE/TB,"
+fi
 ffmpeg -y -loglevel error -framerate "$FPS" -i "$FRAMES/frame%04d.png" \
-  -vf "scale=${WIDTH}:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer:bayer_scale=3" \
+  -vf "${decimate}scale=${WIDTH}:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer:bayer_scale=3" \
   "$tmp/raw.gif"
 
 # Caption top-left, and the audit legend bottom-left when it describes what is on screen.

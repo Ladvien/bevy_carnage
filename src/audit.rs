@@ -185,16 +185,16 @@ impl SolidAudit {
 /// could answer, so they stay in the shipped `Mesh` where they belong.
 fn append(buf: &mut MeshBuffer<f32>, mesh: &Mesh) -> bool {
     let Some(VertexAttributeValues::Float32x3(pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
-        warn!("autogib: audit skipped a fragment mesh with no Float32x3 POSITION");
+        warn!("carnage: audit skipped a fragment mesh with no Float32x3 POSITION");
         return false;
     };
     let Some(VertexAttributeValues::Float32x3(nrm)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
-        warn!("autogib: audit skipped a fragment mesh with no Float32x3 NORMAL");
+        warn!("carnage: audit skipped a fragment mesh with no Float32x3 NORMAL");
         return false;
     };
     if nrm.len() != pos.len() {
         warn!(
-            "autogib: audit skipped a fragment mesh whose NORMAL count ({}) differs from its POSITION \
+            "carnage: audit skipped a fragment mesh whose NORMAL count ({}) differs from its POSITION \
              count ({})",
             nrm.len(),
             pos.len()
@@ -211,7 +211,7 @@ fn append(buf: &mut MeshBuffer<f32>, mesh: &Mesh) -> bool {
         Some(Indices::U32(v)) => buf.indices.extend(v.iter().map(|i| i + base)),
         Some(Indices::U16(v)) => buf.indices.extend(v.iter().map(|i| u32::from(*i) + base)),
         None => {
-            warn!("autogib: audit skipped a non-indexed fragment mesh");
+            warn!("carnage: audit skipped a non-indexed fragment mesh");
             return false;
         }
     }
@@ -386,7 +386,7 @@ pub fn audit_proxies(frags: &[FragmentGeometry]) -> Vec<SolidAudit> {
         .filter_map(|(i, f)| match audit_proxy(f) {
             Ok(a) => Some(a),
             Err(e) => {
-                warn!("autogib: fragment {i} could not be audited: {e}");
+                warn!("carnage: fragment {i} could not be audited: {e}");
                 None
             }
         })

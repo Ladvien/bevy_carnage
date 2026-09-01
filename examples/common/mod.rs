@@ -49,6 +49,26 @@ impl Recorder {
     /// `None` — with an `error!` naming the path — if the output directory cannot be created. A
     /// recorder that cannot write is refused at the door rather than discovering it 100 frames in.
     pub fn new(width: u32, height: u32, camera: Transform, out: &str) -> Option<Recorder> {
+        Recorder::new_with(width, height, camera, out, |_| {})
+    }
+
+    /// [`Recorder::new`], plus a chance to add plugins.
+    ///
+    /// **This exists because a plugin cannot be added afterwards.** `new` calls `finish` and `cleanup`
+    /// and then takes the sub-apps, which is what makes a hand-pumped loop possible at all — and after
+    /// `cleanup` an `App` will not accept another plugin. `app()` is enough for systems and is what
+    /// the fracture recorders use; a recorder that needs a *render* plugin (particles) has no other
+    /// way in.
+    ///
+    /// One implementation with a no-op closure behind `new`, rather than two constructors that could
+    /// drift about the eight awkward things this module exists to get right once.
+    pub fn new_with(
+        width: u32,
+        height: u32,
+        camera: Transform,
+        out: &str,
+        add_plugins: impl FnOnce(&mut App),
+    ) -> Option<Recorder> {
         if let Err(e) = std::fs::create_dir_all(out) {
             error!("capture: cannot create {out}: {e}");
             return None;
@@ -66,6 +86,8 @@ impl Recorder {
                 .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
                 .disable::<WinitPlugin>(),
         );
+        // Before `finish`/`cleanup`, which is the only window in which a plugin can still be added.
+        add_plugins(&mut app);
         // `run()` is never called, so the two things the runner would have done must be done here.
         app.finish();
         app.cleanup();

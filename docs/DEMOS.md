@@ -1,19 +1,22 @@
 # Demos
 
-Every example in the repo, and what each one is for. All five run from a clean checkout with no
-assets and no setup:
+Every example in the repo, and what each one is for. All six run from a clean checkout with no assets
+and no setup:
 
 ```sh
 cargo run --release --example fracture_cube   # terminal only — no window, no GPU
 cargo run --release --example sever           # needs a GPU
 cargo run --release --example explode         # needs a GPU
 cargo run --release --example bullet_holes    # needs a GPU
+cargo run --release --example carnage         # needs a GPU
 ```
 
-The clips below are **not screen recordings**. They come from three headless recorders, `capture`,
-`capture_sever` and `capture_holes`, which render the same scenes on a fixed timestep with no window
-and no wall clock. Frame 62 of one run is frame 62 of the next, so two GIFs taken either side of a
-change differ only where the geometry does — which is what makes them worth committing. Regenerating
+The clips below are **not screen recordings**. They come from four headless recorders, `capture`,
+`capture_sever`, `capture_holes` and `capture_carnage`, which render the same scenes on a fixed
+timestep with no window and no wall clock. Frame 62 of one run is frame 62 of the next, so two GIFs
+taken either side of a change differ only where the geometry does — which is what makes them worth
+committing. `capture_carnage` goes further and prints a digest two runs must agree on; see
+[its section](#carnage--the-wounds-bleed-and-both-kinds-of-wound-bleed-the-same-way). Regenerating
 them is [at the bottom](#regenerating-these).
 
 **The subject is a blocked-out humanoid** — torso, head, two arms, two legs, one convex proxy cell
@@ -89,7 +92,7 @@ torso <-> leg.L   area 0.0528   the hip
 So a hit on the shoulder takes off the arm, at every granularity, with no code that knows what an arm
 is. Read the bake at 6 pieces and the pieces *are* the body parts; read it at 34 and they are gibs.
 
-**None of the decisions in that table are the crate's.** `bevy_autogib` hands back a *reach* — a
+**None of the decisions in that table are the crate's.** `bevy_carnage` hands back a *reach* — a
 severity in `[0,1]` per bond — and `examples/common/body.rs` picks the threshold at which one gives
 way, decides which island is still "the body", and throws the rest. A game scales that severity by
 material and by how much damage the blow carried; the crate has neither fact.
@@ -246,6 +249,86 @@ show.
 
 ---
 
+## `carnage` — the wounds bleed, and both kinds of wound bleed the same way
+
+![A blue blocked-out humanoid; a shot punches a channel through its chest which mists blood from the hole, then four blows in turn take an arm, the head, the other arm and both legs, each cut throwing a red spray outward along the face it opened while dark stains pile up on the floor beneath; the severed pieces keep pulsing blood at a heartbeat's rate as they lie there, the pulses weaken, and by the end the floor is soaked and the bleeding has stopped](carnage.gif)
+
+The layer on top of `sever` and `bullet_holes`. Both of those open the subject; this one is about what
+comes out. **A severance and a channel are geometrically different openings and they go through the
+same blood code**, which is the whole claim, and the clip is arranged to make it checkable: frame 18
+is a bore, frames 54–162 are severances, and nothing in `spatter.rs` or `bleed.rs` can tell them
+apart beyond a `WoundKind` mixed into a seed.
+
+**A wound is a value.** `Wound { at, normal, area, severity, kind }` — subject-local, derived only
+from baked geometry, no entity and no lifetime. `wounds_from_bonds` turns severed bonds into wounds
+with no arithmetic at all (a bond's centroid, normal and area *are* the wound's), and
+`wound_of_channel` sums a plug's raw-interior faces to get the channel wall. That second one works
+because `face_is_cut` already answers `true` for a bore wall, so cut-face extraction picks up bullet
+channels for free — the reason a bullet hole bleeds here without a second code path.
+
+**The spray is a reduction of a measurement, not a particle preset.** Comiskey, Yarin & Attinger
+(*Phys. Rev. Fluids* 3, 063901, 2018) show a blood layer disintegrating by **percolation**: it breaks
+into clusters of an indivisible droplet, so a big droplet is a big cluster carrying more mass per unit
+of the same impulse. The consequence is a *correlation* — many small droplets leave fast, few large
+ones leave slow, bracketed by their measured 40 m/s forward and 8 m/s back spatter — and that
+correlation, not the exact distribution, is what makes a spray read as blood rather than as confetti.
+One random draw sets each droplet's size fraction and its speed is the inverse of the same number, on
+the CPU and in the shader both. A test asserts it (Pearson `r < -0.9`) rather than a comment claiming
+it, and the first pass without it looked exactly like confetti.
+
+**Where blood lands is core, not cosmetic.** `spatter::stains` solves the ballistic landing in closed
+form and is available with the `vfx` feature off entirely, because on the consuming side a blood pool's
+position feeds simulation. Only turning a `Stain` into a decal is optional. The splat textures are
+generated from `hash_f32` — the crate ships no asset files and neither do its examples.
+
+**The pulse is integer ticks.** `bleed.rs` is one state machine over `tick - opened_at`: an integer
+modulo for the heartbeat, so a pulse train cannot drift and cannot depend on frame rate, and a
+monotone ramp to *exactly* zero at the clot. `pulse_wound` returns the wound with its severity scaled,
+so the first arterial jet and the last seep are the same model at two numbers — there is no separate
+seep path. In the clip the pieces severed early stop bleeding while the last blow's are still going.
+
+**The crate applies none of the feel.** `feel.rs` returns a trauma number, a hit-stop tick count and a
+shake offset; the example owns the camera and its own tick counter. That is deliberate to the point of
+being the module's first paragraph: the consuming game documents one file as the single writer of
+`Time<Virtual>` and another as the owner of camera transforms, and a second writer of either is a
+frame-to-frame fight. The shake is also *not* random — it eases along the wound normal, which is what
+Pichlmair & Johansen's game-feel survey asks for in as many words.
+
+### Two numbers this demo sets rather than inheriting
+
+`spatter_speed_scale` ships at `1.0` because 8…40 m/s is what the paper *measured*, and the crate will
+not quietly divide its own constants. At 1.0 a droplet thrown straight up under the examples'
+18 m/s² gravity rises `40² / (2·18) ≈ 44` metres — correct for a real gunshot, and on a 1.8 m subject
+it is a fountain leaving frame. Both examples set **0.25**, which puts the throw at roughly 1–3 metres.
+
+`soften` is `0.0`, for the reason `bullet_holes` measured: relaxing each shard's skin independently
+pulls the wedges around a channel apart, and this demo fires one.
+
+### The determinism check, which is the point of the recorder
+
+`capture_carnage` prints one line and two runs must print the same one:
+
+```text
+carnage: frames=382 wounds=253 stains=26892 digest=c7fde149e80f1b13
+```
+
+The digest is FNV-1a over every stain position in placement order, so it covers the whole new layer
+end to end — the bake, the bond graph, wound extraction and its canonical sort, the wound seed, the
+droplet draws, the ballistic solve and the pulse schedule. **A digest that differs between two runs
+means something in that chain read a clock, an `Entity`, or an unsorted iteration order**, which are
+the three failures this crate's determinism rules are written against. It is a far sharper instrument
+than holding two GIFs up next to each other; measured on this host, the 382 rendered PNGs are
+byte-identical between runs as well.
+
+Two things the fracture recorders do not need, both discovered by the frames coming out wrong.
+`TimeUpdateStrategy::ManualDuration` pins `Time<Real>`, which pins `Time<Virtual>`, which pins the
+particle clock defined relative to it — without it a hand-pumped loop steps the particles by however
+long each frame took. And the recorder's camera needs `DepthPrepass`: a forward decal reconstructs the
+surface it lies on from the depth buffer, so without one the stains render as opaque quads or not at
+all, which is the first thing to check if a floor looks wrong.
+
+---
+
 ## `fracture_cube` — the numbers, in a terminal
 
 > Captured against `isomesh` at `aa82b0b` (`0.0.10`+), the rev `Cargo.toml` pins. Every number in the
@@ -326,32 +409,51 @@ code. Every recorder writes one PNG per frame; `tools/gif.sh` does the encode, w
 palette so two GIFs a week apart are actually comparable.
 
 ```sh
-export FONT=/usr/share/fonts/liberation/LiberationSans-Regular.ttf
-export BOLD=/usr/share/fonts/liberation/LiberationSans-Bold.ttf
+# This host is macOS; the paths below are its. `gif.sh` refuses without both, and Arial and
+# Liberation Sans are metrically compatible, so substituting one for the other moves nothing.
+export FONT="/System/Library/Fonts/Supplemental/Arial.ttf"
+export BOLD="/System/Library/Fonts/Supplemental/Arial Bold.ttf"
+# On Linux:
+# export FONT=/usr/share/fonts/liberation/LiberationSans-Regular.ttf
+# export BOLD=/usr/share/fonts/liberation/LiberationSans-Bold.ttf
 
-cargo run --release --example capture       -- --out frames-demo  --tint demo  --width 720 --height 512 --soften 0.5
-cargo run --release --example capture       -- --out frames-audit --tint audit --width 720 --height 512 --soften 0.25
-cargo run --release --example capture_sever -- --out frames-sever
-cargo run --release --example capture_holes -- --out frames-holes
+cargo run --release --example capture         -- --out frames-demo  --tint demo  --width 720 --height 512 --soften 0.5
+cargo run --release --example capture         -- --out frames-audit --tint audit --width 720 --height 512 --soften 0.25
+cargo run --release --example capture_sever   -- --out frames-sever
+cargo run --release --example capture_holes   -- --out frames-holes
+cargo run --release --example capture_carnage -- --out frames-carnage
 
 WIDTH=560 LEGEND=none  tools/gif.sh frames-demo  docs/explode.gif ""
 WIDTH=560 LEGEND=audit tools/gif.sh frames-audit docs/fracture-tier-ab.gif "Tier A/B — every fragment audited as a solid"
 WIDTH=560 LEGEND=none  tools/gif.sh frames-sever docs/sever.gif ""
 WIDTH=560 LEGEND=none  tools/gif.sh frames-holes docs/holes.gif "Bullet holes — the channel is geometry, not a decal"
+WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-carnage docs/carnage.gif ""
 ```
 
+**`carnage` is the one clip with `STRIDE`, and the reason is length.** It has to run long enough to
+*show* a wound clot, which the shipped `clot_ticks = 360` puts at six seconds — 382 frames against the
+other clips' ~180. A GIF stores whole frames, so its size is very nearly linear in frame count, and at
+`STRIDE=1` it came out at 6.2 MB against their 1.3–1.8 MB. `STRIDE=2` keeps every second frame and
+`FPS=60` re-times what is left, so the clip plays at the same speed as the others at half the bytes.
+
+**Run `capture_carnage` twice and compare its final line.** It prints
+`carnage: frames=… wounds=… stains=… digest=…`, and an identical digest is the determinism check for
+the whole carnage layer — much sharper than comparing two pictures. On this host the rendered PNGs are
+byte-identical between runs too.
+
 `gif.sh` has no default font path and refuses without one: `FONT` and `BOLD` must both name an
-existing `.ttf`, and it checks before ffmpeg spends the two-pass encode rather than after. The paths
-above are this host's (Linux); Liberation Sans is metrically compatible with the Arial the earlier
-clips were captioned in, so substituting it does not move the caption or the legend.
+existing `.ttf`, and it checks before ffmpeg spends the two-pass encode rather than after.
 
 `LEGEND=none` omits the green/amber/magenta key, which belongs only on the audit-tinted clip: a key
 naming colours that are not in the picture is worse than no key at all. `--width`/`--height` set the
 render aspect — `720x512` matches the 560×398 the clips are encoded at, so the crop is not itself one
 of the differences when you hold two of them up next to each other.
 
-The three recorders share `examples/common/` — the headless harness, and the subject, bake and damage
-rules `sever` and `bullet_holes` themselves use. That sharing is deliberate: a recorder that
-reimplements its subject drifts from it silently, and the drift would be invisible in exactly the
+All four recorders share `examples/common/` — the headless harness, and the subject, bake and damage
+rules `sever`, `bullet_holes` and `carnage` themselves use. That sharing is deliberate: a recorder
+that reimplements its subject drifts from it silently, and the drift would be invisible in exactly the
 place you would look for it. `Baked::bake` takes the bore list for the same reason, so a hole in
-`holes.gif` is a hole you can reproduce with a keypress.
+`holes.gif` is a hole you can reproduce with a keypress. `Recorder::new_with` exists for the same
+reason in the other direction: `capture_carnage` needs a render plugin, which cannot be added after
+the harness has finished building, and duplicating the harness to get one in would have reintroduced
+exactly the drift it prevents.

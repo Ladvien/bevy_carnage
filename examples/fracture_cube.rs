@@ -12,11 +12,11 @@
 //! fragment comes back as two meshes: give the skin the subject's own material and the cap a raw
 //! interior one, and the result reads as severed rather than as a model that fell apart.
 //!
-//! Run: `cargo run -p bevy_autogib --example fracture_cube`
+//! Run: `cargo run -p bevy_carnage --example fracture_cube`
 
 use bevy::math::{Mat4, Vec3, primitives::Cuboid};
 use bevy::mesh::Mesh;
-use bevy_autogib::{Bore, BondSet, CutSettings, FragmentGeometry, ProxyCell, fracture_mesh};
+use bevy_carnage::{Bore, BondSet, CutSettings, FragmentGeometry, ProxyCell, fracture_mesh};
 
 /// Target fragment count. The ECS bake derives this from the mesh's bounding size and the
 /// `FractureSettings` dials; here it is spelled out so one number can be varied at a time.
@@ -169,13 +169,13 @@ fn main() {
         .ejecta
         .iter()
         .filter(|e| {
-            bevy_autogib::audit_cell(&e.cell)
+            bevy_carnage::audit_cell(&e.cell)
                 .is_ok_and(|a| a.is_closed() && a.is_manifold() && a.euler_characteristic == 2)
         })
         .count();
     let bored_pieces: Vec<FragmentGeometry> = bored.into_leaves();
     let bored_volume: f32 = bored_pieces.iter().map(|p| p.cell.volume()).sum();
-    let census = bevy_autogib::audit_proxies(&bored_pieces);
+    let census = bevy_carnage::audit_proxies(&bored_pieces);
     let sound = census
         .iter()
         .filter(|a| a.is_closed() && a.is_manifold() && a.euler_characteristic == 2)
@@ -204,7 +204,7 @@ fn main() {
     let pieces: Vec<FragmentGeometry> = baked.into_leaves();
 
     println!();
-    println!("bevy_autogib — a two-part solid, plane-cut into at most {TARGET} pieces (seed {seed:#010x})");
+    println!("bevy_carnage — a two-part solid, plane-cut into at most {TARGET} pieces (seed {seed:#010x})");
     println!();
 
     if pieces.is_empty() {
@@ -260,7 +260,7 @@ fn main() {
     // This is not pedantry — it is the correction of a number this example used to print. It reported
     // "2 of 12 manifold" from a closed-solid test applied to the drawn surface, and that read as a
     // defect. The types now make the mistake unavailable: `SurfaceReport` has no `is_closed`.
-    let solids = bevy_autogib::audit_proxies(&pieces);
+    let solids = bevy_carnage::audit_proxies(&pieces);
     let closed = solids.iter().filter(|a| a.is_closed()).count();
     let manifold = solids.iter().filter(|a| a.is_manifold()).count();
     let collider_ready = solids.iter().filter(|a| a.supports_inside_outside).count();
@@ -277,7 +277,7 @@ fn main() {
     println!("  ─────────────────────────────────────────────────────────────────────────────────");
     println!();
 
-    let surfaces: Vec<_> = pieces.iter().filter_map(|p| bevy_autogib::audit_render(p).ok()).collect();
+    let surfaces: Vec<_> = pieces.iter().filter_map(|p| bevy_carnage::audit_render(p).ok()).collect();
     let open: u64 = surfaces.iter().map(|s| s.open_edges).sum();
     let nm: u64 = surfaces.iter().map(|s| s.non_manifold_edges + s.non_manifold_vertices).sum();
     let flipped: u64 = surfaces.iter().map(|s| s.inconsistently_oriented_edges).sum();

@@ -1,5 +1,10 @@
 /target
 **/*.rs.bk
 
+# Recorder output. Every `capture_*` example writes one PNG per frame into `frames-<name>/`; the GIFs
+# in `docs/` are the committed artefact and the frames are the intermediate. `capture_carnage` alone
+# writes 382 of them.
+/frames-*
+
 # Serena's per-project cache. A tool's index of this repo, not part of it.
 /.serena

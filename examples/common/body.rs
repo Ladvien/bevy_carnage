@@ -9,7 +9,7 @@
 //! callers can drive: a Bevy system can take `&mut World`, and a hand-pumped headless loop has
 //! nothing else.
 //!
-//! **None of this is in the crate.** `bevy_autogib` hands out a reach — a severity per bond — and
+//! **None of this is in the crate.** `bevy_carnage` hands out a reach — a severity per bond — and
 //! everything below picks the threshold at which one gives way, decides which island is still "the
 //! body", and throws the rest.
 
@@ -18,7 +18,7 @@
 use std::collections::HashSet;
 
 use bevy::prelude::*;
-use bevy_autogib::{
+use bevy_carnage::{
     Bore, BondGraph, BondSet, CutSettings, FragmentId, FragmentTree, ProxyCell, Reach, capsule,
     directional, fracture_mesh, hash_f32, radial, spread, swept_triangle,
 };
@@ -57,7 +57,7 @@ pub const GRANULARITIES: [usize; 4] = [6, 12, 20, TARGET];
 ///
 /// Front to back along `-z`, because the camera sits at `+z` and the entry hole is the thing worth
 /// seeing. Radii are about a fortieth of the subject's height — a bullet, not a cannon — and every
-/// one is comfortably above `bevy_autogib`'s own minimum bore radius.
+/// one is comfortably above `bevy_carnage`'s own minimum bore radius.
 ///
 /// **The `shatter` column climbs on purpose**, 3 → 8 across the five shots. A plug is one convex
 /// prism, so ejected whole it reads as a dowel — the channel was cut by something corer-shaped and
@@ -94,7 +94,7 @@ pub const GROUND_DRAG: f32 = 4.0;
 /// along.
 ///
 /// **The joints come for free, and that is not a coincidence.** A joint is two body parts meeting
-/// over a shared surface, and [`BondGraph::of`](bevy_autogib::BondGraph::of) already finds exactly
+/// over a shared surface, and [`BondGraph::of`](bevy_carnage::BondGraph::of) already finds exactly
 /// that — coplanar faces, opposite normals, positive overlap. Laid out this way the bond graph comes
 /// back with one bond per joint, its area the joint's own cross-section:
 ///
@@ -177,7 +177,7 @@ pub struct Baked {
 
 /// One ejected plug, resolved to handles at bake time exactly like a [`Part`].
 ///
-/// **Not a fragment, and the crate refuses to let it be one** — see `bevy_autogib::Ejecta`. It is the
+/// **Not a fragment, and the crate refuses to let it be one** — see `bevy_carnage::Ejecta`. It is the
 /// material a channel removed, so it is already outside the subject the moment it exists.
 pub struct GorePart {
     pub outer: Option<Handle<Mesh>>,
@@ -190,6 +190,13 @@ pub struct GorePart {
     /// The channel's axis, unit. The crate hands this over as geometry; turning it into a velocity
     /// is this file's job, like every other launch here.
     pub direction: Vec3,
+    /// **The plug as a solid, kept for the same reason [`Part`] keeps its own.**
+    ///
+    /// A `Part` keeps its cell because adjacency is per frontier; this keeps its cell because the
+    /// *wound* a channel leaves is measured off it — `wound_of_channel` sums the plug's raw-interior
+    /// faces, which is the channel wall. Approximating that from `volume` was tried and is exactly
+    /// the kind of invented number this repository refuses: the cell is right here.
+    pub cell: ProxyCell,
 }
 
 impl Baked {
@@ -233,6 +240,7 @@ impl Baked {
                     volume: e.cell.volume().max(1.0e-6),
                     exit: e.exit,
                     direction: e.direction,
+                    cell: e.cell,
                 }
             })
             .collect();
@@ -302,6 +310,14 @@ pub struct Chunk {
     pub velocity: Vec3,
     pub spin: Vec3,
     pub drop_to_rest: f32,
+    /// **Which fragment this was**, kept so a caller can find the piece's own geometry after it has
+    /// left the frontier.
+    ///
+    /// `Attached` carries the same id; a `Chunk` did not, and the cost showed up immediately: a demo
+    /// that wants the wound a gib bled from had to average the cut-face area over *every* part and
+    /// call the result typical. That is exactly the invented number this repository refuses, and the
+    /// id is one field. `None` for a plug, which was never a fragment — see [`Gore`].
+    pub fragment: Option<FragmentId>,
 }
 
 /// **A plug in flight** — the material a channel pushed out, on its way to becoming a pool.
@@ -559,7 +575,8 @@ pub fn spawn_gore(world: &mut World) {
             .spawn((
                 Transform::from_translation(ORIGIN + center),
                 Visibility::default(),
-                Chunk { velocity, spin, drop_to_rest: rest },
+                // A plug was never a fragment, so it has no id to carry.
+                Chunk { velocity, spin, drop_to_rest: rest, fragment: None },
                 Gore { volume, axis: direction, settled: 0 },
             ))
             .id();
@@ -685,7 +702,7 @@ pub fn spawn_fragment(world: &mut World, id: FragmentId, launch: Option<(Vec3, V
     let mut e = world.spawn((Transform::from_translation(ORIGIN + center), Visibility::default()));
     match launch {
         Some((velocity, spin)) => {
-            e.insert(Chunk { velocity, spin, drop_to_rest: rest });
+            e.insert(Chunk { velocity, spin, drop_to_rest: rest, fragment: Some(id) });
         }
         None => {
             e.insert(Attached(id));

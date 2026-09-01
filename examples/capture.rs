@@ -7,7 +7,7 @@
 //! the geometry differs.
 //!
 //! **The skin colour is the finding, not decoration.** Each fragment is audited with
-//! [`bevy_autogib::audit_proxy`] and tinted by the verdict:
+//! [`bevy_carnage::audit_proxy`] and tinted by the verdict:
 //!
 //! | colour | meaning |
 //! |---|---|
@@ -33,7 +33,7 @@
 //! Run: `cargo run --release --example capture -- --out frames`
 
 use bevy::prelude::*;
-use bevy_autogib::{CutSettings, FragmentGeometry, audit_proxy, fracture_mesh, hash_f32};
+use bevy_carnage::{CutSettings, FragmentGeometry, audit_proxy, fracture_mesh, hash_f32};
 
 mod common;
 use common::body;

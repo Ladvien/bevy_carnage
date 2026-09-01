@@ -52,11 +52,11 @@ fn triangle_indices(mesh: &Mesh, vertex_count: usize) -> Vec<[u32; 3]> {
 /// (+`warn!`) if the mesh has no `Float32x3` positions or isn't a triangle list.
 pub(crate) fn append_mesh(soup: &mut Soup, mesh: &Mesh, xform: Mat4, interior: bool) -> bool {
     let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
-        warn!("autogib: sub-mesh has no Float32x3 POSITION; skipping it");
+        warn!("carnage: sub-mesh has no Float32x3 POSITION; skipping it");
         return false;
     };
     if mesh.primitive_topology() != PrimitiveTopology::TriangleList {
-        warn!("autogib: sub-mesh is not a TriangleList; skipping it");
+        warn!("carnage: sub-mesh is not a TriangleList; skipping it");
         return false;
     }
 
@@ -522,7 +522,7 @@ pub fn fracture_mesh(parts: &[(&Mesh, Mat4)], proxy: &[ProxyCell], cut: &CutSett
         append_mesh(&mut soup, mesh, *xform, false);
     }
     if proxy.is_empty() {
-        warn!("autogib: refusing to fracture — the caller supplied no proxy cells");
+        warn!("carnage: refusing to fracture — the caller supplied no proxy cells");
         return Fracture::default();
     }
     // A proxy with nothing to carry is not a subject. Cutting it would emit cap-only fragments of a

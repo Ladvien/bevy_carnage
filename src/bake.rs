@@ -13,6 +13,7 @@ use crate::bore::Bore;
 use crate::FractureSettings;
 use crate::bond::BondGraph;
 use crate::mesh::{append_mesh, geometry_from_piece, geometry_from_soup};
+use crate::order::sort_total_by_key_at;
 use crate::proxy::ProxyCell;
 use crate::soup::{Soup, fracture};
 use crate::tree::{FragmentId, FragmentTree};
@@ -196,37 +197,6 @@ impl FractureCache {
     }
 }
 
-/// **Sort by a key that must be a TOTAL order — and prove it, don't assert it in a comment.**
-///
-/// The one site that uses it is the one site in this crate whose input is an ECS query — which is
-/// exactly where a runtime check earns its keep, because query order is not stable across `App`
-/// instances. A comment asserting the key is total cannot fail; this can, and it is what caught the
-/// bug described below.
-///
-/// Under `debug_assertions` or the `strict-order` feature it **panics naming the call site and the
-/// duplicated key** the moment a tie occurs. A release build pays nothing.
-fn sort_total_by_key_at<T, K, F>(site: &'static str, v: &mut [T], mut f: F)
-where
-    K: Ord + std::fmt::Debug,
-    F: FnMut(&T) -> K,
-{
-    v.sort_unstable_by_key(&mut f);
-    #[cfg(any(debug_assertions, feature = "strict-order"))]
-    {
-        for w in v.windows(2) {
-            let (a, b) = (f(&w[0]), f(&w[1]));
-            assert!(
-                a != b,
-                "{site}: sort key is NOT a total order — two elements produced {a:?}. \
-                 `sort_unstable` then resolves them by input order, which for an ECS query is not \
-                 stable across `App` instances. Widen the key, or use a canonical whole-value sort."
-            );
-        }
-    }
-    #[cfg(not(any(debug_assertions, feature = "strict-order")))]
-    let _ = site;
-}
-
 /// Derive the per-source fracture seed from the asset's **path**.
 ///
 /// **This used to hash the `AssetId`, and that was a real, expensive bug.**
@@ -331,7 +301,7 @@ pub fn bake_fractures(
         // not baked at all, loudly.
         let Some(asset_path) = subject.0.path().map(|p| p.clone_owned()) else {
             error!(
-                "autogib: a FractureSubject handle has no asset path — refusing to bake a fracture \
+                "carnage: a FractureSubject handle has no asset path — refusing to bake a fracture \
                  whose seed would depend on asset load order. No fragments for this source."
             );
             continue;
@@ -408,7 +378,7 @@ pub fn bake_fractures(
         }
         if unpathed_mesh {
             error!(
-                "autogib: a sub-mesh of {asset_path} has no asset path — refusing to assemble a vertex \
+                "carnage: a sub-mesh of {asset_path} has no asset path — refusing to assemble a vertex \
                  soup whose order would depend on asset load order. No fragments for this source."
             );
             continue;
@@ -453,7 +423,7 @@ pub fn bake_fractures(
 
         let ext = body.extent();
         if ext <= 1.0e-5 {
-            warn!("autogib: source body is degenerate (zero extent); marking baked with no fragments");
+            warn!("carnage: source body is degenerate (zero extent); marking baked with no fragments");
             cache.body.insert(source, Vec::new());
             cache.baked.insert(source);
             continue;
@@ -462,7 +432,7 @@ pub fn bake_fractures(
         // subject is not, and would do it silently. `baked` is left unset so a caller that adds the
         // component later still gets a bake.
         if proxy.0.is_empty() {
-            error!("autogib: {asset_path} has no FractureProxy cells; refusing to bake");
+            error!("carnage: {asset_path} has no FractureProxy cells; refusing to bake");
             continue;
         }
 
@@ -502,7 +472,7 @@ pub fn bake_fractures(
         let plugs: Vec<EjectaChunk> =
             ejected.into_iter().map(|e| build_ejecta(e, &mut meshes)).collect();
         info!(
-            "autogib: baked {} fragments for {asset_path} ({} in the finest frontier, {} cuts, \
+            "carnage: baked {} fragments for {asset_path} ({} in the finest frontier, {} cuts, \
              {} bonds, {} ejected plug(s))",
             frags.len(),
             tree.leaves().len(),
