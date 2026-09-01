@@ -573,6 +573,7 @@ pub fn fracture_mesh(parts: &[(&Mesh, Mat4)], proxy: &[ProxyCell], cut: &CutSett
     }
     let (pieces, tree, ejected) = fracture(soup, proxy, cut);
     let bonds = bond_graph(&pieces, &tree);
+
     let fragments = pieces
         .into_iter()
         .enumerate()
@@ -1028,13 +1029,41 @@ pub(crate) fn soften(soup: &Soup, strength: f32) -> Soup {
         })
         .collect();
 
-    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); unique.len()];
+    // **Adjacency as CSR, not `Vec<Vec<usize>>`, and the reason is the relaxation below rather than the
+    // allocation count.** The two relaxation passes walk every vertex's neighbour list, so with a
+    // vector per vertex they chase a thousand-plus separate heap blocks per piece, twice. One
+    // contiguous `nbr` array makes each list a slice, which is what the inner loop wants.
+    //
+    // **Bit-identical, and the fill order is what guarantees it.** The mean below is a float sum, so
+    // the *order* of each vertex's neighbours decides its last bits. Degrees are counted first, then
+    // offsets prefix-summed, then the neighbours are written by walking the triangles in exactly the
+    // order the old code pushed them — so every list comes out in the same sequence it had before.
+    let n_unique = unique.len();
+    let mut offs: Vec<u32> = vec![0; n_unique + 1];
     for tri in &fine.idx {
         for i in 0..3 {
             let (u, v) = (of[tri[i] as usize], of[tri[(i + 1) % 3] as usize]);
             if u != v {
-                adjacency[u].push(v);
-                adjacency[v].push(u);
+                offs[u + 1] += 1;
+                offs[v + 1] += 1;
+            }
+        }
+    }
+    for i in 0..n_unique {
+        offs[i + 1] += offs[i];
+    }
+    let total = offs[n_unique] as usize;
+    let mut nbr: Vec<u32> = vec![0; total];
+    // Cursors start at each vertex's offset and advance as its list fills.
+    let mut at: Vec<u32> = offs[..n_unique].to_vec();
+    for tri in &fine.idx {
+        for i in 0..3 {
+            let (u, v) = (of[tri[i] as usize], of[tri[(i + 1) % 3] as usize]);
+            if u != v {
+                nbr[at[u] as usize] = v as u32;
+                at[u] += 1;
+                nbr[at[v] as usize] = u as u32;
+                at[v] += 1;
             }
         }
     }
@@ -1042,15 +1071,21 @@ pub(crate) fn soften(soup: &Soup, strength: f32) -> Soup {
     // Two relaxation passes. More than that and a fragment stops being the shape it was cut as; the
     // strength dial scales how far each pass travels rather than how many there are, so turning it
     // up rounds harder without also melting the piece.
+    //
+    // Double-buffered rather than cloning `moved` each pass: same reads, one fewer allocation and copy
+    // of the whole vertex set per pass.
     let mut moved = unique.clone();
+    let mut previous = moved.clone();
     for _ in 0..2 {
-        let previous = moved.clone();
-        for (i, neighbours) in adjacency.iter().enumerate() {
-            if neighbours.is_empty() {
+        previous.copy_from_slice(&moved);
+        for i in 0..n_unique {
+            let (lo, hi) = (offs[i] as usize, offs[i + 1] as usize);
+            if lo == hi {
                 continue;
             }
+            let list = &nbr[lo..hi];
             let mean: Vec3 =
-                neighbours.iter().map(|&n| previous[n]).sum::<Vec3>() / neighbours.len() as f32;
+                list.iter().map(|&n| previous[n as usize]).sum::<Vec3>() / list.len() as f32;
             moved[i] = previous[i].lerp(mean, strength.clamp(0.0, 1.0) * 0.5);
         }
     }
