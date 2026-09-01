@@ -698,15 +698,29 @@ fn convex_ring(pts: &[Vec3], plane: &Plane) -> Vec<Vec3> {
     let c: Vec3 = uniq.iter().copied().sum::<Vec3>() / uniq.len() as f32;
     let (u, v) = plane_basis(plane.normal);
     // SORT-OK: `atan2` then raw bits — total, so the order is a function of the geometry alone.
-    uniq.sort_by(|a, b| {
-        let ka = (a - c).dot(v).atan2((a - c).dot(u));
-        let kb = (b - c).dot(v).atan2((b - c).dot(u));
-        ka.total_cmp(&kb)
+    //
+    // **The key is computed once per point, not twice per comparison.** It used to live inside the
+    // comparator, which meant `sort_by` recomputed `a - c` twice, two dot products and an `atan2` for
+    // *both* operands of every comparison — O(n log n) transcendentals for n points, where n of them
+    // suffice. Decorate, sort, undecorate.
+    //
+    // Bit-identical: the key expression is unchanged and its inputs are unchanged, so each point gets
+    // exactly the value the comparator would have computed for it, and the tie-break on all three
+    // coordinate bits still makes the order total.
+    let mut keyed: Vec<(f32, Vec3)> = uniq
+        .into_iter()
+        .map(|p| {
+            let d = p - c;
+            (d.dot(v).atan2(d.dot(u)), p)
+        })
+        .collect();
+    keyed.sort_by(|(ka, a), (kb, b)| {
+        ka.total_cmp(kb)
             .then_with(|| a.x.to_bits().cmp(&b.x.to_bits()))
             .then_with(|| a.y.to_bits().cmp(&b.y.to_bits()))
             .then_with(|| a.z.to_bits().cmp(&b.z.to_bits()))
     });
-    uniq
+    keyed.into_iter().map(|(_, p)| p).collect()
 }
 
 #[cfg(test)]
