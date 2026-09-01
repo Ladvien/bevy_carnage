@@ -440,7 +440,11 @@ fn draw_piece(piece: crate::soup::Piece) -> Drawn {
     // included). Without the weave the two meet across T-junctions — flush geometrically, open
     // topologically, and a hairline crack under some rasterisers.
     let seam: Vec<Vec3> = render.pos.clone();
-    let mut drawn = render.clone();
+    // **Moved, not cloned**, for the same reason as `soften`'s output below: `draw_piece` takes its
+    // `Piece` by value, so this soup is already ours. The seam above is the one copy genuinely needed,
+    // because `append_cut_faces` writes into `drawn` while reading the skin's original boundary. Also
+    // measured, also worth nothing — kept because the clone claimed a sharing that does not exist.
+    let mut drawn = render;
     cell.append_cut_faces(&mut drawn, &seam, relief);
     // **Rounded after the cap is welded on**, so the relaxation bevels the skin/cap edge too — which
     // is the sharpest edge on the whole fragment and the one that most says "cleaved".
@@ -1130,12 +1134,17 @@ pub(crate) fn soften(soup: &Soup, strength: f32) -> Soup {
         out_nrm.push(if n == Vec3::ZERO { fine.nrm[i] } else { n });
     }
 
+    // **Moved, not cloned.** `fine` is local and dead from here, and these three buffers pass through
+    // `soften` unchanged — the subdivision's UVs, index buffer and interior flags are exactly what the
+    // output carries. Measured as a performance change and it is worth nothing (~111 KB of `memcpy`
+    // per piece against a 4 ms frame); it is here because a move says "these pass through" and a clone
+    // says "these are copies of something still in use", and only one of those is true.
     let mut out = Soup {
         pos: out_pos,
         nrm: out_nrm,
-        uv: fine.uv.clone(),
-        idx: fine.idx.clone(),
-        tri_interior: fine.tri_interior.clone(),
+        uv: std::mem::take(&mut fine.uv),
+        idx: std::mem::take(&mut fine.idx),
+        tri_interior: std::mem::take(&mut fine.tri_interior),
     };
     // Relaxation can pull a triangle's corners together; drop the ones that no longer have area.
     let keep: Vec<bool> = out
