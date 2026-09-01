@@ -438,8 +438,20 @@ other clips' ~180. A GIF stores whole frames, so its size is very nearly linear 
 
 **Run `capture_carnage` twice and compare its final line.** It prints
 `carnage: frames=… wounds=… stains=… digest=…`, and an identical digest is the determinism check for
-the whole carnage layer — much sharper than comparing two pictures. On this host the rendered PNGs are
-byte-identical between runs too.
+the whole carnage layer — much sharper than comparing two pictures.
+
+**Do not compare the pictures, and this is now measured rather than assumed.** An earlier revision of
+this section claimed the rendered PNGs were byte-identical between runs on the development host. On an
+Apple-silicon host they are not: two runs of the *same* release binary, same digest
+`c7fde149e80f1b13`, same 382 frames / 253 wounds / 26 892 stains, differ in **202 of the 382 PNGs**.
+
+That is not a defect and it is not something to fix. This clip is the one recorder that adds
+[`CarnageVfxPlugin`], so the pixels include GPU particles — and a GPU particle system has no promised
+dispatch order. It is exactly why the crate's contract calls particles cosmetic and forbids them from
+re-entering the deterministic half, and why the digest is taken over CPU-side stain positions instead
+of over the frames. **Diffing two GIFs of this clip will report a difference that no code change
+caused**, which is the trap this paragraph exists to prevent. The fracture-only recorders have no
+particles and are not affected.
 
 `gif.sh` has no default font path and refuses without one: `FONT` and `BOLD` must both name an
 existing `.ttf`, and it checks before ffmpeg spends the two-pass encode rather than after.
