@@ -188,6 +188,21 @@ impl Soup {
         self.idx.is_empty()
     }
 
+    /// A soup sized for a known triangle count, so [`Self::push_tri`] never regrows.
+    ///
+    /// Five vectors grown from empty is five reallocation ladders, and each rung copies everything
+    /// written so far — which is bytes touched, not merely an allocator call. `soften`'s midpoint
+    /// subdivision knows its output size exactly: four triangles per input triangle.
+    pub(crate) fn with_capacity(tris: usize) -> Self {
+        Self {
+            pos: Vec::with_capacity(tris * 3),
+            nrm: Vec::with_capacity(tris * 3),
+            uv: Vec::with_capacity(tris * 3),
+            idx: Vec::with_capacity(tris),
+            tri_interior: Vec::with_capacity(tris),
+        }
+    }
+
     pub(crate) fn vtx(&self, i: u32) -> Vtx {
         let i = i as usize;
         Vtx { pos: self.pos[i], nrm: self.nrm[i], uv: self.uv[i] }

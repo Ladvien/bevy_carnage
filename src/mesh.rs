@@ -994,7 +994,8 @@ pub(crate) fn soften(soup: &Soup, strength: f32) -> Soup {
 
     // One midpoint subdivision, so relaxation has vertices to work with. A fragment's drawn mesh is
     // a few dozen corners; relaxing that directly collapses it instead of rounding it.
-    let mut fine = Soup::default();
+    // Exactly four output triangles per input triangle, so the size is known rather than guessed.
+    let mut fine = Soup::with_capacity(soup.idx.len() * 4);
     for (t, tri) in soup.idx.iter().enumerate() {
         let (a, b, c) = (soup.vtx(tri[0]), soup.vtx(tri[1]), soup.vtx(tri[2]));
         let mid = |x: Vtx, y: Vtx| Vtx {
