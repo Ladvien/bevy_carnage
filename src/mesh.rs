@@ -123,12 +123,19 @@ pub(crate) fn append_mesh(soup: &mut Soup, mesh: &Mesh, xform: Mat4, interior: b
 /// re-indexed to a compact vertex set and recentered so the origin sits at `recenter` (the fragment
 /// centroid → the spawned entity spins about its own center). `None` if the subset is empty.
 fn soup_to_mesh(soup: &Soup, want_interior: bool, recenter: Vec3) -> Option<Mesh> {
-    let mut pos: Vec<[f32; 3]> = Vec::new();
-    let mut nrm: Vec<[f32; 3]> = Vec::new();
-    let mut uv: Vec<[f32; 2]> = Vec::new();
-    let mut idx: Vec<u32> = Vec::new();
-    let mut weld: AttributeWeld = AttributeWeld::default();
-
+    // **Count the subset before building it.** Both output arrays grew from empty, so a bake with
+    // 30 000 vertices in one fragment paid a dozen reallocations and memcpy'd the whole buffer each
+    // time. The count is one pass over a `Vec<bool>` and it makes every push below amortised-free.
+    let wanted = soup.tri_interior.iter().filter(|&&i| i == want_interior).count();
+    if wanted == 0 {
+        return None;
+    }
+    let verts = wanted * 3;
+    let mut pos: Vec<[f32; 3]> = Vec::with_capacity(verts);
+    let mut nrm: Vec<[f32; 3]> = Vec::with_capacity(verts);
+    let mut uv: Vec<[f32; 2]> = Vec::with_capacity(verts);
+    let mut idx: Vec<u32> = Vec::with_capacity(verts);
+    let mut weld: AttributeWeld = AttributeWeld::with_capacity(verts);
     for (t, tri) in soup.idx.iter().enumerate() {
         if soup.tri_interior[t] != want_interior {
             continue;
@@ -217,7 +224,28 @@ pub(crate) fn geometry_from_soup(soup: &Soup) -> Option<IntactGeometry> {
     Some(IntactGeometry { outer, cap, center_local: center, half_extents })
 }
 
-
+/// One vertex already emitted, with everything the probe needs to reject it.
+///
+/// **Carried here rather than looked up, and that is the point of the type.** The probe used to hold
+/// only an index and then re-read `pos[id]`, `nrm[id]` and `uv[id]` and **re-quantise the normal and UV
+/// of every candidate on every comparison** — five divisions and five roundings, repeated for each of
+/// up to 27 cells' worth of candidates, per vertex. The quantised keys are a function of the values
+/// pushed at insertion, so computing them once is the same arithmetic done 1/27th as often.
+///
+/// Bit-identical by construction: `nrm.push([v.nrm.x, …])` stores exactly what `nk(v.nrm.x)` was
+/// computed from, so a key cached at insertion equals the key the old code recomputed from the array.
+#[derive(Clone, Copy)]
+struct Candidate {
+    id: u32,
+    /// Recentred position, as pushed.
+    pos: [f32; 3],
+    /// Quantised normal bucket. `i64` rather than `i32` on purpose — a float-to-int `as` cast
+    /// saturates, so a narrower type would merge two distinct enormous normals that the original
+    /// did not.
+    nrm: (i64, i64, i64),
+    /// Quantised UV bucket, same reasoning.
+    uv: (i64, i64),
+}
 
 /// **The attribute-aware weld.** Merges vertices that are the same *point on the same surface*, and
 /// refuses to merge across a crease.
@@ -255,13 +283,13 @@ pub(crate) fn geometry_from_soup(soup: &Soup) -> Option<IntactGeometry> {
 /// source — every emitted vertex would depend on its welder, and a change there would move geometry
 /// this crate promises is reproducible. `MeshBuffer` also carries no UV channel, so the round trip
 /// would have to rebuild UVs through `remap()` anyway.
-#[derive(Default)]
 struct AttributeWeld {
-    /// Lattice cell → the emitted vertices in it. Small vectors: coincident-vertex counts are single
+    /// Lattice cell → the vertices emitted in it. Small vectors: coincident-vertex counts are single
     /// digits, so the 27-cell probe stays cheap.
+    ///
     /// Keyed by [`LatticeHash`], not `RandomState` — see that type for why, and for why it cannot move
     /// a single emitted vertex.
-    cells: HashMap<(i64, i64, i64), Vec<u32>, LatticeHash>,
+    cells: HashMap<(i64, i64, i64), Vec<Candidate>, LatticeHash>,
 }
 
 /// Multiplier for [`LatticeHasher`]. The fractional part of the golden ratio scaled to 64 bits — an
@@ -353,6 +381,13 @@ const NRM_STEP: f32 = 1.0e-2;
 const UV_STEP: f32 = 1.0e-4;
 
 impl AttributeWeld {
+    /// A weld sized for a known vertex ceiling, so neither the map nor its cell vectors rehash mid-bake.
+    fn with_capacity(verts: usize) -> Self {
+        Self {
+            cells: HashMap::with_capacity_and_hasher(verts, LatticeHash),
+        }
+    }
+
     fn insert(
         &mut self,
         v: crate::soup::Vtx,
@@ -370,26 +405,26 @@ impl AttributeWeld {
         let want_uv = (uk(v.uv.x), uk(v.uv.y));
 
         // The 27-cell probe: a candidate one lattice cell away may still be the same point.
+        //
+        // **The walk order is load-bearing and must not be "optimised" by checking the centre cell
+        // first.** `same_point` is a per-axis tolerance, which is not transitive, so two emitted
+        // vertices can both match a query while not matching each other. Which one is returned is
+        // therefore decided by this order, and reordering it would move the index buffer.
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
-                    let Some(ids) = self.cells.get(&(key.0 + dx, key.1 + dy, key.2 + dz)) else {
+                    let Some(found) = self.cells.get(&(key.0 + dx, key.1 + dy, key.2 + dz)) else {
                         continue;
                     };
-                    for &id in ids {
-                        let e = pos[id as usize];
-                        let same_point = (e[0] - p.x).abs() <= crate::soup::WELD
-                            && (e[1] - p.y).abs() <= crate::soup::WELD
-                            && (e[2] - p.z).abs() <= crate::soup::WELD;
+                    for c in found {
+                        let same_point = (c.pos[0] - p.x).abs() <= crate::soup::WELD
+                            && (c.pos[1] - p.y).abs() <= crate::soup::WELD
+                            && (c.pos[2] - p.z).abs() <= crate::soup::WELD;
                         if !same_point {
                             continue;
                         }
-                        let en = nrm[id as usize];
-                        let eu = uv[id as usize];
-                        if (nk(en[0]), nk(en[1]), nk(en[2])) == want_n
-                            && (uk(eu[0]), uk(eu[1])) == want_uv
-                        {
-                            return id;
+                        if c.nrm == want_n && c.uv == want_uv {
+                            return c.id;
                         }
                     }
                 }
@@ -397,10 +432,14 @@ impl AttributeWeld {
         }
 
         let id = pos.len() as u32;
-        pos.push([p.x, p.y, p.z]);
+        let e = [p.x, p.y, p.z];
+        pos.push(e);
         nrm.push([v.nrm.x, v.nrm.y, v.nrm.z]);
         uv.push([v.uv.x, v.uv.y]);
-        self.cells.entry(key).or_default().push(id);
+        self.cells
+            .entry(key)
+            .or_default()
+            .push(Candidate { id, pos: e, nrm: want_n, uv: want_uv });
         id
     }
 }
