@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;
+use std::hash::{BuildHasher, Hasher};
 
 use bevy::log::{info, warn};
 use bevy::math::{Vec2, Vec3};
@@ -12,6 +13,97 @@ use bevy::math::{Vec2, Vec3};
 use crate::CutSettings;
 use crate::proxy::ProxyCell;
 use crate::tree::{FragmentId, FragmentTree, TreeNode};
+
+/// Multiplier for [`LatticeHasher`]. The fractional part of the golden ratio scaled to 64 bits — an
+/// odd constant with well-distributed bits, which is all a multiply-shift mixer needs.
+const LATTICE_MIX: u64 = 0x517c_c1b7_2722_0a95;
+
+/// **The hasher every lattice-keyed map in this crate uses**, because the default one dominated the bake.
+///
+/// It lives beside [`WELD`] rather than at its first call site, because what it hashes is a position
+/// quantised onto that lattice, and five separate maps do exactly that: the attribute weld's cell index
+/// and the relief pass's coarse-vertex canon (both [`crate::mesh`]), the shell-welding vertex ids
+/// below, and [`crate::proxy`]'s `CellBuilder` table and its point dedupe.
+///
+/// **Measured before it was written.** `sample` put 41 % of the benchmark's self time in
+/// `mesh::soup_to_mesh`, and the reason is arithmetic rather than mysterious: the weld's 27-cell probe
+/// performs **27 hash lookups per emitted vertex**, over 180 000 vertices per bake. `SipHash-1-3` —
+/// what `RandomState` gives you — is a keyed MAC designed to be unforgeable by a remote attacker
+/// sending crafted keys. Nothing here is reachable by an attacker: the keys are lattice coordinates
+/// this crate computed itself from its own geometry, so that property cost cycles and bought nothing.
+/// Swapping it on the weld alone was worth -24 % of the whole carnage frame.
+///
+/// **Output is unaffected, and the argument matters because the alternative would be a silent geometry
+/// change.** A hasher decides which *bucket* a key lands in, never what `get` returns. So it is safe
+/// exactly where a map's *iteration order* cannot reach emitted geometry — and every map listed above
+/// is a pure lookup whose ids come from a `Vec` length, never from traversal. **A map that is iterated
+/// into output must not be moved onto this hasher** without re-checking that argument; `bond.rs`'s
+/// coplanar-face table and this module's shell grouping are the two to be careful with.
+///
+/// Not `rustc-hash` or `ahash` for the reason `tests/leaf.rs` exists: the dependency list is closed at
+/// four crates, and twenty lines of mixer is not worth widening it.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct LatticeHasher {
+    h: u64,
+}
+
+impl LatticeHasher {
+    #[inline]
+    fn mix(&mut self, v: u64) {
+        self.h = (self.h.rotate_left(5) ^ v).wrapping_mul(LATTICE_MIX);
+    }
+}
+
+impl Hasher for LatticeHasher {
+    /// Byte-wise fallback. Never taken for the tuple key below — `i64` hashes through
+    /// [`Self::write_i64`] — but a `Hasher` must be total.
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.mix(u64::from(b));
+        }
+    }
+
+    #[inline]
+    fn write_i64(&mut self, i: i64) {
+        self.mix(i as u64);
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.mix(i);
+    }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.mix(i as u64);
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        // One final avalanche, so the low bits HashMap indexes with carry information from the high
+        // ones. Without it a lattice walk in x alone would stride buckets in lockstep.
+        let mut h = self.h;
+        h ^= h >> 32;
+        h = h.wrapping_mul(LATTICE_MIX);
+        h ^= h >> 29;
+        h
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+pub(crate) struct LatticeHash;
+
+impl BuildHasher for LatticeHash {
+    type Hasher = LatticeHasher;
+
+    #[inline]
+    fn build_hasher(&self) -> LatticeHasher {
+        LatticeHasher::default()
+    }
+}
+
+/// A lattice-keyed map, spelled once.
+pub(crate) type LatticeMap<K, V> = HashMap<K, V, LatticeHash>;
 
 /// Classification tolerance: a vertex within `EPS` of the cut plane is treated as lying *on* it, so
 /// slicing near-coincident geometry doesn't spawn zero-area slivers. Positions are in subject-local
@@ -253,7 +345,9 @@ struct Shell {
 /// compound-fracture would need.
 fn shells(soup: &Soup) -> Vec<Shell> {
     let q = |x: f32| (x / WELD).round() as i64;
-    let mut vid: HashMap<(i64, i64, i64), usize> = HashMap::new();
+    // Lattice-keyed and never iterated — ids come from `vid.len()`. See [`LatticeHash`].
+    let mut vid: LatticeMap<(i64, i64, i64), usize> =
+        LatticeMap::with_capacity_and_hasher(soup.pos.len(), LatticeHash);
     let mut canon: Vec<usize> = Vec::with_capacity(soup.pos.len());
     for p in &soup.pos {
         let key = (q(p.x), q(p.y), q(p.z));

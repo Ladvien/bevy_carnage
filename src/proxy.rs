@@ -39,7 +39,9 @@ use bevy::log::warn;
 use bevy::math::Vec3;
 use std::collections::HashMap;
 
-use crate::soup::{EPS, MIN_CROSS2, Plane, WELD, classify, plane_basis, signed_dist};
+use crate::soup::{
+    EPS, LatticeHash, LatticeMap, MIN_CROSS2, Plane, WELD, classify, plane_basis, signed_dist,
+};
 
 /// What made a face, and therefore how it is drawn.
 ///
@@ -492,7 +494,9 @@ struct CellBuilder {
     verts: Vec<Vec3>,
     faces: Vec<Vec<u32>>,
     face_kind: Vec<FaceKind>,
-    table: HashMap<(i64, i64, i64), u32>,
+    /// Lattice-keyed and never iterated — ids come from `verts.len()`. See
+    /// [`LatticeHash`](crate::soup::LatticeHash).
+    table: LatticeMap<(i64, i64, i64), u32>,
 }
 
 impl CellBuilder {
@@ -679,7 +683,9 @@ fn weave_seam(ring: &[Vec3], n: Vec3, origin: Vec3, seam: &[Vec3]) -> Vec<Vec3> 
 /// cannot disagree about the order — the same rule `sort_total_by_key_at` enforces for the vertex soup.
 fn convex_ring(pts: &[Vec3], plane: &Plane) -> Vec<Vec3> {
     let q = |x: f32| (x / WELD).round() as i64;
-    let mut seen: HashMap<(i64, i64, i64), ()> = HashMap::new();
+    // Membership only, never iterated — `uniq` keeps the input's own order.
+    let mut seen: LatticeMap<(i64, i64, i64), ()> =
+        LatticeMap::with_capacity_and_hasher(pts.len(), LatticeHash);
     let mut uniq: Vec<Vec3> = Vec::new();
     for p in pts {
         if seen.insert((q(p.x), q(p.y), q(p.z)), ()).is_none() {
