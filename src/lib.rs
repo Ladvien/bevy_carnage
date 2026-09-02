@@ -11,6 +11,7 @@ mod decal;
 mod feel;
 mod mesh;
 mod order;
+mod pool;
 mod proxy;
 mod severance;
 mod soup;
@@ -23,15 +24,19 @@ mod wound;
 pub use audit::{SolidAudit, SurfaceReport, audit_cell, audit_proxies, audit_proxy, audit_render};
 pub use bake::{
     DetachedChunk, DetachedPart, EjectaChunk, Fragment, FractureBores, FractureCache, FractureProxy,
-    FractureSubject, bake_fractures,
+    FractureSubject, bake_fractures, materialise_fragments,
 };
 pub use bleed::{Bleed, clotted, flow, pulse_period, pulse_wound, pulses_on};
 pub use bond::{Bond, BondGraph, BondId, BondSet};
 pub use bore::Bore;
 #[cfg(feature = "vfx")]
-pub use decal::{SPLAT_VARIANTS, SplatTextures, build_splats, spawn_stain, splat_image};
+pub use decal::{
+    PoolDecal, SPLAT_VARIANTS, SplatTextures, build_splats, spawn_pool, spawn_stain, splat_image,
+    update_pool_decals,
+};
 pub use feel::{hitstop_ticks, shake_offset, trauma_for};
-pub use mesh::{Ejecta, Fracture, FragmentGeometry, fracture_mesh};
+pub use mesh::{Ejecta, Fracture, FragmentGeometry, FragmentSolid, fracture_mesh};
+pub use pool::{Pool, absorb, spread_pools};
 pub use proxy::ProxyCell;
 pub use severance::{Reach, capsule, directional, radial, spread, swept_triangle};
 pub use soup::hash_f32;
@@ -42,8 +47,8 @@ pub use spatter::{
 pub use tree::{FragmentId, FragmentTree, TreeNode};
 #[cfg(feature = "vfx")]
 pub use vfx::{
-    CarnageEffects, CarnageVfxPlugin, CarnageVfxSystems, EffectTtl, arterial_spurt, gib_trail,
-    mist_puff, spatter_burst, wound_seep,
+    BleedingChunk, CarnageEffects, CarnageVfxPlugin, CarnageVfxSystems, EffectFade, EffectTtl,
+    RibbonInstance, arterial_spurt, gib_ribbon, mist_puff, spatter_burst, wound_seep,
 };
 pub use wound::{
     CapFace, Wound, WoundKind, cap_faces, largest_cap, wound_from_ejecta, wound_of_channel,
@@ -452,6 +457,32 @@ pub struct CarnageSettings {
     /// built and cannot be raised afterwards, so the ceiling has to be authored with the rest.
     #[cfg_attr(feature = "serde", serde(default = "default_effect_capacity"))]
     pub effect_capacity: u32,
+    /// **Hard ceiling on live blood ribbons, first-come-first-served.**
+    ///
+    /// Past this, `attach_ribbons` refuses to start a new one and never evicts a running one — a
+    /// ribbon that vanishes mid-flight reads as a glitch, while a chunk with no ribbon reads as a
+    /// chunk. Each instance is its own draw call *and* its own sort dispatch, so this is a real
+    /// ceiling; see [`crate::gib_ribbon`]. 24 × 64 particles is 1,536, comfortably inside one slab.
+    #[cfg_attr(feature = "serde", serde(default = "default_max_ribbons"))]
+    pub max_ribbons: u32,
+    /// Stains landing within this distance of a pool join it instead of starting their own, metres.
+    #[cfg_attr(feature = "serde", serde(default = "default_pool_merge_radius"))]
+    pub pool_merge_radius: f32,
+    /// Multiplier from a pool's wetted-area-equivalent radius to its drawn radius.
+    ///
+    /// Above 1 because blood spreads thinner than the discs that fed it: the area a droplet *wets* on
+    /// impact is measured at the moment of impact, and a slick keeps creeping outward after.
+    #[cfg_attr(feature = "serde", serde(default = "default_pool_spread"))]
+    pub pool_spread: f32,
+    /// Fraction of the remaining gap between drawn and target radius a pool closes per tick.
+    ///
+    /// Must be in `(0, 1]` — see [`CarnageSettings::validate`].
+    #[cfg_attr(feature = "serde", serde(default = "default_pool_spread_rate"))]
+    pub pool_spread_rate: f32,
+    /// Hard ceiling on live pools. Past it a stain joins a nearby pool if it can and is dropped if it
+    /// cannot — dropping is correct at the ceiling of a system whose whole job is to accumulate.
+    #[cfg_attr(feature = "serde", serde(default = "default_max_pools"))]
+    pub max_pools: u32,
 }
 
 /// The shipped [`CarnageSettings`] values, one function per dial.
@@ -534,6 +565,26 @@ mod shipped {
     pub(super) fn effect_capacity() -> u32 {
         4096
     }
+    // One draw call and one sort dispatch each; 24 × 64 particles fits one slab.
+    pub(super) fn max_ribbons() -> u32 {
+        24
+    }
+    // Metres. About a hand's width — close enough that two spatter discs read as one wet patch.
+    pub(super) fn pool_merge_radius() -> f32 {
+        0.10
+    }
+    // Blood creeps outward after the impact area was measured.
+    pub(super) fn pool_spread() -> f32 {
+        1.35
+    }
+    // Fraction of the remaining gap per tick; ≈0.2 s to close half the distance at 60 Hz.
+    pub(super) fn pool_spread_rate() -> f32 {
+        0.08
+    }
+    // Live slicks. A forward decal each, so this is a draw-call ceiling like `max_ribbons`.
+    pub(super) fn max_pools() -> u32 {
+        256
+    }
 }
 
 // `serde(default = "path")` needs a free function per field. Each one forwards to `shipped`, which is
@@ -592,6 +643,21 @@ fn default_shake_ticks() -> u32 {
 fn default_effect_capacity() -> u32 {
     shipped::effect_capacity()
 }
+fn default_max_ribbons() -> u32 {
+    shipped::max_ribbons()
+}
+fn default_pool_merge_radius() -> f32 {
+    shipped::pool_merge_radius()
+}
+fn default_pool_spread() -> f32 {
+    shipped::pool_spread()
+}
+fn default_pool_spread_rate() -> f32 {
+    shipped::pool_spread_rate()
+}
+fn default_max_pools() -> u32 {
+    shipped::max_pools()
+}
 
 impl Default for CarnageSettings {
     fn default() -> Self {
@@ -614,6 +680,11 @@ impl Default for CarnageSettings {
             shake_amplitude: shipped::shake_amplitude(),
             shake_ticks: shipped::shake_ticks(),
             effect_capacity: shipped::effect_capacity(),
+            max_ribbons: shipped::max_ribbons(),
+            pool_merge_radius: shipped::pool_merge_radius(),
+            pool_spread: shipped::pool_spread(),
+            pool_spread_rate: shipped::pool_spread_rate(),
+            max_pools: shipped::max_pools(),
         }
     }
 }
@@ -682,6 +753,38 @@ impl CarnageSettings {
                  nothing, which is a settings bug rather than a look."
                     .to_string(),
             );
+        }
+        if self.max_ribbons == 0 {
+            return Err(
+                "carnage: max_ribbons is 0 — that disables blood ribbons entirely, which is a \
+                 content decision made by not inserting `CarnageVfxPlugin`, not by a dial that \
+                 leaves the systems running and refusing every one."
+                    .to_string(),
+            );
+        }
+        if self.max_pools == 0 {
+            return Err(
+                "carnage: max_pools is 0 — every stain would be dropped and blood would never \
+                 accumulate, which is the whole feature switched off by a ceiling."
+                    .to_string(),
+            );
+        }
+        for (name, v) in
+            [("pool_merge_radius", self.pool_merge_radius), ("pool_spread", self.pool_spread)]
+        {
+            if !(v > 0.0) || !v.is_finite() {
+                return Err(format!(
+                    "carnage: {name} is {v} — it scales a radius, so it must be finite and positive."
+                ));
+            }
+        }
+        if !(self.pool_spread_rate > 0.0 && self.pool_spread_rate <= 1.0) {
+            return Err(format!(
+                "carnage: pool_spread_rate is {} — it is the fraction of the remaining gap closed \
+                 per tick, so it must be in (0, 1]. At 0 a pool never spreads; above 1 it \
+                 overshoots and oscillates.",
+                self.pool_spread_rate
+            ));
         }
         Ok(())
     }
@@ -770,7 +873,14 @@ impl Plugin for CarnagePlugin {
         app.init_resource::<FractureCache>()
             .init_resource::<FractureSettings>()
             .add_message::<Wounded>()
-            .add_systems(Update, bake_fractures.in_set(CarnageSystems));
+            // **Chained, not merely grouped.** `bake_fractures` requests the finest frontier as its
+            // last act, and `materialise_fragments` is what turns a request into a mesh — a bake and
+            // a request in the same frame must materialise in that frame, or the first frame after a
+            // death spawns nothing.
+            .add_systems(
+                Update,
+                (bake_fractures, materialise_fragments).chain().in_set(CarnageSystems),
+            );
     }
 }
 

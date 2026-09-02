@@ -715,9 +715,10 @@ mod tests {
         let baked = bake(&cube, &proxy, 1, vec![through_y(0.1, 8, 0.0, 0.0)]);
         let ids = baked.tree.leaves();
         assert!(ids.len() > 2, "the bore should have made several shards, got {}", ids.len());
+        // Tier A only — bonds are a question about cells, so no mesh has to be built to answer it.
         let members: Vec<(crate::FragmentId, &ProxyCell)> = ids
             .iter()
-            .filter_map(|id| baked.fragments.get(id.index()).map(|f| (*id, &f.cell)))
+            .filter_map(|id| baked.solids().get(id.index()).map(|s| (*id, &s.cell)))
             .collect();
         let graph = BondGraph::of(&members, baked.tree.len());
         let found = graph.islands(&ids, &BondSet::new(&graph));
@@ -944,14 +945,14 @@ mod tests {
 
         assert_eq!(baked.ejecta.len(), 1, "one bore through one cell is one plug");
         assert_eq!(
-            baked.fragments.len(),
+            baked.len(),
             ids.len(),
             "at target 1 every node is a leaf, so a plug must not have been added as one"
         );
         let plug = &baked.ejecta[0].cell;
-        for (i, f) in baked.fragments.iter().enumerate() {
+        for (i, s) in baked.solids().iter().enumerate() {
             assert_ne!(
-                f.cell.points(),
+                s.cell.points(),
                 plug.points(),
                 "fragment {i} IS the plug — it was added to the proxy instead of ejected"
             );
@@ -960,7 +961,7 @@ mod tests {
         // And the shards it left behind are still one island, with the plug gone.
         let members: Vec<(crate::FragmentId, &ProxyCell)> = ids
             .iter()
-            .filter_map(|id| baked.fragments.get(id.index()).map(|f| (*id, &f.cell)))
+            .filter_map(|id| baked.solids().get(id.index()).map(|s| (*id, &s.cell)))
             .collect();
         let graph = BondGraph::of(&members, baked.tree.len());
         assert_eq!(

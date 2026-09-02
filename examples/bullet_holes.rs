@@ -141,7 +141,12 @@ fn main() {
         .init_resource::<Dials>()
         .init_resource::<Status>()
         .init_resource::<body::Thrown>()
-        .add_systems(Startup, setup)
+        .init_resource::<body::Pools>()
+        // **`build_splats`, without `CarnageVfxPlugin`.** `body::bleed` draws its slicks as the
+        // crate's forward decals now, and those need the four generated splat textures. This demo
+        // wants none of the particle half, so it takes the one `Startup` system it does need rather
+        // than the whole plugin and Hanabi with it.
+        .add_systems(Startup, (setup, bevy_carnage::build_splats))
         // `fire` re-bakes and throws; `integrate` and `bleed` carry what was thrown through its whole
         // life, from flying chunk to flat stain. Chained so a plug cannot be integrated and settled in
         // the same frame it was spawned.
@@ -157,7 +162,10 @@ fn setup(world: &mut World) {
     // middle.** Pointed at `ORIGIN` the subject's legs ran off the bottom of the window — measured on
     // the first run of this example, at the shipped 960x680.
     let camera = Transform::from_xyz(1.50, 1.15, 1.95).looking_at(ORIGIN - Vec3::Y * 0.16, Vec3::Y);
-    world.spawn((Camera3d::default(), camera));
+    // **`DepthPrepass` is not optional now that the pools are forward decals.** A forward decal
+    // reconstructs the surface it lies on from the depth buffer; without a prepass every slick
+    // renders as an opaque quad or not at all. `examples/carnage.rs` carries the same line.
+    world.spawn((Camera3d::default(), bevy::core_pipeline::prepass::DepthPrepass, camera));
     light_and_floor(world);
 
     let baked = body::Baked::bake(world, SOFTEN, &[]);

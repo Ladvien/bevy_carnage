@@ -443,7 +443,7 @@ impl Scene {
         counts: &mut Counts,
         live: &mut Vec<(Wound, Bleed)>,
     ) {
-        let baked = fracture_mesh(&self.parts(), &self.proxy, &self.cut(subject));
+        let mut baked = fracture_mesh(&self.parts(), &self.proxy, &self.cut(subject));
 
         counts.bonds += baked.bonds.len() as u64;
         for frag in baked.leaves() {
@@ -548,14 +548,23 @@ impl Scene {
 /// It is a fact about the current fracture, spatter and bleed code, not a target — if it moves, the two
 /// timings either side of the move are measuring different massacres.
 ///
-/// **Re-blessed twice, and both reasons are worth keeping.** The first version folded only
+/// **Re-blessed three times, and every reason is worth keeping.** The first version folded only
 /// `center_local`, which comes from the convex cell, so it never observed `outer` or `cap` — it would
-/// have passed a change that stopped building the drawn meshes altogether. The second re-bless is this
-/// one: the *workload* was wrong. `bore::apply` handed back ~16 root cells against a `TARGET_PIECES` of
-/// 12, so the recursive cut loop performed **zero cuts** (`nodes=16 leaves=16 interior=0`) and the
-/// benchmark never touched the plane cutter, the tree, or a frontier query. Fixed by a six-cell
-/// humanoid subject and a target of 34, which now binds exactly: 544 = 34 x 16.
-const GOLDEN_DIGEST: u64 = 0xb672_df83_2d78_b94c;
+/// have passed a change that stopped building the drawn meshes altogether. The second re-bless was
+/// because the *workload* was wrong: `bore::apply` handed back ~16 root cells against a
+/// `TARGET_PIECES` of 12, so the recursive cut loop performed **zero cuts**
+/// (`nodes=16 leaves=16 interior=0`) and the benchmark never touched the plane cutter, the tree, or a
+/// frontier query. Fixed by a six-cell humanoid subject and a target of 34, which now binds exactly:
+/// 544 = 34 x 16.
+///
+/// The third is this one: `append_cut_faces` gained two independent cut-face reductions — a decimated
+/// relief ring ([`bevy_carnage`'s `RELIEF_STRIDE`]) and a plain centre fan for unrelieved faces. It
+/// is a *cosmetic* re-bless, and the evidence is which counts held: `fragments`, `ejecta`, `bonds`,
+/// `wounds`, `pulses`, `droplets`, `stains` and `hitstop` are all byte-identical, so the simulation
+/// is untouched and only the drawn surface moved. Setting the stride to 1 and disabling the flat-face
+/// branch reproduces the previous digest `0xb672df832d78b94c` exactly, which is how "no incidental
+/// drift" was established rather than assumed.
+const GOLDEN_DIGEST: u64 = 0xbf7e_2d88_1691_6a12;
 
 /// What the script is supposed to produce. Checked field by field so a failure names the thing that
 /// moved instead of just saying a hash did.
@@ -566,9 +575,17 @@ const GOLDEN_DIGEST: u64 = 0xb672_df83_2d78_b94c;
 ///   loop is doing its job; when it was 274 against a target of 12, the target was not binding at all.
 /// - **`bonds` is 1164 against the old 417.** Six shells cut to 34 pieces give the bond graph real
 ///   branching, which is what makes `radial` + `wounds_from_reach` a meaningful query.
-/// - **`cap_tris` is 3.4x `skin_tris`.** The drawn surface of a fractured body is mostly
-///   newly-created cut face, because `soften` 0.5 relieves every cap — so anything touching cap
-///   generation moves far more triangles than its name suggests.
+/// - **`cap_tris` is 1.4x `skin_tris`, and used to be 3.4x.** The drawn surface of a fractured body
+///   is still mostly newly-created cut face — so anything touching cap generation moves far more
+///   triangles than its name suggests — but the two reductions in `append_cut_faces` took it from
+///   250,942 to 106,721 (**-57.5 %**), which is where the bake's `soften` cost went.
+/// - **`skin_tris` moved 73,660 -> 73,684, and that +24 is not a leak.** `append_cut_faces` writes
+///   into the same soup as the render skin and `draw_piece` softens the *combined* result on purpose,
+///   so that the relaxation bevels the skin/cap edge; the split by interior tag happens afterwards.
+///   Perturbing cap vertices therefore perturbs the weld along the shared seam by 0.03 %. Measured in
+///   isolation the two reductions give +5 and +25 — their combination being +24 rather than +30 is
+///   the evidence it is a weld interaction and not a systematic offset. `RELIEF_STRIDE`'s own docs
+///   carry the full table.
 const GOLDEN_COUNTS: Counts = Counts {
     fragments: 544,
     ejecta: 172,
@@ -577,8 +594,8 @@ const GOLDEN_COUNTS: Counts = Counts {
     pulses: 8650,
     droplets: 295_100,
     stains: 331_990,
-    skin_tris: 73_660,
-    cap_tris: 250_942,
+    skin_tris: 73_684,
+    cap_tris: 106_721,
     hitstop: 1792,
 };
 

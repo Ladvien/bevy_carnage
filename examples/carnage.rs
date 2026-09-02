@@ -526,7 +526,7 @@ fn attach_bleeds(world: &mut World) {
         candidates
             .into_iter()
             .filter_map(|(e, id)| {
-                let part = baked.parts.get(id?.index())?;
+                let part = baked.parts.get(id?.index())?.as_ref()?;
                 let cap = largest_cap(&part.cell)?;
                 // The cell is subject-local and the chunk's entity sits at its own centre, so the
                 // wound's offset within the chunk is the cap's centroid minus that centre.

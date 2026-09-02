@@ -394,7 +394,7 @@ fn attach_bleeds(rec: &mut Recorder, frame: u32) {
         candidates
             .into_iter()
             .filter_map(|(e, id)| {
-                let part = baked.parts.get(id?.index())?;
+                let part = baked.parts.get(id?.index())?.as_ref()?;
                 let cap = largest_cap(&part.cell)?;
                 Some((
                     e,

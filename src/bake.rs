@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use crate::bore::Bore;
 use crate::FractureSettings;
 use crate::bond::BondGraph;
-use crate::mesh::{append_mesh, geometry_from_piece, geometry_from_soup};
+use crate::mesh::{FragmentSolid, append_mesh, geometry_from_piece, geometry_from_soup};
 use crate::order::sort_total_by_key_at;
 use crate::proxy::ProxyCell;
 use crate::soup::{Soup, fracture};
@@ -108,9 +108,30 @@ pub struct EjectaChunk {
 
 /// Baked fracture data, keyed by the subject's source scene asset id so multiple distinct subjects
 /// each get their own bake and swapping the asset needs zero code change.
+///
+/// # Tier B is built on request, not at bake time
+///
+/// A fracture tree keeps every piece the cut loop split, so for `R` root cells and `T` leaves it
+/// holds `2T − R` nodes and the interior ones are the upper levels — drawn only if someone asks for a
+/// coarse frontier. Building their meshes eagerly uploaded a `Handle<Mesh>` per interior node into
+/// `Assets<Mesh>` that nothing ever rendered, and cost about a sixth of the bake, because
+/// [`crate::soup::soften`] scales with the triangle count it is handed.
+///
+/// So: [`solids`](Self::solids) is complete the moment the bake finishes, and a `Fragment` appears
+/// only after [`request`](Self::request) has named its id and [`materialise_fragments`] has run.
+/// `bake_fractures` requests the finest frontier itself, so the ordinary case needs no opt-in;
+/// a caller wanting a coarser frontier asks a frame ahead.
+///
+/// **Materialising is a system, not a lazy read**, because `Assets<Mesh>` is only reachable from one.
 #[derive(Resource, Default)]
 pub struct FractureCache {
-    body: HashMap<AssetId<WorldAsset>, Vec<Fragment>>,
+    body: HashMap<AssetId<WorldAsset>, Vec<Option<Fragment>>>,
+    /// Tier A for every node, always complete after a bake.
+    solids: HashMap<AssetId<WorldAsset>, Vec<FragmentSolid>>,
+    /// Unmaterialised Tier B, index-parallel with `solids`. `None` once taken.
+    pending: HashMap<AssetId<WorldAsset>, Vec<Option<crate::soup::Piece>>>,
+    /// Ids a caller has asked to draw that are not built yet. Drained by [`materialise_fragments`].
+    wanted: HashMap<AssetId<WorldAsset>, Vec<FragmentId>>,
     trees: HashMap<AssetId<WorldAsset>, FragmentTree>,
     graphs: HashMap<AssetId<WorldAsset>, BondGraph>,
     detached: HashMap<AssetId<WorldAsset>, DetachedChunk>,
@@ -119,15 +140,47 @@ pub struct FractureCache {
 }
 
 impl FractureCache {
-    /// **Every** baked fragment for a source, interior pieces of the hierarchy included, or `None`
-    /// if that source hasn't been baked.
+    /// **Every** slot for a source, interior nodes of the hierarchy included, or `None` if that
+    /// source hasn't been baked. A `None` *slot* means that node's Tier B has not been materialised.
     ///
     /// Index-parallel with [`tree`](Self::tree). Do not spawn this whole slice — it holds parents
     /// and their children both, and spawning both puts the same volume in the scene twice. Spawn a
     /// frontier: [`leaves`](Self::leaves) for the finest, [`frontier_of`](Self::frontier_of) for a
     /// chosen granularity.
-    pub fn fragments(&self, source: AssetId<WorldAsset>) -> Option<&[Fragment]> {
+    ///
+    /// This is **not** a readiness test: the vector exists from the moment of the bake, before
+    /// anything in it is drawn. Use [`is_baked`](Self::is_baked) for that question.
+    pub fn fragments(&self, source: AssetId<WorldAsset>) -> Option<&[Option<Fragment>]> {
         self.body.get(&source).map(|v| v.as_slice())
+    }
+
+    /// **Tier A for every node** — the convex cells, present the instant the bake finishes and
+    /// needing no mesh. `&[]` for a source that was never baked, matching
+    /// [`ejecta`](Self::ejecta)'s never-`None` convention.
+    pub fn solids(&self, source: AssetId<WorldAsset>) -> &[FragmentSolid] {
+        self.solids.get(&source).map_or(&[], |v| v.as_slice())
+    }
+
+    /// **Ask for these nodes' drawn meshes.** They appear after [`materialise_fragments`] next runs,
+    /// which is the same frame when the caller ran before it. A no-op for an unbaked source and for
+    /// an id that is already drawn; duplicates are collapsed.
+    pub fn request(&mut self, source: AssetId<WorldAsset>, ids: &[FragmentId]) {
+        let Some(body) = self.body.get(&source) else { return };
+        let queue = self.wanted.entry(source).or_default();
+        for id in ids {
+            if body.get(id.index()).is_none_or(Option::is_some) {
+                continue; // out of range, or already drawn
+            }
+            if !queue.contains(id) {
+                queue.push(*id);
+            }
+        }
+    }
+
+    /// Whether every one of these ids has a drawn mesh right now.
+    pub fn ready(&self, source: AssetId<WorldAsset>, ids: &[FragmentId]) -> bool {
+        let Some(body) = self.body.get(&source) else { return false };
+        ids.iter().all(|id| body.get(id.index()).is_some_and(Option::is_some))
     }
 
     /// The fracture hierarchy for a source: which fragments nest inside which, and the frontier
@@ -164,7 +217,8 @@ impl FractureCache {
     }
 
     /// Resolve the ids a frontier query chose against this source's fragment array. An id outside
-    /// the array is skipped rather than fatal.
+    /// the array is skipped rather than fatal, and so is one whose Tier B has not been built — ask
+    /// for it with [`request`](Self::request) a frame ahead, or check [`ready`](Self::ready).
     fn pick<F>(&self, source: AssetId<WorldAsset>, choose: F) -> Vec<&Fragment>
     where
         F: FnOnce(&FragmentTree) -> Vec<FragmentId>,
@@ -172,7 +226,7 @@ impl FractureCache {
         let (Some(frags), Some(tree)) = (self.body.get(&source), self.trees.get(&source)) else {
             return Vec::new();
         };
-        choose(tree).into_iter().filter_map(|id| frags.get(id.index())).collect()
+        choose(tree).into_iter().filter_map(|id| frags.get(id.index())?.as_ref()).collect()
     }
 
     /// The baked [`DetachedPart`] chunk for a source, if any.
@@ -464,26 +518,37 @@ pub fn bake_fractures(
         let (pieces, tree, ejected) =
             fracture(body, &proxy.0, &settings.cut_for(target, seed_from_path(&asset_path), bores));
         let graph = crate::mesh::bond_graph(&pieces, &tree);
-        let frags: Vec<Fragment> = pieces
-            .into_iter()
+        // **Tier A for every node, Tier B for none — yet.** The interior nodes of the hierarchy are
+        // only drawn if a caller asks for a coarse frontier, so building their meshes here uploaded
+        // handles nothing rendered. See [`FractureCache`].
+        let solids: Vec<FragmentSolid> = pieces
+            .iter()
             .enumerate()
-            .map(|(i, piece)| build_fragment(FragmentId(i as u32), piece, &mut meshes))
+            .map(|(i, p)| FragmentSolid { id: FragmentId(i as u32), cell: p.cell.clone() })
             .collect();
+        let node_count = solids.len();
         let plugs: Vec<EjectaChunk> =
             ejected.into_iter().map(|e| build_ejecta(e, &mut meshes)).collect();
         info!(
             "carnage: baked {} fragments for {asset_path} ({} in the finest frontier, {} cuts, \
              {} bonds, {} ejected plug(s))",
-            frags.len(),
+            node_count,
             tree.leaves().len(),
             tree.cuts(),
             graph.len(),
             plugs.len()
         );
-        cache.body.insert(source, frags);
+        let leaves = tree.leaves();
+        cache.body.insert(source, (0..node_count).map(|_| None).collect());
+        cache.solids.insert(source, solids);
+        cache.pending.insert(source, pieces.into_iter().map(Some).collect());
         cache.trees.insert(source, tree);
         cache.graphs.insert(source, graph);
         cache.ejecta.insert(source, plugs);
+        // The common case, satisfied without anyone opting in: the finest frontier is what a death
+        // spawns, and `materialise_fragments` is chained straight after this system, so it is drawn
+        // on this same frame.
+        cache.request(source, &leaves);
 
         // The detached chunk (single intact piece, keeps its own material).
         if let Some(chunk) = bake_detached(&part, part_material, &mut meshes) {
@@ -491,5 +556,39 @@ pub fn bake_fractures(
         }
 
         cache.baked.insert(source);
+    }
+}
+
+/// **Build the Tier B meshes somebody asked for.** Chained straight after [`bake_fractures`], so a
+/// bake and a request that happen on the same frame are drawn on that frame — otherwise the first
+/// frame after a death would spawn nothing.
+///
+/// A system rather than a lazy read inside [`FractureCache`], and that is forced rather than chosen:
+/// `Assets<Mesh>` is only reachable through `ResMut`, so a fragment reached from a `&FractureCache`
+/// could not add a mesh asset at all. `OnceCell` is out for the same family of reasons — the cache is
+/// a `Resource` and therefore `Send + Sync`, and a `Mutex` would put a lock in the bake's hot path.
+pub fn materialise_fragments(mut cache: ResMut<FractureCache>, mut meshes: ResMut<Assets<Mesh>>) {
+    let sources: Vec<AssetId<WorldAsset>> =
+        cache.wanted.iter().filter(|(_, ids)| !ids.is_empty()).map(|(s, _)| *s).collect();
+    for source in sources {
+        let Some(ids) = cache.wanted.remove(&source) else { continue };
+        // **Both maps are taken out and both are put back, unconditionally.** They have to leave the
+        // resource so `build_fragment` can hold `&mut Assets<Mesh>` at the same time; taking one and
+        // bailing on the other missing would delete a source's whole Tier B and leave it
+        // permanently unmaterialisable, with `is_baked` still true. A bake writes both together, so
+        // the pair is always present in practice — the point is that this cannot be the thing that
+        // breaks it if that ever stops being so.
+        let mut pending = cache.pending.remove(&source).unwrap_or_default();
+        let mut body = cache.body.remove(&source).unwrap_or_default();
+        for id in ids {
+            let i = id.index();
+            if body.get(i).is_none_or(Option::is_some) {
+                continue; // out of range, or drawn since the request
+            }
+            let Some(piece) = pending.get_mut(i).and_then(Option::take) else { continue };
+            body[i] = Some(build_fragment(id, piece, &mut meshes));
+        }
+        cache.pending.insert(source, pending);
+        cache.body.insert(source, body);
     }
 }

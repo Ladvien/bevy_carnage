@@ -38,9 +38,10 @@
 use bevy::prelude::*;
 use bevy_hanabi::{
     AccelModifier, Attribute, ColorOverLifetimeModifier, EffectAsset, EffectSpawner, ExprWriter,
-    Gradient, HanabiPlugin, KillAabbModifier, LinearDragModifier, OrientMode, OrientModifier,
-    ParticleEffect, ScalarType, SetAttributeModifier, SetPositionCone3dModifier,
-    SetVelocitySphereModifier, ShapeDimension, SimulationCondition, SimulationSpace, SpawnerSettings,
+    Gradient, HanabiPlugin, KillAabbModifier, LinearDragModifier, MotionIntegration, OrientMode,
+    OrientModifier, ParticleEffect, ScalarType, SetAttributeModifier, SetPositionCone3dModifier,
+    SetVelocitySphereModifier, ShapeDimension, SimulationCondition, SimulationSpace,
+    SizeOverLifetimeModifier, SpawnerSettings,
 };
 
 use crate::spatter::{BACK_SPATTER_SPEED, FORWARD_SPATTER_SPEED, wound_seed};
@@ -62,8 +63,8 @@ pub struct CarnageEffects {
     pub spurt: Handle<EffectAsset>,
     /// The steady seep of a wound that has stopped pumping, in local space so it rides the fragment.
     pub seep: Handle<EffectAsset>,
-    /// The ribbon a flying gib leaves behind it.
-    pub trail: Handle<EffectAsset>,
+    /// The blood ribbon a flying gib drags behind it. One instance per chunk, each its own strand.
+    pub ribbon: Handle<EffectAsset>,
 }
 
 /// **How long an effect instance may live after its spawner finishes**, in this crate's own ticks.
@@ -290,28 +291,127 @@ pub fn wound_seep(s: &CarnageSettings) -> EffectAsset {
     .build(s)
 }
 
-/// **The trail behind a flying gib.** A steady rate in **global** space — that is precisely what makes
-/// it a trail: each droplet is left at the world position the gib had when it spawned, so the emitter
-/// moving away from them draws the line.
+/// **How long one strand particle lives, seconds — and it must be a literal constant.**
 ///
-/// **Deliberately not a `RIBBON_ID` ribbon.** Hanabi supports one ribbon chain per effect asset, so a
-/// single ribbon asset cannot serve several simultaneous gibs — every gib would be threaded onto one
-/// strand. Independent droplets in global space cost one asset and work for any number.
-pub fn gib_trail(s: &CarnageSettings) -> EffectAsset {
-    BloodEffect {
-        name: "carnage:trail",
-        base_radius: 0.02,
-        height: 0.02,
-        speed: [0.2, 1.2],
-        lifetime: [0.30, 0.70],
-        drag_scale: 1.5,
-        size: 0.012,
-        space: SimulationSpace::Global,
-        condition: SimulationCondition::WhenVisible,
-        spawner: SpawnerSettings::rate(60.0.into()),
-    }
-    .build(s)
+/// There is no code-level rejection of a randomised ribbon lifetime, which is why this is written
+/// down: a particle that dies in the *middle* of a strand reorders the chain visibly. Upstream states
+/// the rule at `bevy_hanabi/examples/ribbon.rs:132-137`. This is the one place the shipped
+/// [`CarnageSettings`] must **not** be consulted.
+const RIBBON_LIFETIME: f32 = 0.9;
+
+/// **Emission rate, particles per second ≈ the frame rate.**
+///
+/// Hanabi 0.19 does not interpolate position between frames, so every particle spawned in one frame
+/// lands at the same point and any rate above the frame rate is pure waste
+/// (`bevy_hanabi/examples/ribbon.rs:65-68`).
+const RIBBON_RATE: f32 = 60.0;
+
+/// `RIBBON_RATE * RIBBON_LIFETIME` is 54 live particles; this is that plus slack, following upstream's
+/// own arithmetic (`ribbon.rs:71-75`).
+///
+/// **Deliberately not [`CarnageSettings::effect_capacity`]** (4096): that dial is sized for a spatter
+/// burst, and a per-gib ribbon is two orders of magnitude smaller. Over-allocating is not free — each
+/// instance reserves its capacity inside a 65,536-particle slab, so 4096 would fit sixteen gibs.
+const RIBBON_CAPACITY: u32 = 64;
+
+/// **The blood ribbon a flying gib drags behind it.** One connected strand per instance, left in world
+/// space, thinning and darkening over [`RIBBON_LIFETIME`].
+///
+/// # One asset serves every gib, and the crate used to claim otherwise
+///
+/// This function replaced a `gib_trail` whose doc read: *"Deliberately not a `RIBBON_ID` ribbon.
+/// Hanabi supports one ribbon chain per effect asset, so a single ribbon asset cannot serve several
+/// simultaneous gibs — every gib would be threaded onto one strand."* **That was false**, and the
+/// correction is what makes this feature cheap, so it is recorded rather than quietly deleted. Read
+/// from `bevy_hanabi` 0.19.0:
+///
+/// - Instances of one asset are packed into a shared slab, but `allocate()` hands each instance a
+///   **disjoint contiguous sub-slice** (`src/render/effect_cache.rs:850-867`).
+/// - The ribbon shader resolves the owning instance's `base_particle` per vertex and indexes strictly
+///   inside that slice (`src/render/vfx_render.wgsl:214-241`). A chain cannot walk out of its own
+///   instance.
+/// - Upstream's own `examples/ribbon.rs:146-151` therefore uses a literal `RIBBON_ID = 0u32` for every
+///   particle — "they all share the same RIBBON_ID, which can be any value" — and spawns and despawns
+///   those instances continuously at runtime.
+///
+/// So: one asset, one [`ParticleEffect`] entity per gib, constant `RIBBON_ID`, each gib its own
+/// independent chain. Distinct ids are needed only for several logical chains inside a *single*
+/// instance, which is upstream's `worms.rs` topology and not ours.
+///
+/// # Why it cannot use [`BloodEffect::build`]
+///
+/// That builder emits a position cone plus sphere velocity plus full motion integration, which is the
+/// opposite of a ribbon: a strand's particles must stay exactly where they were emitted, and the
+/// illusion of motion comes entirely from the emitter moving away from them.
+///
+/// `AGE` is not optional here — shader generation fails outright with a `Validate` error when
+/// `RIBBON_ID` is present without it (`bevy_hanabi/src/lib.rs:847-856`), and the render node asserts
+/// both offsets (`src/render/mod.rs:7567-7568`).
+pub fn gib_ribbon() -> EffectAsset {
+    let writer = ExprWriter::new();
+
+    let init_pos =
+        SetAttributeModifier::new(Attribute::POSITION, writer.lit(Vec3::ZERO).expr());
+    let init_age = SetAttributeModifier::new(Attribute::AGE, writer.lit(0.0).expr());
+    let init_lifetime =
+        SetAttributeModifier::new(Attribute::LIFETIME, writer.lit(RIBBON_LIFETIME).expr());
+    let init_size = SetAttributeModifier::new(Attribute::SIZE, writer.lit(0.045).expr());
+    let init_ribbon_id = SetAttributeModifier::new(Attribute::RIBBON_ID, writer.lit(0u32).expr());
+
+    EffectAsset::new(RIBBON_CAPACITY, SpawnerSettings::rate(RIBBON_RATE.into()), writer.finish())
+        .with_name("carnage:ribbon")
+        // Particles must stay where they were emitted; see above.
+        .with_motion_integration(MotionIntegration::None)
+        // `Global` bakes the emitter translation into POSITION once at init
+        // (`bevy_hanabi/src/lib.rs:513-530`) and renders POSITION as world space. Translation only —
+        // emitter rotation and scale are ignored, which is correct for a strand.
+        .with_simulation_space(SimulationSpace::Global)
+        // A gib that leaves the camera must keep trailing, for the same reason an off-screen body
+        // must keep bleeding: it comes back with a strand that never happened otherwise.
+        .with_simulation_condition(SimulationCondition::Always)
+        .init(init_pos)
+        .init(init_age)
+        .init(init_lifetime)
+        .init(init_size)
+        .init(init_ribbon_id)
+        .render(SizeOverLifetimeModifier {
+            gradient: Gradient::linear(Vec3::ONE, Vec3::ZERO),
+            ..default()
+        })
+        // Darkens and fades rather than turning blue like the upstream demo — this is blood, and the
+        // shared `blood_gradient` is not reusable here because a strand wants two keys, not three.
+        .render(ColorOverLifetimeModifier::new(Gradient::linear(
+            Vec4::new(0.42, 0.02, 0.02, 1.0),
+            Vec4::new(0.12, 0.01, 0.01, 0.0),
+        )))
 }
+
+/// **Marks an entity that should trail blood while it flies.** Insert it on anything moving that
+/// should bleed — a gib, a severed limb, a thrown corpse — and remove it when the thing comes to rest.
+///
+/// The crate deliberately does not learn what a gib is; the consumer owns the decision, and this owns
+/// the asset, the cap and the lifetime.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BleedingChunk;
+
+/// The spawned ribbon instance, a child of the entity it trails. Internal bookkeeping, public only so
+/// a consumer can query for one in a test.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RibbonInstance;
+
+/// **Stop emitting now, despawn in this many ticks.**
+///
+/// [`EffectTtl`] cannot retire a rate spawner: [`despawn_finished_effects`] requires
+/// `spawner.has_completed()`, and that returns `!settings.is_forever() && …`
+/// (`bevy_hanabi/src/spawn.rs:794-804`) — a rate spawner *is* forever, so the condition is never met
+/// and a ribbon retired that way would leak for the life of the process.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffectFade(pub u32);
+
+/// Ticks between a chunk coming to rest and its ribbon entity going away.
+///
+/// At least `RIBBON_LIFETIME * 60 = 54`, so the last particle emitted finishes its life first.
+const RIBBON_FADE_TICKS: u32 = 60;
 
 /// The set this plugin's systems run in. **Gate and order against this, not against the systems** —
 /// the same contract [`crate::CarnageSystems`] carries.
@@ -342,7 +442,14 @@ impl Plugin for CarnageVfxPlugin {
             .add_systems(Startup, (build_effects, crate::decal::build_splats))
             .add_systems(
                 Update,
-                (spawn_wound_effects, despawn_finished_effects).in_set(CarnageVfxSystems),
+                (
+                    spawn_wound_effects,
+                    despawn_finished_effects,
+                    attach_ribbons,
+                    fade_landed_ribbons,
+                    fade_effects,
+                )
+                    .in_set(CarnageVfxSystems),
             );
     }
 }
@@ -359,7 +466,7 @@ fn build_effects(
         mist: assets.add(mist_puff(s)),
         spurt: assets.add(arterial_spurt(s)),
         seep: assets.add(wound_seep(s)),
-        trail: assets.add(gib_trail(s)),
+        ribbon: assets.add(gib_ribbon()),
     });
 }
 
@@ -443,21 +550,109 @@ fn despawn_finished_effects(
     }
 }
 
+/// Give every [`BleedingChunk`] that has no ribbon yet a child ribbon instance, up to the cap.
+///
+/// **A child, deliberately.** Bevy propagates the parent's transform, so the emitter follows the
+/// chunk for free, and Bevy despawns children with the parent — so a chunk that is culled takes its
+/// ribbon with it and needs no cleanup path at all.
+///
+/// The cap is first-come-first-served and never evicts: a ribbon that vanishes mid-flight reads as a
+/// glitch, while a chunk with no ribbon reads as a chunk. It is a real ceiling rather than a
+/// precaution — Hanabi spawns one `EffectBatch`, and therefore one draw call, per instance
+/// (`bevy_hanabi/src/render/mod.rs:4660`), and every *ribbon* instance additionally queues its own
+/// sort dispatch (`mod.rs:4684-4698`). Upstream's CHANGELOG records a crash from "many sorted
+/// (e.g. ribbon) effects alive at once", fixed only in 0.19.0. Zeler & Rohleder
+/// (`10.22630/mgv.2016.25.1.4`, Techland) make the same point about uncapped sub-emission generally.
+fn attach_ribbons(
+    mut commands: Commands,
+    effects: Option<Res<CarnageEffects>>,
+    settings: Res<CarnageSettings>,
+    chunks: Query<(Entity, &GlobalTransform, Option<&Children>), With<BleedingChunk>>,
+    ribbons: Query<(), With<RibbonInstance>>,
+) {
+    let Some(effects) = effects else { return }; // assets land on `Startup`
+    let mut live = ribbons.iter().count() as u32;
+    for (entity, at, children) in &chunks {
+        if live >= settings.max_ribbons {
+            return;
+        }
+        let already = children
+            .is_some_and(|c| c.iter().any(|child| ribbons.get(child).is_ok()));
+        if already {
+            continue;
+        }
+        // **Seeded from the chunk's position, never from `Entity`.** `prng_seed` is the only
+        // per-instance randomness Hanabi exposes (`bevy_hanabi/src/lib.rs:659-664`), and an `Entity`
+        // is a slot index assigned by allocation order — the crate's standing rule (`seed_from_path`)
+        // forbids seeding anything from one.
+        let p = at.translation();
+        let q = |x: f32| (x / crate::soup::WELD).round() as i64 as u32;
+        let seed = q(p.x)
+            ^ q(p.y).wrapping_mul(0x9E37_79B9)
+            ^ q(p.z).wrapping_mul(2_654_435_761);
+        commands.entity(entity).with_child((
+            ParticleEffect { handle: effects.ribbon.clone(), prng_seed: Some(seed) },
+            RibbonInstance,
+            Transform::default(),
+            Visibility::default(),
+        ));
+        live += 1;
+    }
+}
+
+/// Start the fade on any ribbon whose parent has stopped bleeding — the chunk came to rest, or the
+/// consumer decided it should stop. Inserted once; [`EffectFade`]'s presence is the latch.
+fn fade_landed_ribbons(
+    mut commands: Commands,
+    ribbons: Query<(Entity, &ChildOf), (With<RibbonInstance>, Without<EffectFade>)>,
+    bleeding: Query<(), With<BleedingChunk>>,
+) {
+    for (entity, parent) in &ribbons {
+        if bleeding.get(parent.parent()).is_err() {
+            commands.entity(entity).insert(EffectFade(RIBBON_FADE_TICKS));
+        }
+    }
+}
+
+/// Stop a fading effect emitting on the first tick, then despawn it when the counter runs out.
+///
+/// **`Option<&mut EffectSpawner>`, and the `Option` is load-bearing.** Hanabi adds that component
+/// lazily in its own `tick_spawners()` during `PostUpdate` (`bevy_hanabi/src/spawn.rs:634-640`), so it
+/// is *absent* on the first frame of a freshly spawned instance — a plain `&mut EffectSpawner` query
+/// would silently skip exactly the instances being retired. Upstream's `examples/ribbon.rs:228-241`
+/// has the same shape for the same reason.
+fn fade_effects(
+    mut commands: Commands,
+    mut fading: Query<(Entity, &mut EffectFade, Option<&mut EffectSpawner>)>,
+) {
+    for (entity, mut fade, spawner) in &mut fading {
+        if let Some(mut spawner) = spawner {
+            spawner.active = false;
+        }
+        fade.0 = fade.0.saturating_sub(1);
+        if fade.0 == 0 {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// **Every effect must actually build**, and its capacity must be the authored dial rather than a
-    /// literal — a capacity baked wrong cannot be raised afterwards, which is why it is a setting.
+    /// **The four droplet effects must build at the authored capacity**, which is a dial rather than
+    /// a literal because an asset's capacity is fixed when it is built and cannot be raised
+    /// afterwards.
+    ///
+    /// The ribbon is checked separately below: it deliberately does **not** read `effect_capacity`.
     #[test]
-    fn the_five_effects_build_at_the_authored_capacity() {
+    fn the_droplet_effects_build_at_the_authored_capacity() {
         let s = CarnageSettings::default();
         let built = [
             ("spatter", spatter_burst(&s)),
             ("mist", mist_puff(&s)),
             ("spurt", arterial_spurt(&s)),
             ("seep", wound_seep(&s)),
-            ("trail", gib_trail(&s)),
         ];
         for (what, asset) in &built {
             assert_eq!(
@@ -467,7 +662,9 @@ mod tests {
             );
             assert!(asset.name.contains("carnage:"), "{what} is missing its namespaced name");
         }
-        let mut names: Vec<&str> = built.iter().map(|(_, a)| a.name.as_str()).collect();
+        let ribbon = gib_ribbon();
+        let mut names: Vec<&str> =
+            built.iter().map(|(_, a)| a.name.as_str()).chain([ribbon.name.as_str()]).collect();
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), 5, "two effects share a name, so they are not five effects");
@@ -484,11 +681,6 @@ mod tests {
             "the seep must ride the fragment it is on"
         );
         assert_eq!(
-            gib_trail(&s).simulation_space,
-            SimulationSpace::Global,
-            "a trail is global space — that is what leaves the droplets behind"
-        );
-        assert_eq!(
             arterial_spurt(&s).simulation_condition,
             SimulationCondition::Always,
             "an off-screen body must keep bleeding"
@@ -497,6 +689,45 @@ mod tests {
             wound_seep(&s).simulation_condition,
             SimulationCondition::Always,
             "and so must keep seeping"
+        );
+    }
+
+    /// **The three properties a ribbon breaks silently if any one of them is wrong.**
+    ///
+    /// Global space is what leaves the strand behind instead of dragging it along; motion integration
+    /// off is what keeps each particle exactly where it was emitted; and the capacity must be the
+    /// ribbon's own small number rather than `effect_capacity`, because each instance reserves its
+    /// capacity inside a shared 65,536-particle slab and 4096 would fit sixteen gibs.
+    ///
+    /// None of these can be caught by looking at the screen quickly — (a) reads as one shared strand,
+    /// (b) as a strand glued to the chunk, and (c) as ribbons that stop appearing after the
+    /// sixteenth chunk.
+    #[test]
+    fn the_ribbon_is_a_detached_uncapacitied_strand() {
+        let asset = gib_ribbon();
+        assert_eq!(
+            asset.simulation_space,
+            SimulationSpace::Global,
+            "a ribbon is global space — that is what leaves the strand where it was emitted"
+        );
+        assert_eq!(
+            asset.motion_integration,
+            bevy_hanabi::MotionIntegration::None,
+            "a ribbon particle must not integrate velocity; the emitter's motion draws the line"
+        );
+        assert_eq!(
+            asset.capacity(),
+            RIBBON_CAPACITY,
+            "the ribbon must not be sized off `effect_capacity` — see the constant's docs"
+        );
+        assert!(
+            RIBBON_CAPACITY as f32 >= RIBBON_RATE * RIBBON_LIFETIME,
+            "capacity {RIBBON_CAPACITY} cannot hold {RIBBON_RATE} particles/s alive for \
+             {RIBBON_LIFETIME}s, so the strand would be truncated"
+        );
+        assert!(
+            RIBBON_FADE_TICKS as f32 >= RIBBON_LIFETIME * 60.0,
+            "the fade must outlast one particle's life, or a landed chunk's strand is cut off"
         );
     }
 

@@ -91,7 +91,7 @@ fn main() {
     // **Timed, because `AG-011` asked whether the bake needs to move off the main thread and the honest
     // answer is a number rather than an opinion.** A fix is warranted at 50 ms and not at 5 ms.
     let started = std::time::Instant::now();
-    let baked = fracture_mesh(&parts, &proxy, &cut(seed));
+    let mut baked = fracture_mesh(&parts, &proxy, &cut(seed));
     let elapsed = started.elapsed();
 
     // **One bake, every granularity.** The cut loop keeps each piece it split rather than
@@ -102,8 +102,15 @@ fn main() {
     for want in [2usize, 3, 5, 8, TARGET] {
         let f = baked.frontier_of(want);
         let vol: f32 = f.iter().map(|p| p.cell.volume()).sum();
+        // **The drawn-triangle column is the capability gate.** Tier B is built on request, and a
+        // coarse frontier resolves to *interior* tree nodes — so a zero here would mean lazy
+        // materialisation had quietly skipped everything but the leaves, and one bake would no longer
+        // answer every granularity. The volume column cannot catch that: cells are Tier A and exist
+        // either way.
+        let tris: usize =
+            f.iter().map(|p| tri_count(p.outer.as_ref()) + tri_count(p.cap.as_ref())).sum();
         println!(
-            "    {want:>3} asked → {:>3} pieces, total volume {vol:.4}",
+            "    {want:>3} asked → {:>3} pieces, {tris:>5} drawn tris, total volume {vol:.4}",
             f.len()
         );
     }

@@ -1,7 +1,7 @@
 # Demos
 
-Every example in the repo, and what each one is for. All six run from a clean checkout with no assets
-and no setup:
+Every example in the repo, and what each one is for. All seven run from a clean checkout with no
+assets and no setup:
 
 ```sh
 cargo run --release --example fracture_cube   # terminal only — no window, no GPU
@@ -9,15 +9,16 @@ cargo run --release --example sever           # needs a GPU
 cargo run --release --example explode         # needs a GPU
 cargo run --release --example bullet_holes    # needs a GPU
 cargo run --release --example carnage         # needs a GPU
+cargo run --release --example ribbons         # needs a GPU
+cargo run --release --example pooling         # needs a GPU
 ```
 
-The clips below are **not screen recordings**. They come from four headless recorders, `capture`,
-`capture_sever`, `capture_holes` and `capture_carnage`, which render the same scenes on a fixed
-timestep with no window and no wall clock. Frame 62 of one run is frame 62 of the next, so two GIFs
-taken either side of a change differ only where the geometry does — which is what makes them worth
-committing. `capture_carnage` goes further and prints a digest two runs must agree on; see
-[its section](#carnage--the-wounds-bleed-and-both-kinds-of-wound-bleed-the-same-way). Regenerating
-them is [at the bottom](#regenerating-these).
+The clips below are **not screen recordings**. They come from headless recorders — `capture`,
+`capture_sever`, `capture_holes`, `capture_carnage`, and now `capture_ribbons` and `capture_pooling` —
+which render the same scenes on a fixed timestep with no window and no wall clock. Frame 62 of one run
+is frame 62 of the next, so two GIFs taken either side of a change differ only where the geometry does
+— which is what makes them worth committing. `capture_carnage` and `capture_pooling` go further and
+print a digest two runs must agree on. Regenerating them is [at the bottom](#regenerating-these).
 
 **The subject is a blocked-out humanoid** — torso, head, two arms, two legs, one convex proxy cell
 each. That matters more than it looks. Cutting a limbless mass with pseudorandom planes produces
@@ -329,6 +330,69 @@ all, which is the first thing to check if a floor looks wrong.
 
 ---
 
+## `ribbons` — every flying chunk drags a strand of blood
+
+**No GIF committed, and that is a measurement rather than an omission.** `capture_carnage`'s own
+frames are already proven *not* byte-reproducible on Apple silicon once GPU particles are on screen —
+two runs of one binary differed in 202 of 382 frames while printing the same digest. A clip whose
+pixels cannot be compared is not worth committing, and `capture_ribbons` prints no digest for the same
+reason: particles are output only, Hanabi 0.19 has no GPU→CPU readback path at all, so the one thing
+this demo shows physically cannot reach a hash.
+
+```sh
+cargo run --release --example ribbons
+cargo run --release --example capture_ribbons -- --out /tmp/ribbons
+```
+
+Hit the subject and each fragment that comes loose trails a dark red strand that **stays where it was
+emitted** while the chunk moves away from it, thinning and fading over about 0.9 s and stopping
+cleanly when the chunk lands. Three failure modes the API makes easy, each of which reads as a look
+rather than as a bug:
+
+| what you see | what it means |
+|---|---|
+| every chunk on one strand | the instances are not getting their own slices of the particle slab |
+| the strand following the chunk instead of trailing | `SimulationSpace::Local`, or motion integration left on |
+| strands that never disappear | `fade_effects` never saw an `EffectSpawner` — it must be queried as `Option<&mut>`, because Hanabi adds it lazily in `PostUpdate` |
+
+And the cap: throw more than `CarnageSettings::max_ribbons` chunks at once and the later ones simply
+have no ribbon. No running ribbon ever vanishes to make room — a ribbon that disappears mid-flight
+reads as a glitch, while a chunk with no ribbon reads as a chunk.
+
+**The crate used to say this was impossible.** `gib_trail`'s doc read "Hanabi supports one ribbon
+chain per effect asset, so a single ribbon asset cannot serve several simultaneous gibs". That was
+false: `allocate()` hands each instance a disjoint contiguous sub-slice and the ribbon shader indexes
+strictly inside it, which is why upstream's own `examples/ribbon.rs` uses a literal `RIBBON_ID = 0`
+for every particle of every instance. `gib_ribbon`'s doc carries the citations.
+
+---
+
+## `pooling` — blood that stops being drops and becomes a puddle
+
+**No GIF committed yet**, but unlike `ribbons` this one *is* checkable: `capture_pooling` prints
+`pooling: frames=… pools=… digest=…`, and two runs of the same binary must print the same line.
+Pooling is CPU-side and deterministic — that is why it lives in the crate's **core** half rather than
+behind `vfx` — so a disagreement means something read a clock, an `Entity` or an `AssetId`.
+
+```sh
+cargo run --release --example pooling
+cargo run --release --example capture_pooling -- --out /tmp/pooling
+```
+
+Shoot the subject in the same place three times. The first channel throws a handful of plugs that land
+as discrete stains; by the third, the region under the body is **one** slick whose radius is still
+visibly growing rather than a pile of overlapping circles. The HUD prints plugs thrown against slicks
+on the floor, so the merge is a number rather than something to take on trust.
+
+Why it is core and not cosmetic: in the consuming game a blood pool is read as a chemoattractant, so
+*where* blood pools is simulation-visible and must be reproducible. Only the drawing is optional.
+
+Scope, stated so nobody chases it: pools form on the **single horizontal plane** the spatter model
+already solves against. Flowing downhill to the lowest reachable point needs a heightfield this crate
+does not have.
+
+---
+
 ## `fracture_cube` — the numbers, in a terminal
 
 > Captured against `isomesh` at `aa82b0b` (`0.0.10`+), the rev `Cargo.toml` pins. Every number in the
@@ -422,6 +486,11 @@ cargo run --release --example capture         -- --out frames-audit --tint audit
 cargo run --release --example capture_sever   -- --out frames-sever
 cargo run --release --example capture_holes   -- --out frames-holes
 cargo run --release --example capture_carnage -- --out frames-carnage
+
+# The two newest recorders write frames but **no GIF is committed from either** — see their sections.
+# `capture_pooling`'s last line is the check: run it twice and the digests must match.
+cargo run --release --example capture_ribbons -- --out frames-ribbons
+cargo run --release --example capture_pooling -- --out frames-pooling
 
 WIDTH=560 LEGEND=none  tools/gif.sh frames-demo  docs/explode.gif ""
 WIDTH=560 LEGEND=audit tools/gif.sh frames-audit docs/fracture-tier-ab.gif "Tier A/B — every fragment audited as a solid"

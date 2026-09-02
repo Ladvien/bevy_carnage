@@ -43,6 +43,46 @@ use crate::soup::{
     EPS, LatticeHash, LatticeMap, MIN_CROSS2, Plane, WELD, classify, plane_basis, signed_dist,
 };
 
+/// **How many boundary-ring vertices share one relief vertex.**
+///
+/// The cut face is the largest single cost in the bake: measured on the pinned benchmark subject the
+/// drawn surface is 250,942 cap triangles against 73,660 skin triangles — **3.4 : 1 cut face** — and
+/// [`crate::soup::soften`] is 51 % of `bake_ms`, scaled by exactly that count.
+///
+/// The 3× came from emitting three triangles per *boundary* edge, at a density
+/// [`weave_seam`] has deliberately inflated to the render skin's own boundary so the cap and the skin
+/// share vertices. The boundary must stay that fine — it is welded to the skin's opening and moving
+/// it cracks the seam. The *interior* relief structure need not: it only has to read as a crumple.
+///
+/// At 4 this emits `n + 2*(n/4)` cap triangles per relieved face instead of `3*n`, and the relief
+/// reads better, because a displacement hashed once per boundary vertex is high-frequency fizz rather
+/// than a crumple. Do not raise it above 6; beyond that the mid ring is too sparse to read as relief.
+///
+/// # Measured on the pinned benchmark, isolated from the flat-face branch below
+///
+/// `append_cut_faces` carries **two** independent reductions, and they were measured separately by
+/// pinning one while disabling the other:
+///
+/// | change | `cap_tris` | `skin_tris` |
+/// |---|---|---|
+/// | neither (`RELIEF_STRIDE = 1`, flat branch off) | 250,942 | 73,660 |
+/// | this constant alone, at 4 | 150,970 (−39.8 %) | 73,665 (+5) |
+/// | the flat-face branch alone | 158,843 (−36.7 %) | 73,685 (+25) |
+/// | **both, as shipped** | **106,721 (−57.5 %)** | **73,684 (+24)** |
+///
+/// The first row reproduces the pre-change digest `0xb672df832d78b94c` **exactly**, which is the
+/// evidence that this rewrite introduced no incidental drift: at `m == n_ring` with the flat branch
+/// off, it is the original code triangle for triangle.
+///
+/// **Why the skin moves at all, given this only writes cap triangles.** `append_cut_faces` writes
+/// into the *same* soup as the render skin, and `draw_piece` then runs [`crate::soup::soften`] on the
+/// combined result — deliberately, so the relaxation bevels the skin/cap edge, "the sharpest edge on
+/// the whole fragment". The skin/cap split happens only afterwards, by interior tag. So perturbing
+/// cap vertices perturbs the weld neighbourhood along the shared seam, and the skin's welded triangle
+/// count shifts by 0.03 %. The two rows being +5 and +25 while their combination is +24 — not +30 —
+/// is itself the proof that this is a weld interaction rather than a systematic offset.
+const RELIEF_STRIDE: usize = 4;
+
 /// What made a face, and therefore how it is drawn.
 ///
 /// This was a `bool` — cut or supplied — until bores needed a third answer. The distinction is not
@@ -418,7 +458,7 @@ impl ProxyCell {
             // has no interior vertices at all, and a flat cut face is the visual language of cleaved
             // stone. The boundary ring never moves — it is welded to the skin's own opening, and
             // displacing it would crack that seam open — so the relief lives entirely on the centre
-            // point and a ring of points halfway out to the edge.
+            // point and a ring of points partway out to the edge.
             //
             // The displacement is hashed from each point's own quantized position, so it needs no
             // seed threaded down here and comes back identical on every run.
@@ -436,7 +476,6 @@ impl ProxyCell {
                 let h = crate::soup::hash_f32(q(p.x) ^ q(p.y).wrapping_mul(0x9E37_79B9) ^ q(p.z).wrapping_mul(2_654_435_761));
                 p + n * ((h - 0.5) * 2.0 * relief * radius * scale)
             };
-            let mid: Vec<Vec3> = ring.iter().map(|p| lift(centre.lerp(*p, 0.5), 0.7)).collect();
             let hub = lift(centre, 1.0);
 
             let mut emit = |a: Vec3, b: Vec3, c: Vec3| {
@@ -445,11 +484,47 @@ impl ProxyCell {
                     out.push_tri(vtx(a), vtx(b), vtx(c), true);
                 }
             };
-            for i in 0..n_ring {
-                let j = (i + 1) % n_ring;
-                emit(hub, mid[i], mid[j]);
-                emit(mid[i], ring[i], ring[j]);
-                emit(mid[i], ring[j], mid[j]);
+
+            // **A flat face gains nothing from a mid ring.** With `relief <= 0.0` every `lift` is the
+            // identity, so the mid ring is a set of coplanar points that only subdivide a triangle
+            // fan into three times as many coplanar triangles. Emit the plain centre fan instead —
+            // `n` triangles, not `n + 2m`. This is every bore wall (`FaceKind::Bore` forces the
+            // override above) and any caller authoring `cap_relief: 0.0`.
+            if relief <= 0.0 {
+                for i in 0..n_ring {
+                    emit(hub, ring[i], ring[(i + 1) % n_ring]);
+                }
+                continue;
+            }
+
+            // **The relief ring is decimated; the boundary ring is not.** See [`RELIEF_STRIDE`]. `m`
+            // is at least 3 so the hub fan is still a surface, and never more than the boundary ring.
+            // Relief vertex `a` sits on boundary index `a * n_ring / m`, so segments differ in length
+            // by at most one and an indivisible `n_ring` needs no special case.
+            //
+            // At `m == n_ring` this reproduces the undecimated structure triangle for triangle, in
+            // the same order — **verified**, not asserted: `RELIEF_STRIDE = 1` with the flat-face
+            // branch above disabled reproduces the pre-change benchmark digest exactly. Note the
+            // caveat that makes that check non-obvious: stride 1 alone does *not*, because the
+            // flat-face branch is a second, independent reduction that fires whatever the stride is.
+            let m = (n_ring / RELIEF_STRIDE).clamp(3, n_ring);
+            let mid: Vec<Vec3> =
+                (0..m).map(|a| lift(centre.lerp(ring[a * n_ring / m], 0.5), 0.7)).collect();
+
+            // Watertight by construction, which is the property to check when reading this: every
+            // boundary edge `(ring[t], ring[t+1])` appears in exactly ONE cap triangle, so no
+            // T-junction is introduced against the skin's opening; every mid–mid edge appears in
+            // exactly one bridge and one hub triangle. Total emitted is `n_ring + 2m`, against
+            // `3 * n_ring` before.
+            for a in 0..m {
+                let next = (a + 1) % m;
+                let lo = a * n_ring / m;
+                let hi = (a + 1) * n_ring / m;
+                emit(hub, mid[a], mid[next]);
+                for t in lo..hi {
+                    emit(mid[a], ring[t % n_ring], ring[(t + 1) % n_ring]);
+                }
+                emit(mid[a], ring[hi % n_ring], mid[next]);
             }
         }
     }

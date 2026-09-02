@@ -100,7 +100,9 @@ let cut = CutSettings::new(
     0.15,        // stop cutting below this fraction of the subject's size
     0xC0FFEE,    // seed — same seed, same pieces, every run
 );
-let baked = fracture_mesh(&[(&body, Mat4::IDENTITY)], &proxy, &cut);
+// Tier A — the convex cells — exists for every node the instant this returns. The drawn meshes are
+// built for the nodes you ask for, which is why the accessors take `&mut`.
+let mut baked = fracture_mesh(&[(&body, Mat4::IDENTITY)], &proxy, &cut);
 
 assert_eq!(baked.frontier_of(3).len(), 3);   // one bake, read back as three pieces
 let pieces = baked.leaves();                 // ...or as all of them
@@ -164,7 +166,7 @@ The cost of that choice is the proxy itself: **you supply it.** See "What it del
 | `FractureProxy(Vec<ProxyCell>)` | `Component` | Your convex decomposition, subject-local. Required |
 | `DetachedPart` | `Component` | A subtree pruned out and baked as one intact chunk — a carried weapon, a hat |
 | `FractureSettings` | `Resource` | Twelve bake dials. `init_resource`d, so yours wins if inserted first |
-| `bake_fractures` | fn | The system itself, public only so it can be named in an ordering constraint |
+| `bake_fractures` / `materialise_fragments` | fn | The two systems, chained. Public so they can be named in an ordering constraint |
 
 ### Reading a bake back
 
@@ -176,6 +178,8 @@ The cost of that choice is the proxy itself: **you supply it.** See "What it del
 | `FractureCache::tree(source)` | The hierarchy itself: `FragmentTree`, `TreeNode`, `FragmentId` |
 | `FractureCache::bonds(source)` | The `BondGraph` for the finest frontier |
 | `FractureCache::detached_chunk(source)` / `is_baked(source)` | The pruned part; whether the bake has happened |
+| `FractureCache::solids(source)` | Tier A for **every** node — the convex cells, present the instant the bake finishes |
+| `FractureCache::request(source, ids)` / `ready(source, ids)` | Ask for a frontier's drawn meshes a frame ahead; check they arrived |
 | `Fragment` | `id`, two mesh handles, the convex `cell`, `center_local`, `half_extents` |
 
 ### Where the blow landed
@@ -199,7 +203,7 @@ Each query returns a `Reach` — a severity in `[0, 1]` per bond — and **you**
 | item | what it is for |
 |---|---|
 | `fracture_mesh(parts, proxy, &CutSettings)` | The whole pipeline. Meshes in, `Fracture` out |
-| `Fracture` | `fragments` + `tree` + `bonds`, with `leaves()`, `frontier_of()`, `at_depth()` |
+| `Fracture` | `solids()` + `tree` + `bonds`, with `leaves()`, `frontier_of()`, `at_depth()` (all `&mut`: Tier B is built on request) |
 | `CutSettings` | The geometry dials for one bake, without the ECS sizing policy |
 | `ProxyCell` | One convex cell. `from_box`, `points()` (→ your collider), `volume()` (→ mass) |
 | `audit_proxy` / `audit_render` / `SolidAudit` / `SurfaceReport` | Measure what the fracture produced |

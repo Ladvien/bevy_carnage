@@ -39,6 +39,7 @@ use bevy::pbr::decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialE
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
+use crate::pool::Pool;
 use crate::soup::hash_f32;
 use crate::spatter::Stain;
 
@@ -210,6 +211,54 @@ pub fn spawn_stain(
                 .with_scale(Vec3::splat(stain.radius * 2.0)),
         ))
         .id()
+}
+
+/// Marks a pool decal and remembers which pool it draws — an index into the caller's pool list.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolDecal(pub usize);
+
+/// Spawn one [`Pool`] as a forward decal.
+///
+/// Differs from [`spawn_stain`] in exactly two ways, and both are deliberate: it lifts by `1.5 mm`
+/// rather than `2 mm`, so a slick sits *under* the finer stains that seeded it instead of z-fighting
+/// them; and it carries [`PoolDecal`] so [`update_pool_decals`] can keep its scale in step as the
+/// pool grows. A stain never changes size, so it needs no tag.
+///
+/// Everything else is [`spawn_stain`]'s path verbatim — including **no `Mesh3d`**, because
+/// `ForwardDecal`'s `on_add` hook supplies the 1×1 rectangle only while the handle is still
+/// defaulted. The camera must carry `DepthPrepass`; see the module docs for why this cannot fix that.
+pub fn spawn_pool(commands: &mut Commands, splats: &SplatTextures, index: usize, pool: &Pool) -> Entity {
+    // `material_for` keys on a stain's seed; a pool carries the seed of the stain that formed it, so
+    // the two agree about which splat variant this patch of floor wears.
+    let as_stain = Stain { at: pool.at, radius: pool.radius, seed: pool.seed };
+    commands
+        .spawn((
+            ForwardDecal,
+            MeshMaterial3d(splats.material_for(&as_stain)),
+            Transform::from_translation(pool.at + Vec3::Y * 0.0015)
+                .with_scale(Vec3::splat(pool.radius * 2.0)),
+            PoolDecal(index),
+        ))
+        .id()
+}
+
+/// Refresh every pool decal's scale from its pool's current radius — **diameter**, because the hook's
+/// mesh is 1×1.
+///
+/// Takes an iterator rather than a `Query` so it serves both a normal system (`q.iter_mut()`) and an
+/// exclusive one (`world.query::<…>().iter_mut(world)`); the examples drive their whole frame from an
+/// exclusive system and could not call it otherwise.
+///
+/// An index past the end of `pools` is skipped rather than panicking, which is this crate's standing
+/// rule for a resolved id: a decal left over from a cleared pool list must not take the process down.
+pub fn update_pool_decals<'a>(
+    pools: &[Pool],
+    decals: impl Iterator<Item = (&'a PoolDecal, Mut<'a, Transform>)>,
+) {
+    for (tag, mut transform) in decals {
+        let Some(pool) = pools.get(tag.0) else { continue };
+        transform.scale = Vec3::splat(pool.radius * 2.0);
+    }
 }
 
 #[cfg(test)]

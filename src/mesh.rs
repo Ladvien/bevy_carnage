@@ -195,6 +195,26 @@ pub struct FragmentGeometry {
     pub half_extents: Vec3,
 }
 
+/// **Tier A for one node: the solid, with no drawn mesh.** Cheap to produce for every node of the
+/// tree, which is why it is separate from the geometry — a bake keeps one of these per node and
+/// builds the [`FragmentGeometry`] only for the ids a caller actually asks to draw.
+///
+/// **Deliberately carries no bounding box.** `center_local` and `half_extents` live on
+/// [`FragmentGeometry`] alone, because [`draw_piece`] bounds by the *drawn surface* when there is one
+/// and by the cell only when there is not — the two are different numbers, and a fragment whose
+/// centre depended on whether anyone had asked to draw it yet would be a determinism bug that moves
+/// with call order. Keeping the box on the materialised type makes that impossible to express.
+///
+/// A consumer needing bounds for an unmaterialised node must either materialise it or compute its own
+/// box from [`Self::cell`] — and must not compare that number against a materialised fragment's.
+pub struct FragmentSolid {
+    /// Which node of the [`FragmentTree`](crate::FragmentTree) this is, equal to its own index.
+    pub id: FragmentId,
+    /// **The fragment as a solid.** One convex cell — the collider, and the only tier any
+    /// watertightness verdict is asserted on.
+    pub cell: ProxyCell,
+}
+
 /// Recentred meshes for a soup that was never fractured — the detached part.
 ///
 /// **A separate type from [`FragmentGeometry`], deliberately.** A detached part is an *intact chunk*:
@@ -578,13 +598,9 @@ pub fn fracture_mesh(parts: &[(&Mesh, Mat4)], proxy: &[ProxyCell], cut: &CutSett
     let (pieces, tree, ejected) = fracture(soup, proxy, cut);
     let bonds = bond_graph(&pieces, &tree);
 
-    let fragments = pieces
-        .into_iter()
-        .enumerate()
-        .map(|(i, p)| geometry_from_piece(FragmentId(i as u32), p))
-        .collect();
+    // `bond_graph` reads the pieces' cells and must run before they are handed to `Fracture::new`.
     let ejecta = ejected.into_iter().map(ejecta_from_piece).collect();
-    Fracture { fragments, tree, bonds, ejecta }
+    Fracture::new(pieces, tree, bonds, ejecta)
 }
 
 /// Match up which of a bake's finest fragments share a face.
@@ -600,16 +616,37 @@ pub(crate) fn bond_graph(pieces: &[crate::soup::Piece], tree: &FragmentTree) -> 
     BondGraph::of(&members, tree.len())
 }
 
-/// **One bake: every fragment the cut loop produced, plus the hierarchy that says how they nest.**
+/// **One bake: every node the cut loop produced as a solid, plus the hierarchy that says how they
+/// nest — and the drawn meshes for the nodes somebody actually asked for.**
 ///
-/// `fragments` is index-parallel with `tree` — `fragments[id.index()]` is the payload of
-/// `tree.node(id)` — so a frontier query returns ids that index straight into it. Spawn a frontier,
-/// never the whole array: the array holds interior pieces too, and spawning both a parent and its
-/// children would put the same volume in the scene twice.
+/// # Two stages, because the second one is the expensive one
+///
+/// Tier A (the convex [`FragmentSolid`]) exists for every node the instant the bake finishes. Tier B
+/// (the drawn skin and cut face) is built **on request**, by the accessors below, and cached.
+///
+/// That split is worth stating a reason for, because the eager version was simpler. A fracture tree
+/// keeps every piece the cut loop split, so for `R` root cells and `T` leaves it holds `2T − R`
+/// nodes; the interior ones are the upper levels of the tree and nobody draws them unless a coarse
+/// frontier is asked for. Measured on the pinned benchmark subject: `nodes=43 leaves=34 interior=9`,
+/// with the 9 interior nodes carrying **26 %** of the render payload and **16 %** of the bake, because
+/// [`soften`](crate::soup::soften) subdivides, welds, relaxes twice and re-derives normals, all scaled
+/// by the triangle count it is handed.
+///
+/// **Leaves-only would have been wrong**, which is why this is by-request rather than by-kind:
+/// [`FragmentTree::frontier_of`](crate::FragmentTree::frontier_of) and
+/// [`at_depth`](crate::FragmentTree::at_depth) legitimately return interior ids — that is the
+/// crate's one-bake-every-granularity promise — so a coarse blow must still get meshes.
+///
+/// The accessors therefore take `&mut self`. Materialising is idempotent and its result is cached, so
+/// asking twice costs once.
 #[derive(Default)]
 pub struct Fracture {
-    /// Every node's geometry, in [`FragmentId`] order. Interior nodes included.
-    pub fragments: Vec<FragmentGeometry>,
+    /// Tier A for every node, in [`FragmentId`] order. Always complete.
+    solids: Vec<FragmentSolid>,
+    /// Unmaterialised Tier B, index-parallel with `solids`. `None` once taken.
+    pending: Vec<Option<crate::soup::Piece>>,
+    /// Materialised Tier B, index-parallel with `solids`. `None` until asked for.
+    built: Vec<Option<FragmentGeometry>>,
     /// Which fragments nest inside which, and the frontier queries that read it.
     pub tree: FragmentTree,
     /// Which fragments *touch* which, over the finest frontier. Nesting and neighbouring are
@@ -618,34 +655,83 @@ pub struct Fracture {
     /// **What the bores pushed out**, if any — the plugs, as spawnable chunks. Empty for a bake with
     /// no [`bores`](crate::CutSettings::bores).
     ///
-    /// Deliberately *not* in `fragments` and not in `tree`: these are debris that left the subject, so
-    /// no frontier query can return one and nothing can bond one back into the hole it came from.
-    /// Spawn them once, at the moment the bake happens. See [`Ejecta`].
+    /// Deliberately *not* a tree node: these are debris that left the subject, so no frontier query
+    /// can return one and nothing can bond one back into the hole it came from. Built eagerly,
+    /// because unlike a fragment a plug has exactly one moment it can be spawned — the bake — so
+    /// deferring it would defer it forever. See [`Ejecta`].
     pub ejecta: Vec<Ejecta>,
 }
 
 impl Fracture {
+    /// Assemble a bake from the cut loop's output. Tier A for every piece, Tier B for none.
+    pub(crate) fn new(
+        pieces: Vec<crate::soup::Piece>,
+        tree: FragmentTree,
+        bonds: BondGraph,
+        ejecta: Vec<Ejecta>,
+    ) -> Self {
+        let solids = pieces
+            .iter()
+            .enumerate()
+            .map(|(i, p)| FragmentSolid { id: FragmentId(i as u32), cell: p.cell.clone() })
+            .collect();
+        let built = pieces.iter().map(|_| None).collect();
+        Fracture { solids, pending: pieces.into_iter().map(Some).collect(), built, tree, bonds, ejecta }
+    }
+
+    /// **Tier A for every node**, materialised or not — the cells, which is what a collider, a volume
+    /// or a watertightness audit wants. Never needs a mesh built.
+    pub fn solids(&self) -> &[FragmentSolid] {
+        &self.solids
+    }
+
+    /// How many nodes this bake produced, interior included.
+    pub fn len(&self) -> usize {
+        self.solids.len()
+    }
+
+    /// Whether the bake produced no nodes at all — a refused or empty subject.
+    pub fn is_empty(&self) -> bool {
+        self.solids.is_empty()
+    }
+
+    /// Build Tier B for each id that has none yet. Idempotent; an out-of-range id is skipped.
+    fn materialise(&mut self, ids: &[FragmentId]) {
+        for id in ids {
+            let i = id.index();
+            if self.built.get(i).is_none_or(Option::is_some) {
+                continue; // out of range, or already built
+            }
+            let Some(piece) = self.pending.get_mut(i).and_then(Option::take) else { continue };
+            self.built[i] = Some(geometry_from_piece(*id, piece));
+        }
+    }
+
     /// The finest granularity — every piece that was never cut further. This is the set the crate
     /// returned before it kept a hierarchy.
-    pub fn leaves(&self) -> Vec<&FragmentGeometry> {
-        self.pick(&self.tree.leaves())
+    pub fn leaves(&mut self) -> Vec<&FragmentGeometry> {
+        let ids = self.tree.leaves();
+        self.pick(&ids)
     }
 
     /// The frontier holding roughly `count` pieces, clamped to what this bake can offer. **The
     /// granularity dial**: three big pieces for a cleaving blow, all of them for a blast.
-    pub fn frontier_of(&self, count: usize) -> Vec<&FragmentGeometry> {
-        self.pick(&self.tree.frontier_of(count))
+    pub fn frontier_of(&mut self, count: usize) -> Vec<&FragmentGeometry> {
+        let ids = self.tree.frontier_of(count);
+        self.pick(&ids)
     }
 
     /// The frontier at most `depth` cuts from the caller's proxy cells.
-    pub fn at_depth(&self, depth: u16) -> Vec<&FragmentGeometry> {
-        self.pick(&self.tree.at_depth(depth))
+    pub fn at_depth(&mut self, depth: u16) -> Vec<&FragmentGeometry> {
+        let ids = self.tree.at_depth(depth);
+        self.pick(&ids)
     }
 
-    /// Resolve ids to payloads, skipping any that fall outside the array. Out of range is refused
-    /// rather than fatal — an id from a stale bake must not take the process down.
-    pub fn pick(&self, ids: &[FragmentId]) -> Vec<&FragmentGeometry> {
-        ids.iter().filter_map(|id| self.fragments.get(id.index())).collect()
+    /// Resolve ids to payloads, building any that are not drawn yet. An id outside the array is
+    /// skipped rather than fatal — an id from a stale bake must not take the process down.
+    pub fn pick(&mut self, ids: &[FragmentId]) -> Vec<&FragmentGeometry> {
+        self.materialise(ids);
+        ids.iter().filter_map(|id| self.built.get(id.index()).and_then(Option::as_ref)).collect()
     }
 
     /// [`leaves`](Self::leaves), consuming the bake — for a caller that needs to own the meshes.
@@ -669,14 +755,15 @@ impl Fracture {
     /// [`pick`](Self::pick), consuming the bake. Returns the kept fragments in [`FragmentId`] order
     /// regardless of the order `ids` arrived in, so the result reads the same whichever frontier
     /// query produced it.
-    pub fn into_pick(self, ids: &[FragmentId]) -> Vec<FragmentGeometry> {
-        let mut keep = vec![false; self.fragments.len()];
+    pub fn into_pick(mut self, ids: &[FragmentId]) -> Vec<FragmentGeometry> {
+        self.materialise(ids);
+        let mut keep = vec![false; self.built.len()];
         for id in ids {
             if let Some(slot) = keep.get_mut(id.index()) {
                 *slot = true;
             }
         }
-        self.fragments.into_iter().zip(keep).filter_map(|(f, k)| k.then_some(f)).collect()
+        self.built.into_iter().zip(keep).filter_map(|(f, k)| k.then_some(f).flatten()).collect()
     }
 }
 
@@ -794,7 +881,8 @@ mod tests {
     #[test]
     fn one_bake_answers_every_piece_count() {
         let cube = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
-        let baked = fracture_mesh(&[(&cube, Mat4::IDENTITY)], &cube_proxy(), &CutSettings::new(8, 0.05, 11));
+        let mut baked =
+            fracture_mesh(&[(&cube, Mat4::IDENTITY)], &cube_proxy(), &CutSettings::new(8, 0.05, 11));
         let finest = baked.leaves().len();
         assert!(finest >= 4, "expected a usable spread of granularities, got {finest}");
         for want in 1..=finest {
@@ -923,16 +1011,18 @@ mod tests {
         ];
         // Two pieces: the roots, uncut, so each fragment is exactly one box.
         let cut = CutSettings { soften: 0.0, cap_relief: 0.0, ..CutSettings::new(2, 0.9, 4) };
-        let baked = fracture_mesh(&parts, &proxy, &cut);
+        let mut baked = fracture_mesh(&parts, &proxy, &cut);
         let ids = baked.tree.frontier_of(2);
         assert_eq!(ids.len(), 2, "expected the two proxy cells, uncut");
 
-        for (id, want) in ids.iter().zip([6.0f32, 6.0 * 0.4 * 0.4]) {
-            let f = baked.fragments.get(id.index()).expect("a fragment per cell");
+        let drawn = baked.pick(&ids);
+        assert_eq!(drawn.len(), 2, "a fragment per cell");
+        for (f, want) in drawn.iter().zip([6.0f32, 6.0 * 0.4 * 0.4]) {
             let got = mesh_area(f.outer.as_ref()) + mesh_area(f.cap.as_ref());
             assert!(
                 (got - want).abs() < 1.0e-3,
-                "{id:?} drew {got} of its own {want} surface — the shared face went to the other cell"
+                "{:?} drew {got} of its own {want} surface — the shared face went to the other cell",
+                f.id
             );
         }
     }

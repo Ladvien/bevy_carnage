@@ -71,11 +71,26 @@ fn main() {
     let camera = Transform::from_xyz(1.30, 1.20, 1.75).looking_at(ORIGIN - Vec3::Y * 0.16, Vec3::Y);
     let Some(mut rec) = Recorder::new(WIDTH, HEIGHT, camera, &out) else { return };
 
+    // **`DepthPrepass` on the camera the recorder already spawned.** The pools this clip exists to
+    // show are forward decals now, and a forward decal without a prepass renders as an opaque quad or
+    // not at all — so they would be missing from the very frames that are the point.
+    // `Recorder::new` spawns exactly one `Camera3d` and gives it no prepass.
+    let cameras: Vec<Entity> =
+        rec.world().query_filtered::<Entity, With<Camera3d>>().iter(rec.world()).collect();
+    for entity in cameras {
+        rec.world().entity_mut(entity).insert(bevy::core_pipeline::prepass::DepthPrepass);
+    }
     light_and_floor(rec.world());
     let mut bores: Vec<Bore> = Vec::new();
     // Nothing has been thrown yet. The counter lives in the world so `spawn_gore` stays idempotent
     // across the four re-bakes this clip performs.
     rec.world().init_resource::<body::Thrown>();
+    rec.world().init_resource::<body::Pools>();
+    // **`build_splats` on `Startup`, without `CarnageVfxPlugin`.** `body::bleed` draws its slicks as
+    // the crate's forward decals now, and those need the four generated splat textures. Registered
+    // before `warm_up`, whose first pumped frame is what runs `Startup` — the same window
+    // `capture_carnage` relies on for the plugin's own two.
+    rec.app().main.add_systems(Startup, bevy_carnage::build_splats);
     rebake(&mut rec, &bores);
     rec.warm_up(4);
     // Added after the scene, so the frames before the first shot are perfectly still — the same
