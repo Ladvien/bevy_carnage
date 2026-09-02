@@ -7,7 +7,12 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/Ladvien/bevy_carnage"
 keywords = ["bevy", "gamedev", "gore", "fracture", "destruction"]
 categories = ["game-development", "graphics"]
-publish = false
+# **The six `docs/*.gif` are 10.4 MB of the crate's 11.9 MB, and crates.io's package limit is 10 MiB.**
+# GIFs do not gzip, so they cannot be squeezed under it — and a registry consumer wants the library, not
+# the clips. Excluded here and served from the mirror instead; `README.md`'s image links are absolute for
+# exactly this reason. `docs/DEMOS.md` stays in the package and its relative links resolve on the mirror,
+# where it is actually read.
+exclude = ["docs/*.gif"]
 
 [dependencies]
 # The umbrella with defaults off, matching `bevy_speech_bubbles`' precedent in the parent workspace.
@@ -76,10 +81,16 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 # `docs/isomesh-upstream-asks.md`. Still `no_std` with `libm` as its only dependency — and that is
 # checked in `Cargo.lock`, not by `tests/leaf.rs`, which only parses this manifest's text.
 #
-# **Pin to a rev that is pushed.** `aa82b0b69bfb5829b0e4f18a3c3934d3652e3040` is `refs/heads/main` on
-# GitHub, confirmed with `git ls-remote`. A git dependency cannot resolve a commit that exists on one
-# machine, and that cost a session once already.
-isomesh = { git = "https://github.com/Ladvien/isomesh", rev = "aa82b0b", default-features = false }
+# **The registry release, not the rev, because crates.io forbids a git dependency.** `0.0.10` is the
+# version the pinned `aa82b0b` already *declared* — the rev was "0.0.10 plus unreleased work" — and for
+# a `0.0.x` Cargo's caret range admits that one version alone, so this is still an exact, checksummed
+# pin. The extra work the rev carried (`validate::sealing`, `validate::mesh_hash`, `connectivity`,
+# `mass`) was **never adopted**: the used surface is exactly
+# `isomesh::validate::{check_determinism, validate_indexed}`, `isomesh::collider` and
+# `isomesh::weld::Welder`, all of which the paragraph above measured byte-identical between `22c3b35`
+# and `aa82b0b`. The frozen topology counts in this crate's tests are computed by that validator, so
+# the swap is proven by `cargo test -p bevy_carnage --all-features`, not assumed.
+isomesh = { version = "0.0.10", default-features = false }
 
 # **GPU blood, and it is optional for a reason the CI enforces.** `bevy_hanabi` compiles particle
 # effects to compute shaders, which means it drags in `bevy_render` and the whole GPU stack — exactly
