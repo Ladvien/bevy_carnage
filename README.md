@@ -8,7 +8,7 @@
 
 That is `examples/explode.rs` at its own 0.4× playback. The subject is intact, then it *is* its own fragments — the "break" is one despawn and a spawn, because the fracture was computed long before. **The red is not a colour choice, it is the whole idea:** every fragment comes back as two meshes, the subject's own surface and the faces this cut just created, so the inside can take a different material. Render both with the skin material and the same fragments stop looking broken and start looking disassembled.
 
-> **This repository is the source of truth.** Work is done here, verified here against this lockfile, and pushed here; [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop) is an ordinary consumer that depends on the crate as a git dependency pinned to a rev. Two earlier arrangements are recorded in `BACKLOG.md` because each cost a session, and neither is live — at one point the crate was vendored into that monorepo as a workspace member with this repository re-derived by `git subtree split`, and an earlier revision of this banner asserted that arrangement as permanent. **The stale-read hazard it named is real in either direction:** a `subtree split` carries only *commits*, so anything living uncommitted in a working tree cannot arrive on the far side at all — which is exactly how a research agent once read a copy, found no `isomesh` and no audit harness, and reported both as missing when both existed. Read the tree you are about to change, not a copy of it.
+> **This repository is a mirror; [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop) is the source of truth.** The crate is vendored there as a workspace member at `crates/bevy_carnage/`, developed and verified there against that lockfile, and this repository is re-derived from it by `git subtree split`. The flow is one-way and has exactly three stops: **monorepo → this mirror → crates.io**. An earlier revision of this banner claimed the arrow pointed the other way — it did, between 2026-08-16 and 2026-09-01, and `BACKLOG.md` records why it was reversed: the crate was pinned by rev in the game, so every fix meant a sibling clone, a push and a rev bump, which is not a way to do sustained work. **The stale-read hazard that arrangement named is still real:** a `subtree split` carries only *commits*, so anything sitting uncommitted in the monorepo's working tree cannot arrive here.
 
 ## Features
 
@@ -30,11 +30,9 @@ That is `examples/explode.rs` at its own 0.4× playback. The subject is intact, 
 
 ## Install
 
-Not on crates.io (`publish = false`). Depend on it by git, pinned to a rev:
-
 ```toml
 [dependencies]
-bevy_carnage = { git = "https://github.com/Ladvien/bevy_carnage", rev = "..." }
+bevy_carnage = "0.1"
 ```
 
 Requires **Bevy 0.19** and a Rust toolchain with **edition 2024**.
@@ -278,7 +276,7 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**0.1.0, pre-release, and not published to crates.io.** It is used in one shipping game, which consumes it by rev.
+**`0.1.0`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
 
 | area | state |
 |---|---|
@@ -288,7 +286,7 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 | Skinned meshes | Bind pose only — see above |
 | Cross-architecture reproducibility | Not claimed |
 
-The API is **not** stable before 0.2. Pin a rev.
+The API is **not** stable before 0.2. `0.1` pins it exactly enough — Cargo's caret range on a `0.x` admits `0.1.z` only, so a breaking change arrives as `0.2` and never by surprise.
 
 Known limitations are listed under "What it deliberately does not do" rather than hidden; `BACKLOG.md` carries the reasoning behind each decision, including the predictions that turned out wrong.
 

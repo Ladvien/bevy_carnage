@@ -1,6 +1,9 @@
 [package]
 name = "bevy_carnage"
-version = "0.1.0"
+# `0.1.1` is documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
+# tells a reader on crates.io that the crate is "not on crates.io". A published version cannot be
+# amended, so the correction ships as a patch release. No code changed between the two.
+version = "0.1.1"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
@@ -43,18 +46,19 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 # `[f32; 3]`, so it cannot collide with the `glam` version Bevy 0.19 pins. That last property is why
 # this is a dependency at all rather than a vendored copy.
 #
-# **Pinned to a `rev`, and that is not caution — it is the same rule as `hash_f32`.** isomesh is under
+# **Pinned exactly, and that is not caution — it is the same rule as `hash_f32`.** isomesh is under
 # active development in a sibling repo. An unpinned dependency whose welder or validator moved between
 # builds would move this crate's *reported* topology between builds, which is the same class of bug
 # `seed_from_path` and the canonical soup order exist to prevent. Bump it deliberately, in a commit that
-# re-blesses the locked topology counts, or not at all.
+# re-blesses the locked topology counts, or not at all. For a `0.0.x` Cargo's caret range admits one
+# version and nothing else, so `version = "0.0.10"` is as exact as the `rev` it replaced — and it is
+# checksummed in `Cargo.lock`, which a git rev is not.
 #
-# **A git rev rather than the registry, deliberately, now that there is a choice.** isomesh publishes:
-# `0.0.10` went to crates.io on 2026-08-27, and for a `0.0.x` Cargo's caret range admits that version
-# alone, so `isomesh = "0.0.10"` would be an exact, checksummed pin. The rev is kept anyway because
-# `origin/main` carries `isomesh::mass` — divergence-theorem volume, centre of mass, inertia and an
-# `asymmetry` leak detector — which is in no published release, and because a bump has to be re-read
-# against a *tree* either way. Revisit when the registry catches up.
+# **The registry release rather than a git rev, because this crate publishes.** crates.io rejects a
+# package with a git dependency outright, so the rev could not survive the move. `0.0.10` went to
+# crates.io on 2026-08-27 and is the version `aa82b0b` already declared; what `origin/main` carried
+# beyond it — `isomesh::mass`, the divergence-theorem volume/inertia/`asymmetry` work — was never
+# adopted here, so nothing this crate calls went with the rev. Revisit only to bump.
 #
 # **Bumped twice.**
 #
