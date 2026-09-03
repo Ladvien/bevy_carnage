@@ -101,7 +101,8 @@ fn setup(world: &mut World) {
 
     world.spawn((
         Text::new(
-            "arrows / WASD  aim\n             1 projectile   2 slash   3 blade   4 blast   5 pull\n             R reset",
+            "every chunk thrown drags its own strand of blood, left where it was emitted\n\
+             \n             arrows / WASD  aim\n             1 projectile   2 slash   3 blade   4 blast   5 pull\n             R reset",
         ),
         TextFont { font_size: FontSize::Px(15.0), ..default() },
         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),

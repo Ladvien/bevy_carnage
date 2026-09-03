@@ -335,6 +335,23 @@ const RIBBON_RATE: f32 = 60.0;
 /// instance reserves its capacity inside a 65,536-particle slab, so 4096 would fit sixteen gibs.
 const RIBBON_CAPACITY: u32 = 64;
 
+/// **How wide a strand is at its head, metres**, tapering to zero at the tail.
+///
+/// **This is the strand's whole width, and `Attribute::SIZE` cannot set it.** Hanabi's
+/// [`SizeOverLifetimeModifier`] *assigns* rather than scales — its generated vertex code is
+/// `size = gradient(age / lifetime)` (`bevy_hanabi-0.19.0/src/modifier/output.rs:446`) — so a
+/// `SetAttributeModifier` on `SIZE` at init is dead code and the gradient's own values are the width
+/// in world units.
+///
+/// That is a trap this crate fell into: the gradient was `Vec3::ONE → Vec3::ZERO`, copied from
+/// `bevy_hanabi/examples/ribbon.rs`, whose scene is fifty units across — so every gib dragged a
+/// **one-metre-wide** sheet on a 1.8 m subject. Captured offscreen: each flying chunk read as a red
+/// fan the size of the torso, which is what "it doesn't look like organic carnage at all" was.
+///
+/// 12 mm is a thread of blood at human scale — about a finger's width, an order of magnitude under
+/// the 0.14 m half-depth of the torso the gibs come out of.
+const RIBBON_WIDTH: f32 = 0.012;
+
 /// **The blood ribbon a flying gib drags behind it.** One connected strand per instance, left in world
 /// space, thinning and darkening over [`RIBBON_LIFETIME`].
 ///
@@ -376,7 +393,6 @@ pub fn gib_ribbon() -> EffectAsset {
     let init_age = SetAttributeModifier::new(Attribute::AGE, writer.lit(0.0).expr());
     let init_lifetime =
         SetAttributeModifier::new(Attribute::LIFETIME, writer.lit(RIBBON_LIFETIME).expr());
-    let init_size = SetAttributeModifier::new(Attribute::SIZE, writer.lit(0.045).expr());
     let init_ribbon_id = SetAttributeModifier::new(Attribute::RIBBON_ID, writer.lit(0u32).expr());
 
     EffectAsset::new(RIBBON_CAPACITY, SpawnerSettings::rate(RIBBON_RATE.into()), writer.finish())
@@ -393,10 +409,11 @@ pub fn gib_ribbon() -> EffectAsset {
         .init(init_pos)
         .init(init_age)
         .init(init_lifetime)
-        .init(init_size)
         .init(init_ribbon_id)
+        // **The width, absolutely, because this modifier assigns rather than scales** — hence no
+        // `SIZE` init above; one would be dead code. See [`RIBBON_WIDTH`].
         .render(SizeOverLifetimeModifier {
-            gradient: Gradient::linear(Vec3::ONE, Vec3::ZERO),
+            gradient: Gradient::linear(Vec3::splat(RIBBON_WIDTH), Vec3::ZERO),
             ..default()
         })
         // Darkens and fades rather than turning blue like the upstream demo — this is blood, and the
