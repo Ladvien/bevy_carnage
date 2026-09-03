@@ -100,6 +100,18 @@ pub(crate) enum FaceKind {
     Cut,
     /// A bore's barrel or pit floor. Drawn with the interior material, never crumpled.
     Bore,
+    /// **A cut face on the tension side of a bend.** Drawn with the interior material and crumpled at
+    /// **half** `cap_relief`.
+    ///
+    /// Measured, not stylised: Isa et al. (`doi:10.1016/j.forsciint.2021.110899`) describe the two
+    /// faces of a butterfly fracture as visibly different — flat and billowy where the bone was in
+    /// tension, jagged angular peaks where it was in compression. A single relief value for both is
+    /// the thing that makes every fracture face read the same, so the two are separated here rather
+    /// than in a shader.
+    Tension,
+    /// **A cut face on the compression side of a bend.** Crumpled at **double** `cap_relief` — the
+    /// jagged half of the pair above.
+    Compression,
 }
 
 /// A convex cell of the caller-supplied proxy: the volume Tier A actually cuts.
@@ -444,8 +456,18 @@ impl ProxyCell {
                 continue;
             }
             let Some((origin, n)) = self.face_plane(fi) else { continue };
-            // A bore wall is emitted flat; see `FaceKind::Bore` for the measurement.
-            let relief = if self.face_kind[fi] == FaceKind::Bore { 0.0 } else { relief };
+            // **Relief is per face kind, and the three multipliers are measured rather than styled.**
+            // A bore wall is emitted flat (see `FaceKind::Bore` for that measurement). A bend's two
+            // faces differ: flat and billowy in tension, jagged angular peaks in compression (Isa et
+            // al., `doi:10.1016/j.forsciint.2021.110899`), so tension takes half the authored relief
+            // and compression takes double. An ordinary `Cut` face takes it as authored, which is why
+            // every existing bake is unmoved.
+            let relief = match self.face_kind[fi] {
+                FaceKind::Bore => 0.0,
+                FaceKind::Tension => relief * 0.5,
+                FaceKind::Compression => relief * 2.0,
+                FaceKind::Cut | FaceKind::Supplied => relief,
+            };
             let ring: Vec<Vec3> = f.iter().map(|&v| self.verts[v as usize]).collect();
             let ring = weave_seam(&ring, n, origin, seam);
             let (bu, bv) = plane_basis(n);

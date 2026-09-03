@@ -1,9 +1,16 @@
 [package]
 name = "bevy_carnage"
-# `0.1.1` is documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
-# tells a reader on crates.io that the crate is "not on crates.io". A published version cannot be
-# amended, so the correction ships as a patch release. No code changed between the two.
-version = "0.1.1"
+# **`0.2.0` breaks the API deliberately, and the break is a de-duplication rather than a rename.** The
+# whole blood model — the Comiskey spatter, the pools, the bleed schedule, `hash_f32` and `WoundKind` —
+# moved out to `bloodstain`, which is engine-free and has no math library in its public API. This crate
+# re-exports every moved name, so most callers see nothing; what does break is `Wounded` gaining a
+# `class`, `Wound::to_world` taking one, the blood dials moving under `CarnageSettings::blood`, and the
+# four baked splat variants being replaced by a stain silhouette derived from the impact.
+#
+# `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
+# told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
+# amended, so that correction shipped as a patch release. No code changed between those two.
+version = "0.2.0"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
@@ -39,6 +46,21 @@ bevy = { version = "0.19.0", default-features = false, features = [
 # fragment counts. Optional because a caller that builds `FractureSettings` in code needs none of it.
 serde = { version = "1.0", features = ["derive"], optional = true }
 
+# **The blood model, carved out on 2026-09-02.** Everything about blood as a *material* — the
+# Carreau-Yasuda rheology and its Casson yield stress, the Comiskey percolation spatter, the stain
+# morphology, the six forensic pattern classes, the drying timeline, the pools, the bleed schedule,
+# `hash_f32` and `WoundKind` — lives there, because none of it needs Bevy and all of it is reusable.
+# This crate re-exports every moved name, so a caller's `use bevy_carnage::{Droplet, Stain, Pool}`
+# still resolves.
+#
+# **Admitted on exactly `isomesh`'s terms, which is why the boundary stays meaningful:** `no_std`, two
+# dependencies of its own (`libm` and an optional `serde`), and **no math library in its public API** —
+# every signature is `[f32; 3]`. The workspace resolves two `glam` versions, so a leaf naming either
+# could collide with a consumer naming the other; naming neither cannot. Conversion has one home,
+# `src/v3.rs`, and it is per wound rather than per vertex.
+#
+# Path *and* version, because `cargo publish` refuses a path-only dependency.
+bloodstain = { version = "0.1", path = "../bloodstain", default-features = false }
 # **The mesh validator.** This crate could always cut a mesh; it could never say whether what came out
 # was closed, manifold or consistently wound — `examples/fracture_cube.rs` says so in as many words.
 # `isomesh` is what answers that, and it is an unusually cheap thing to admit: `no_std`, exactly one
@@ -119,6 +141,19 @@ bevy_hanabi = { version = "0.19", default-features = false, features = ["3d"], o
 # `[dependencies]` only, deliberately.
 [dev-dependencies]
 bevy = { version = "0.19.0" }
+# **The flagship web demo's two siblings, and dev-only.**
+#
+# `examples/carnage_web.rs` is the one demo that shows all four crates in one frame — the bone
+# morphology, the blood pattern that fits it, the wetmap it lands on, the guts it opened — and it is
+# the reason the demo site is built from the monorepo rather than from this crate's own mirror: a
+# mirror contains this crate alone.
+#
+# **Dev-dependencies, so nothing here reaches a consumer's graph**, and `tests/leaf.rs` reads
+# `[dependencies]` only, deliberately, for exactly this kind of case. The direction is also the safe
+# one: both depend on `bloodstain`, neither depends on this crate, so there is no cycle.
+bevy_wetmap = { path = "../bevy_wetmap" }
+bevy_viscera = { path = "../bevy_viscera" }
+
 # **A RON parser, for one test and one reason.** `FractureSettings` is `deny_unknown_fields` with every
 # field required, so adding a dial breaks every authored file that enumerated the others — at load time,
 # which no compile catches. `a_config_written_before_ejecta_soften_still_loads` pins that against the
@@ -127,8 +162,24 @@ bevy = { version = "0.19.0" }
 # ratchet to `[dependencies]` for exactly this kind of case.
 ron = { version = "0.12" }
 
+# **The wasm demos' extra features.** Target-gated, so a native build resolves none of it.
+#
+# `web` is REQUIRED and not optional polish: without it `std::time::Instant::now()` compiles for
+# `wasm32-unknown-unknown` and then PANICS in the browser, because there is no such clock there.
+# `webgpu` takes precedence over the `webgl2` that Bevy's defaults always pull in
+# (`bevy_render-0.19.0/src/settings.rs` selects `Backends::BROWSER_WEBGPU` on wasm when both are on),
+# so these modules are WebGPU-only and `web/play.html` gates on an adapter before importing them.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+bevy = { version = "0.19", default-features = false, features = ["web", "webgpu"] }
+
 [features]
 default = ["serde", "vfx"]
+
+# **Forwarded, not duplicated.** The blood dials live in `bloodstain::BloodSettings` and are reached
+# through `CarnageSettings::blood`, so a caller that authors this crate's settings in RON needs the
+# leaf's derives too. One feature, one answer: there is no way to get a serialisable `CarnageSettings`
+# with a non-serialisable blood block.
+serde = ["dep:serde", "bloodstain/serde"]
 
 # **The GPU half.** Particle effects and stain decals: everything that renders and nothing that
 # decides. Gated so a headless harness can take the deterministic half alone — which is also what
@@ -151,3 +202,39 @@ vfx = [
 # list); on automatically under `debug_assertions`; and turned on explicitly by a test harness that
 # builds in release but still wants the check on. See `bake::sort_total_by_key_at`.
 strict-order = []
+
+# **The six examples that ARE the `vfx` half, declared so cargo skips them without it.**
+#
+# `required-features` is cargo's own mechanism for exactly this: these six demonstrate particles,
+# ribbons and stain decals, so with `vfx` off there is nothing for them to demonstrate and their
+# imports do not resolve. Before this, `cargo check --examples --no-default-features --features serde`
+# — which is the feature set `scripts/build_web.sh` builds the web demos under — failed on all six.
+#
+# **Not a shim, and the distinction matters:** the alternative would be `#[cfg(feature = "vfx")]`
+# scattered through six example bodies, which is two versions of each demo. This says the true thing
+# once, in the manifest, and the ten web demos below it build with `vfx` off because they were written
+# to.
+
+[[example]]
+name = "carnage"
+required-features = ["vfx"]
+
+[[example]]
+name = "capture_carnage"
+required-features = ["vfx"]
+
+[[example]]
+name = "pooling"
+required-features = ["vfx"]
+
+[[example]]
+name = "capture_pooling"
+required-features = ["vfx"]
+
+[[example]]
+name = "ribbons"
+required-features = ["vfx"]
+
+[[example]]
+name = "capture_ribbons"
+required-features = ["vfx"]

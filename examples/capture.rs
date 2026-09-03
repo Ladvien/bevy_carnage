@@ -37,7 +37,8 @@ use bevy_carnage::{CutSettings, FragmentGeometry, audit_proxy, fracture_mesh, ha
 
 mod common;
 use common::body;
-use common::{Recorder, arg, light_and_floor, material};
+use common::recorder::Recorder;
+use common::{arg, light_and_floor, material};
 
 /// Capture size. Small enough that 100 PNGs and the GIF built from them stay a reasonable thing to
 /// commit; large enough to see a cut face.

@@ -30,7 +30,8 @@ use std::time::Duration;
 
 mod common;
 use common::body::{self, Blow, Chunk, ORIGIN};
-use common::{Recorder, arg, light_and_floor};
+use common::recorder::Recorder;
+use common::{arg, light_and_floor};
 
 const WIDTH: u32 = 960;
 const HEIGHT: u32 = 680;

@@ -44,7 +44,7 @@ use bevy_hanabi::{
     SizeOverLifetimeModifier, SpawnerSettings,
 };
 
-use crate::spatter::{BACK_SPATTER_SPEED, FORWARD_SPATTER_SPEED, wound_seed};
+use bloodstain::{BACK_SPATTER_SPEED, FORWARD_SPATTER_SPEED, PatternClass, wound_seed};
 use crate::wound::{Wound, WoundKind};
 use crate::{CarnageSettings, Wounded};
 
@@ -186,8 +186,8 @@ impl BloodEffect {
         // **The same gravity the CPU spatter model flies its droplets under**, so a particle and the
         // stain it corresponds to agree about where blood goes. Two gravities would put the visible
         // spray and the deterministic stain in different places.
-        let gravity = AccelModifier::constant(&mut module, Vec3::NEG_Y * s.gravity);
-        let drag = LinearDragModifier::constant(&mut module, s.drag * self.drag_scale);
+        let gravity = AccelModifier::constant(&mut module, Vec3::NEG_Y * s.blood.gravity);
+        let drag = LinearDragModifier::constant(&mut module, s.blood.drag * self.drag_scale);
         let kill = KillAabbModifier::new(kill_center, kill_half);
 
         EffectAsset::new(s.effect_capacity, self.spawner, module)
@@ -257,7 +257,7 @@ pub fn mist_puff(s: &CarnageSettings) -> EffectAsset {
 /// while the camera looks away and resumes when it looks back would be visibly wrong the moment the
 /// camera came back to a corpse that had bled for no time at all.
 pub fn arterial_spurt(s: &CarnageSettings) -> EffectAsset {
-    let period = if s.spurt_bpm > 0.0 { 60.0 / s.spurt_bpm } else { 1.0 };
+    let period = if s.blood.spurt_bpm > 0.0 { 60.0 / s.blood.spurt_bpm } else { 1.0 };
     BloodEffect {
         name: "carnage:spurt",
         base_radius: 0.015,
@@ -435,11 +435,23 @@ impl Plugin for CarnageVfxPlugin {
             app.add_plugins(HanabiPlugin);
         }
         app.init_resource::<CarnageSettings>()
-            // **Both halves of the cosmetic layer, registered here.** The splat textures back
+            // **The message is registered beside the system that READS it.**
+            //
+            // `spawn_wound_effects` takes `MessageReader<Wounded>`, and in Bevy 0.19 a reader whose
+            // `Messages<T>` resource is absent does not skip — the system PANICS with "Parameter
+            // messages failed validation". Registering it only in `CarnagePlugin` meant any app that
+            // added the vfx half alone died on its first `Update`, which is four of this crate's own
+            // examples. `add_message` is guarded by `contains_resource`
+            // (`bevy_app-0.19.0/src/sub_app.rs:386`), so both plugins declaring it is idempotent
+            // rather than a double registration — and a plugin that registers a reader without its
+            // message is a plugin that only works next to another one.
+            .add_message::<Wounded>()
+            // **Both halves of the cosmetic layer, registered here.** The stain-mask cache backs
             // [`crate::spawn_stain`], so a caller that added this plugin and then had to remember a
             // second registration would get silently stain-free blood — which is exactly the failure
             // that put this line here.
-            .add_systems(Startup, (build_effects, crate::decal::build_splats))
+            .add_systems(Startup, build_effects)
+            .init_resource::<crate::decal::StainMasks>()
             .add_systems(
                 Update,
                 (
@@ -498,19 +510,39 @@ fn spawn_wound_effects(
             severity: w.severity,
             kind: w.kind,
         };
-        let count = crate::spatter::droplet_count(&wound, &settings);
+        // One conversion, at the boundary, per wound — `src/v3.rs` says why it lives there and
+        // nowhere else.
+        let mirror = crate::v3::wound(&wound);
+        let count = bloodstain::droplet_count(&mirror, &settings.blood);
         if count == 0 {
             continue;
         }
-        let seed = wound_seed(&wound);
+        let seed = wound_seed(&mirror);
         let rotation = Quat::from_rotation_arc(Vec3::Y, w.normal.normalize_or_zero());
         let transform = Transform { translation: w.at, rotation, scale: Vec3::ONE };
 
-        // A channel mists as well as sprays — that contrast is what makes a gunshot read differently
-        // from a cut, and it is the only place the wound kind changes what is drawn.
-        let handles: &[(&Handle<EffectAsset>, u32)] = match w.kind {
-            WoundKind::Severance => &[(&effects.spatter, count)],
-            WoundKind::Channel => &[(&effects.spatter, count), (&effects.mist, count / 2)],
+        // **Keyed on the PATTERN CLASS, not on what opened the wound.** `kind` says a severance or a
+        // bullet channel; `class` says impact spatter, an arterial arc, a cast-off line, expirated
+        // mist, a drip trail or a transfer smear — and it is the class that decides what the blood
+        // *does*, so it is the class that decides what is drawn. A channel still mists, because a
+        // gunshot's class carries that; before `0.2.0` the mist was welded to `kind` and an arterial
+        // severance and a cut looked identical.
+        let handles: &[(&Handle<EffectAsset>, u32)] = match w.class {
+            // The percolation cone. A channel additionally hangs mist where the round went through.
+            PatternClass::Impact => match w.kind {
+                WoundKind::Severance => &[(&effects.spatter, count)],
+                WoundKind::Channel => &[(&effects.spatter, count), (&effects.mist, count / 2)],
+            },
+            // One jet per systole: the spurt effect exists for exactly this and was previously
+            // reachable only by a caller wiring it by hand.
+            PatternClass::ArterialSpurt => &[(&effects.spurt, count)],
+            // Flung tangentially from a moving tip — a spray, without the mist a bore leaves.
+            PatternClass::CastOff => &[(&effects.spatter, count)],
+            // Air-driven and fine: mist is the whole of it.
+            PatternClass::Expirated => &[(&effects.mist, count)],
+            // Gravity-fed. Both are seeps at different rates, and the marks they leave are decals
+            // rather than particles — `bloodstain::patterns::{drip_trail, transfer}` return stains.
+            PatternClass::DripTrail | PatternClass::Transfer => &[(&effects.seep, count / 4)],
         };
         for (handle, n) in handles.iter().copied() {
             if n == 0 {
@@ -736,8 +768,8 @@ mod tests {
     #[test]
     fn the_spurt_period_matches_the_bleed_schedule() {
         let s = CarnageSettings::default();
-        let asset_period = 60.0 / s.spurt_bpm;
-        let schedule_period = crate::bleed::pulse_period(60, &s) as f32 / 60.0;
+        let asset_period = 60.0 / s.blood.spurt_bpm;
+        let schedule_period = bloodstain::pulse_period(60, &s.blood) as f32 / 60.0;
         assert!(
             (asset_period - schedule_period).abs() < 0.02,
             "the spurt asset pulses every {asset_period:.4}s but the schedule every \

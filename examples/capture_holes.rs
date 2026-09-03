@@ -26,7 +26,8 @@ use bevy::prelude::*;
 
 mod common;
 use common::body::{self, Chunk, ORIGIN, SHOTS};
-use common::{Recorder, arg, light_and_floor};
+use common::recorder::Recorder;
+use common::{arg, light_and_floor};
 use bevy_carnage::Bore;
 
 /// Capture size, matching the other recorders so the GIFs sit together on a page.
@@ -86,11 +87,10 @@ fn main() {
     // across the four re-bakes this clip performs.
     rec.world().init_resource::<body::Thrown>();
     rec.world().init_resource::<body::Pools>();
-    // **`build_splats` on `Startup`, without `CarnageVfxPlugin`.** `body::bleed` draws its slicks as
-    // the crate's forward decals now, and those need the four generated splat textures. Registered
-    // before `warm_up`, whose first pumped frame is what runs `Startup` — the same window
-    // `capture_carnage` relies on for the plugin's own two.
-    rec.app().main.add_systems(Startup, bevy_carnage::build_splats);
+    // **No splat setup, and none is needed.** `body::bleed` draws its slicks as the crate's forward
+    // decals, whose masks are now rasterised from each stain's own silhouette into a `StainMasks`
+    // cache — a `Default` resource `body::bleed` takes out of the world and puts back — so there is
+    // no `Startup` system to register before `warm_up` and no plugin to bring in for it.
     rebake(&mut rec, &bores);
     rec.warm_up(4);
     // Added after the scene, so the frames before the first shot are perfectly still — the same

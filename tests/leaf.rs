@@ -54,8 +54,18 @@ use std::path::{Path, PathBuf};
 /// readback would have needed a different answer here, however good its visuals were.
 ///
 /// Note what it is *not*, again: a source of truth about anything. Where blood *lands* is
-/// `spatter.rs`, on the CPU, from `hash_f32`, and it is available with `vfx` off entirely.
-const ALLOWED_DEPS: &[&str] = &["bevy", "serde", "isomesh", "bevy_hanabi"];
+/// `bloodstain`, on the CPU, from `hash_f32`, and it is available with `vfx` off entirely.
+///
+/// **`bloodstain` was added on 2026-09-02, and it is the easiest admission of the four** — because it
+/// is not an addition at all. It is *this crate's own blood model*, carved out: the Comiskey spatter,
+/// the pools, the bleed schedule, `hash_f32` and `WoundKind` all used to live in `src/`. Nothing new
+/// entered the tree; a boundary was drawn inside it.
+///
+/// It passes `isomesh`'s terms and for the same reasons: `no_std`, two dependencies of its own
+/// (`libm` and an optional `serde`), and **no math library in its public API** — every signature is
+/// `[f32; 3]`. That last property is the load-bearing one, and it is why the conversion has exactly
+/// one home, `src/v3.rs`.
+const ALLOWED_DEPS: &[&str] = &["bevy", "serde", "isomesh", "bevy_hanabi", "bloodstain"];
 
 /// Names that would mean the boundary has been crossed. The first three are crates; the rest are
 /// identifiers from the game this was extracted from, checked as substrings because re-introducing one

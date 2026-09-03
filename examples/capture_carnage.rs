@@ -51,17 +51,19 @@
 use std::time::Duration;
 
 use bevy::core_pipeline::prepass::DepthPrepass;
+use bevy::pbr::decal::ForwardDecalMaterial;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use bevy_carnage::{
-    Bleed, BondId, CarnagePlugin, CarnageSettings, CarnageVfxPlugin, FragmentId, SplatTextures,
-    Stain, Wound, WoundKind, Wounded, clotted, largest_cap, pulse_wound, spawn_stain, stains,
-    wound_of_channel, wounds_from_bonds,
+    Bleeding, BloodSettings, BondId, CarnagePlugin, CarnageSettings, CarnageVfxPlugin, FragmentId,
+    PatternClass, Stain, StainMasks, StainShape, Wound, WoundKind, Wounded, blood, flows,
+    largest_cap, pulse_wound, spawn_stain, wound_of_channel, wounds_from_bonds, yield_stress,
 };
 
 mod common;
 use common::body::{self, Blow, Chunk, ORIGIN};
-use common::{Recorder, arg, light_and_floor};
+use common::recorder::Recorder;
+use common::{arg, light_and_floor};
 
 /// Capture size, matching the other recorders so the GIFs sit together on a page.
 const WIDTH: u32 = 720;
@@ -167,9 +169,9 @@ impl Ledger {
             }
         };
         for s in &self.stains {
-            eat(s.at.x.to_bits());
-            eat(s.at.y.to_bits());
-            eat(s.at.z.to_bits());
+            eat(s.at[0].to_bits());
+            eat(s.at[1].to_bits());
+            eat(s.at[2].to_bits());
             eat(s.radius.to_bits());
             eat(s.seed);
         }
@@ -187,7 +189,10 @@ fn main() {
     let Some(mut rec) = Recorder::new_with(WIDTH, HEIGHT, camera, &out, |app| {
         // Before the plugins, so the plugin's own `init_resource` no-ops and these values win.
         app.insert_resource(CarnageSettings {
-            spatter_speed_scale: SPEED_SCALE,
+            blood: BloodSettings {
+                spatter_speed_scale: SPEED_SCALE,
+                ..BloodSettings::default()
+            },
             ..CarnageSettings::default()
         })
         .add_plugins((CarnagePlugin, CarnageVfxPlugin));
@@ -213,8 +218,9 @@ fn main() {
     light_and_floor(rec.world());
     let mut bores: Vec<bevy_carnage::Bore> = Vec::new();
     rebake(&mut rec, &bores);
-    // The plugins' own `Startup` systems — `build_effects` and `build_splats` — run on the first
-    // pumped frame, so the effect assets and splat textures exist before the first blow lands.
+    // The plugin's own `Startup` system — `build_effects` — runs on the first pumped frame, so the
+    // effect assets exist before the first blow lands. The stain masks need no such window: they
+    // rasterise on demand from each stain's own silhouette into a `Default` `StainMasks` cache.
     rec.warm_up(4);
 
     // Added after the scene, so the frames before the first blow are perfectly still — the ordering
@@ -313,12 +319,12 @@ fn open(rec: &mut Recorder, wounds: &[Wound], ledger: &mut Ledger) {
     let settings = rec.world().resource::<CarnageSettings>().clone();
     ledger.wounds += wounds.len();
 
-    let mut fresh: Vec<Stain> = Vec::new();
+    let mut fresh: Vec<(Stain, StainShape)> = Vec::new();
     for w in wounds {
-        let world_wound = Wound { at: ORIGIN + w.at, ..*w };
-        fresh.extend(stains(&world_wound, &settings, FLOOR_Y));
+        let world_wound = common::blood_wound(&Wound { at: ORIGIN + w.at, ..*w });
+        fresh.extend(common::stains_with_shapes(&world_wound, &settings.blood, FLOOR_Y));
     }
-    ledger.stains.extend(fresh.iter().copied());
+    ledger.stains.extend(fresh.iter().map(|(s, _)| *s));
 
     // The message the particle half reads. Written here rather than by the crate: the crate does not
     // decide when a wound happens.
@@ -330,6 +336,9 @@ fn open(rec: &mut Recorder, wounds: &[Wound], ledger: &mut Ledger) {
             area: w.area,
             severity: w.severity,
             kind: w.kind,
+            // Impact spatter: the opening a blow or a channel just made, thrown by the hit itself.
+            // The arterial case is `pulse`'s heartbeat path, never this one.
+            class: PatternClass::Impact,
         })
         .collect();
     rec.world().resource_mut::<Messages<Wounded>>().write_batch(announced);
@@ -343,24 +352,36 @@ fn open(rec: &mut Recorder, wounds: &[Wound], ledger: &mut Ledger) {
 /// unbounded number of decals on it is a different problem. The cap is generous enough that the last
 /// frame of the clip still has the first blow's blood on it, which is one of the things the GIF is
 /// checked for.
-fn stamp(rec: &mut Recorder, fresh: &[Stain]) {
+fn stamp(rec: &mut Recorder, fresh: &[(Stain, StainShape)]) {
     if fresh.is_empty() {
         return;
     }
-    let Some(splats) = rec.world().remove_resource::<SplatTextures>() else {
-        // Built by `CarnageVfxPlugin` on `Startup`, which has run by the time `warm_up` returns.
-        warn!("capture_carnage: no splat textures yet — a stain was computed but not drawn");
-        return;
-    };
+    // The mask cache, both asset stores and the `Commands` are all borrows of one `World`, so the
+    // cache comes out for the duration and goes back in afterwards.
+    let mut masks = rec.world().remove_resource::<StainMasks>().unwrap_or_default();
     let mut spawned = Vec::with_capacity(fresh.len());
-    {
-        let mut commands = rec.world().commands();
-        for stain in fresh {
-            spawned.push(spawn_stain(&mut commands, &splats, stain));
-        }
-    }
-    rec.world().flush();
-    rec.world().insert_resource(splats);
+    rec.world().resource_scope(|world: &mut World, mut images: Mut<Assets<Image>>| {
+        world.resource_scope(
+            |world: &mut World,
+             mut materials: Mut<Assets<ForwardDecalMaterial<StandardMaterial>>>| {
+                {
+                    let mut commands = world.commands();
+                    for (stain, shape) in fresh {
+                        spawned.push(spawn_stain(
+                            &mut commands,
+                            &mut masks,
+                            &mut images,
+                            &mut materials,
+                            stain,
+                            shape,
+                        ));
+                    }
+                }
+                world.flush();
+            },
+        );
+    });
+    rec.world().insert_resource(masks);
 
     let mut ring = rec.world().remove_resource::<StainRing>().unwrap_or_default();
     ring.0.extend(spawned);
@@ -387,7 +408,7 @@ struct ChunkWound(Wound);
 /// a plug: it was never part of the frontier and has no severance wound.
 fn attach_bleeds(rec: &mut Recorder, frame: u32) {
     let fresh: Vec<(Entity, Wound)> = {
-        let mut q = rec.world().query_filtered::<(Entity, &Chunk), Without<Bleed>>();
+        let mut q = rec.world().query_filtered::<(Entity, &Chunk), Without<Bleeding>>();
         let candidates: Vec<(Entity, Option<FragmentId>)> =
             q.iter(rec.world()).map(|(e, c)| (e, c.fragment)).collect();
         let baked = rec.world().resource::<body::Baked>();
@@ -412,7 +433,7 @@ fn attach_bleeds(rec: &mut Recorder, frame: u32) {
     for (entity, wound) in fresh {
         rec.world()
             .entity_mut(entity)
-            .insert((Bleed::new(frame, wound.area), ChunkWound(wound)));
+            .insert((Bleeding::new(frame, wound.area), ChunkWound(wound)));
     }
 }
 
@@ -424,44 +445,55 @@ fn attach_bleeds(rec: &mut Recorder, frame: u32) {
 /// arithmetic.
 fn pulse(rec: &mut Recorder, frame: u32, ledger: &mut Ledger) {
     let settings = rec.world().resource::<CarnageSettings>().clone();
-    let bleeding: Vec<(Entity, Bleed, Wound, GlobalTransform)> = {
-        let mut q = rec.world().query::<(Entity, &Bleed, &ChunkWound, &GlobalTransform)>();
+    let bleeding: Vec<(Entity, Bleeding, Wound, GlobalTransform)> = {
+        let mut q = rec.world().query::<(Entity, &Bleeding, &ChunkWound, &GlobalTransform)>();
         q.iter(rec.world()).map(|(e, b, w, x)| (e, *b, w.0, *x)).collect()
     };
     let mut clot = Vec::new();
     let mut announced: Vec<Wounded> = Vec::new();
-    let mut fresh: Vec<Stain> = Vec::new();
+    let mut fresh: Vec<(Stain, StainShape)> = Vec::new();
     for (entity, bleed, wound, xf) in bleeding {
-        if clotted(&bleed, frame, HZ, &settings) {
+        // **The clot is now the same yield-stress crossing that arrests a rivulet on a wall.**
+        let age = bleed.0.age(frame);
+        let stopped = !flows(
+            blood::bleed::driving_stress(&bleed.0, frame, HZ, &settings.blood),
+            yield_stress(age, HZ, &settings.blood),
+        );
+        if stopped {
             clot.push(entity);
             continue;
         }
         // **The chunk's own cut face**, carried since it detached and rotated into world space by the
         // chunk's transform — so blood leaves the wound the way the wound faces, and a tumbling gib's
         // spray tumbles with it.
-        let Some(p) = pulse_wound(&bleed, &wound, frame, HZ, &settings) else { continue };
-        let out = p.to_world(&xf);
+        let local = common::blood_wound(&wound);
+        let Some(p) = pulse_wound(&bleed.0, &local, frame, HZ, &settings.blood) else { continue };
+        // A pulse scales the severity and nothing else, so what goes to world space is the chunk's
+        // own cut face at the pulse's severity.
+        // Arterial: thrown by the heartbeat, which is exactly the arterial case.
+        let out =
+            Wound { severity: p.severity, ..wound }.to_world(&xf, PatternClass::ArterialSpurt);
         announced.push(out);
-        let cpu = Wound {
+        let cpu = common::blood_wound(&Wound {
             at: out.at,
             normal: out.normal,
             area: out.area,
             severity: out.severity,
             kind: out.kind,
-        };
+        });
         ledger.wounds += 1;
-        fresh.extend(stains(&cpu, &settings, FLOOR_Y));
+        fresh.extend(common::stains_with_shapes(&cpu, &settings.blood, FLOOR_Y));
     }
-    // A clotted wound stops being a wound. Removing the component is what makes "once clotted, never
-    // again" true of the scene as well as of the arithmetic.
+    // A wound that has stopped stops being a wound. Removing the component is what makes "once
+    // clotted, never again" true of the scene as well as of the arithmetic.
     for entity in clot {
-        rec.world().entity_mut(entity).remove::<Bleed>();
+        rec.world().entity_mut(entity).remove::<Bleeding>();
         rec.world().entity_mut(entity).remove::<ChunkWound>();
     }
     if !announced.is_empty() {
         rec.world().resource_mut::<Messages<Wounded>>().write_batch(announced);
     }
-    ledger.stains.extend(fresh.iter().copied());
+    ledger.stains.extend(fresh.iter().map(|(s, _)| *s));
     stamp(rec, &fresh);
 }
 

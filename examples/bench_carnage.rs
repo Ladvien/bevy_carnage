@@ -52,9 +52,10 @@ use std::time::{Duration, Instant};
 use bevy::math::{Mat4, Vec3, primitives::Cuboid};
 use bevy::mesh::{Mesh, VertexAttributeValues};
 use bevy_carnage::{
-    Bleed, Bore, CarnageSettings, CutSettings, Droplet, Ejecta, FragmentGeometry, ProxyCell, Stain,
-    Wound, clotted, droplets, fracture_mesh, hash_f32 as unit, hitstop_ticks, pulse_wound, radial,
-    shake_offset, stains, trauma_for, wound_of_channel, wounds_from_reach,
+    Bleed, BloodSettings, Bore, CarnageSettings, CutSettings, Droplet, Ejecta, FragmentGeometry,
+    ProxyCell, Stain, Wound, blood, droplets, flows, fracture_mesh, hash_f32 as unit,
+    hitstop_ticks, pulse_wound, radial, shake_offset, stains, trauma_for, wound_of_channel,
+    wounds_from_reach, yield_stress,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -132,6 +133,22 @@ const SEVER_THRESHOLD: f32 = 0.35;
 /// for a real gunshot, absurd on a 1.8 m body, and it would throw every stain outside any floor.
 const SPATTER_SPEED_SCALE: f32 = 0.25;
 
+/// **This script's `Vec3` → `[f32; 3]` boundary**, and it has exactly one crossing.
+///
+/// `bloodstain` names no math library, so the blood model's public API is `[f32; 3]` while this
+/// crate's fracture and wound types are `glam`. The crate converts in one private module,
+/// `bevy_carnage::v3` — private on purpose, because it is an implementation detail of the facade
+/// rather than a promise — so a caller converts at its own boundary. This is that boundary.
+fn blood_wound(w: &Wound) -> blood::Wound {
+    blood::Wound {
+        at: [w.at.x, w.at.y, w.at.z],
+        normal: [w.normal.x, w.normal.y, w.normal.z],
+        area: w.area,
+        severity: w.severity,
+        kind: w.kind,
+    }
+}
+
 
 // ---------------------------------------------------------------------------------------------
 // Observation. Two sinks over one script, so the timed pass and the hashed pass cannot diverge.
@@ -201,6 +218,19 @@ impl Digest {
         self.f32(v.z);
     }
 
+    /// **`bloodstain`'s vector, folded byte-for-byte the way [`Self::vec3`] folds `glam`'s.**
+    ///
+    /// The blood model's public API is `[f32; 3]` rather than `Vec3`, so a stain position and a
+    /// droplet direction arrive as arrays. Three `f32`s in `x, y, z` order is exactly what `vec3`
+    /// eats, so the digest below is the same number it was before the move — which is the only
+    /// acceptable outcome, since a printed benchmark digest that shifted on a refactor would say the
+    /// carnage changed when nothing did.
+    fn arr3(&mut self, v: [f32; 3]) {
+        self.f32(v[0]);
+        self.f32(v[1]);
+        self.f32(v[2]);
+    }
+
     /// Every vertex position a mesh carries, in buffer order, plus its triangle count.
     ///
     /// **Only the untimed pass does this.** Folding a few hundred thousand floats into a hash is real
@@ -242,12 +272,12 @@ impl Sink for Digest {
         self.u32(w.kind as u32);
     }
     fn stain(&mut self, s: &Stain) {
-        self.vec3(s.at);
+        self.arr3(s.at);
         self.f32(s.radius);
         self.u32(s.seed);
     }
     fn droplet(&mut self, d: &Droplet) {
-        self.vec3(d.dir);
+        self.arr3(d.dir);
         self.f32(d.speed);
         self.f32(d.diameter);
     }
@@ -388,7 +418,10 @@ impl Scene {
             offsets,
             proxy,
             settings: CarnageSettings {
-                spatter_speed_scale: SPATTER_SPEED_SCALE,
+                blood: BloodSettings {
+                    spatter_speed_scale: SPATTER_SPEED_SCALE,
+                    ..BloodSettings::default()
+                },
                 ..CarnageSettings::default()
             },
         }
@@ -476,7 +509,7 @@ impl Scene {
             counts.wounds += 1;
             sink.wound(&w);
             // The impact spatter: where this wound's first throw lands, solved in closed form.
-            for st in stains(&w, &self.settings, PLANE_Y) {
+            for st in stains(&blood_wound(&w), &self.settings.blood, PLANE_Y) {
                 counts.stains += 1;
                 sink.stain(&st);
             }
@@ -509,23 +542,35 @@ impl Scene {
             // returns a wound that wound's severity is already scaled by the flow curve — so one code
             // path serves the first arterial jet and the last seep.
             for (wound, bleed) in &live {
-                if let Some(pulsed) = pulse_wound(bleed, wound, tick, HZ, &self.settings) {
+                let local = blood_wound(wound);
+                if let Some(pulsed) = pulse_wound(bleed, &local, tick, HZ, &self.settings.blood) {
                     counts.pulses += 1;
-                    for d in droplets(&pulsed, &self.settings) {
+                    for d in droplets(&pulsed, &self.settings.blood) {
                         counts.droplets += 1;
                         sink.droplet(&d);
                     }
-                    for st in stains(&pulsed, &self.settings, PLANE_Y) {
+                    for st in stains(&pulsed, &self.settings.blood, PLANE_Y) {
                         counts.stains += 1;
                         sink.stain(&st);
                     }
-                    let trauma = trauma_for(&pulsed, &self.settings);
-                    sink.shake(shake_offset(trauma, pulsed.normal, tick, &self.settings));
+                    // A pulse scales the severity and nothing else, so the two feel numbers read the
+                    // wound's own `glam` form at that severity — the same floats, in the same order,
+                    // that the pulsed wound carried before the blood model moved out.
+                    let feel = Wound { severity: pulsed.severity, ..*wound };
+                    let trauma = trauma_for(&feel, &self.settings);
+                    sink.shake(shake_offset(trauma, feel.normal, tick, &self.settings));
                 }
             }
 
-            // Clotted is monotone once true, so a retain is a retire and never a resurrection.
-            live.retain(|(_, bleed)| !clotted(bleed, tick, HZ, &self.settings));
+            // **Cessation is one material predicate now**: the same yield-stress crossing that
+            // arrests a rivulet on a wall. Monotone once it fails, so a retain is a retire and never
+            // a resurrection.
+            live.retain(|(_, bleed)| {
+                flows(
+                    blood::bleed::driving_stress(bleed, tick, HZ, &self.settings.blood),
+                    yield_stress(bleed.age(tick), HZ, &self.settings.blood),
+                )
+            });
 
             tick_ms.push(ms(frame.elapsed()));
         }
@@ -564,7 +609,17 @@ impl Scene {
 /// is untouched and only the drawn surface moved. Setting the stride to 1 and disabling the flat-face
 /// branch reproduces the previous digest `0xb672df832d78b94c` exactly, which is how "no incidental
 /// drift" was established rather than assumed.
-const GOLDEN_DIGEST: u64 = 0xbf7e_2d88_1691_6a12;
+///
+/// The fourth is `0.2.0`'s cessation change, and it is the cleanest re-bless of the four. `clotted`
+/// — an integer comparison against `clot_ticks` — is gone, and a wound now stops when
+/// `rheo::flows` says the stress driving blood out of it no longer exceeds the blood's own yield
+/// stress. A falling driving stress meets a rising yield stress *inside* the taper, so every wound
+/// arrests slightly earlier. **The counts localise the change to that predicate and nothing else:**
+/// `fragments`, `ejecta`, `bonds`, `wounds`, `skin_tris`, `cap_tris` and `hitstop` are all
+/// byte-identical, so the fracture, the bond graph, the wound extraction and the feel curves are
+/// untouched — and `pulses` fell by 865, which is **exactly** the wound count. Every wound lost one
+/// heartbeat and no wound lost two. `droplets` and `stains` follow that one lost beat.
+const GOLDEN_DIGEST: u64 = 0xfc71_5deb_a0ea_5cf8;
 
 /// What the script is supposed to produce. Checked field by field so a failure names the thing that
 /// moved instead of just saying a hash did.
@@ -591,9 +646,9 @@ const GOLDEN_COUNTS: Counts = Counts {
     ejecta: 172,
     bonds: 1164,
     wounds: 865,
-    pulses: 8650,
-    droplets: 295_100,
-    stains: 331_990,
+    pulses: 7785,
+    droplets: 290_678,
+    stains: 327_568,
     skin_tris: 73_684,
     cap_tris: 106_721,
     hitstop: 1792,

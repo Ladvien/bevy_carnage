@@ -3,7 +3,6 @@
 
 mod audit;
 mod bake;
-mod bleed;
 mod bond;
 mod bore;
 #[cfg(feature = "vfx")]
@@ -11,12 +10,12 @@ mod decal;
 mod feel;
 mod mesh;
 mod order;
-mod pool;
+mod policy;
 mod proxy;
 mod severance;
 mod soup;
-mod spatter;
 mod tree;
+mod v3;
 #[cfg(feature = "vfx")]
 mod vfx;
 mod wound;
@@ -26,24 +25,20 @@ pub use bake::{
     DetachedChunk, DetachedPart, EjectaChunk, Fragment, FractureBores, FractureCache, FractureProxy,
     FractureSubject, bake_fractures, materialise_fragments,
 };
-pub use bleed::{Bleed, clotted, flow, pulse_period, pulse_wound, pulses_on};
 pub use bond::{Bond, BondGraph, BondId, BondSet};
 pub use bore::Bore;
 #[cfg(feature = "vfx")]
 pub use decal::{
-    PoolDecal, SPLAT_VARIANTS, SplatTextures, build_splats, spawn_pool, spawn_stain, splat_image,
-    update_pool_decals,
+    PoolDecal, StainMask, StainMasks, spawn_pool, spawn_stain, update_pool_decals,
 };
 pub use feel::{hitstop_ticks, shake_offset, trauma_for};
+pub use policy::coalesce_hitstop;
 pub use mesh::{Ejecta, Fracture, FragmentGeometry, FragmentSolid, fracture_mesh};
-pub use pool::{Pool, absorb, spread_pools};
+pub use policy::{
+    DecalBudget, FlashGate, GorePolicy, GoreTier, WCAG_FLASHES_PER_SECOND, occludes_aim,
+};
 pub use proxy::ProxyCell;
 pub use severance::{Reach, capsule, directional, radial, spread, swept_triangle};
-pub use soup::hash_f32;
-pub use spatter::{
-    BACK_SPATTER_SPEED, BLOOD_DENSITY, BLOOD_SURFACE_TENSION, Droplet, FORWARD_SPATTER_SPEED, Stain,
-    droplet, droplet_count, droplets, landing, stain_radius, stains, wound_seed,
-};
 pub use tree::{FragmentId, FragmentTree, TreeNode};
 #[cfg(feature = "vfx")]
 pub use vfx::{
@@ -51,11 +46,118 @@ pub use vfx::{
     RibbonInstance, arterial_spurt, gib_ribbon, mist_puff, spatter_burst, wound_seep,
 };
 pub use wound::{
-    CapFace, Wound, WoundKind, cap_faces, largest_cap, wound_from_ejecta, wound_of_channel,
-    wounds_from_bonds, wounds_from_reach,
+    CapFace, Wound, cap_faces, largest_cap, wound_from_ejecta, wound_of_channel, wounds_from_bonds,
+    wounds_from_reach,
 };
 
+/// **Everything the blood model moved to `bloodstain`, re-exported under the names it had here.**
+///
+/// The crate's public surface keeps them, so `use bevy_carnage::{Droplet, Stain, Pool, hash_f32}`
+/// resolves exactly as it did at `0.1.1`. What a caller gains is that every one of these is now
+/// usable **without Bevy** by depending on the leaf directly — and what nothing gains is a second
+/// home, because these are re-exports rather than wrappers.
+///
+/// `hash_f32` in particular had to keep both its name and its bits: the consuming game's
+/// `tests/rng_guard.rs` asserts its own `util::hash_f32` is bit-identical to this symbol.
+///
+/// **`Bleed` is a plain value here, not a `Component`.** The leaf has no ECS to derive one from, so
+/// the component is [`Bleeding`], a newtype over it — the same facade-newtype shape `bevy_stigmergy`
+/// and `bevy_light_grid` are reached through in this workspace's game.
+pub use bloodstain::{
+    Appearance, BACK_SPATTER_SPEED, BLOOD_DENSITY, BLOOD_SURFACE_TENSION, Bleed, BloodSettings,
+    Droplet, FORWARD_SPATTER_SPEED, Impact, PatternClass, Pool, Stain, StainShape, WELD, WoundKind,
+    absorb, appearance, area_of_origin, droplet, droplet_count, droplets, flow, flows, hash_f32,
+    landing, pick, pulse_period, pulse_wound, pulses_on, spread_pools, viscosity, wound_seed,
+    yield_stress,
+};
+pub use bloodstain::stain::{impact_at_plane, rasterise, stain_radius, stain_shape, stains};
+/// The blood model's own modules, re-exported so a caller can reach the parts that have no
+/// single-name entry point — `bevy_carnage::blood::patterns::cast_off`, `blood::rheo::flows`,
+/// `blood::dry::dry_ticks`. One path to each function, spelled the way the leaf spells it.
+pub use bloodstain as blood;
+
 use bevy::prelude::*;
+
+/// **How a subject was loaded when it broke.**
+///
+/// This is the distinction the fracture literature says its own methods lack, named. Sellán et al.,
+/// *Breaking Good: Fracture Modes for Realtime Destruction* (`doi:10.1145/3549540`, §6), note that
+/// their fault is *the same regardless of the directionality of the impact*, and name uniaxial
+/// tension, pure shear and torsion as the missing cases. That missing distinction is exactly the
+/// clinical one — a spiral fracture, a transverse fracture and a butterfly wedge are the same bone
+/// under three loads, and a player can tell them apart.
+///
+/// **Append-only**, like every other `#[repr(u32)]` in this family: the discriminant travels in
+/// authored data and in a genome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[repr(u32)]
+pub enum LoadingMode {
+    /// Twisted about its long axis. Cracks along a **helix**, because under torsion the tensile
+    /// stress is maximum in a plane at 45° to that axis and a material weaker in tension than in
+    /// shear follows it (Miyasaka et al., `doi:10.3233/BME-1991-1102`).
+    Torsion = 0,
+    /// Bent. Opens in **tension** on the convex face and can throw a butterfly wedge toward the
+    /// compression face (Isa et al., `doi:10.1016/j.forsciint.2021.110899`).
+    Bending = 1,
+    /// Loaded along its own axis. Fails across its narrowest cross-section, which is what the
+    /// weak-axis sample already produced.
+    Axial = 2,
+    /// Struck hard enough that no plane is preferred — comminution. The fragment count comes from
+    /// the energy rather than from an artist constant; see [`grady_mott_target`].
+    DirectHighEnergy = 3,
+}
+
+/// **What is breaking.** Cortical bone, trabecular bone, or soft tissue.
+///
+/// The three differ in the one property that decides what the debris looks like: strain to failure.
+/// Cortical bone fails at roughly 2 % strain and splinters into long thin fragments; trabecular bone
+/// tolerates around 30 % and *crushes* rather than shattering; soft tissue tears. So this is not a
+/// material name for flavour — it changes the fragment aspect ratio and the piece count.
+///
+/// **Append-only.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[repr(u32)]
+pub enum TissueClass {
+    /// Dense cortical bone. Splinters: long, thin, sharp.
+    Cortical = 0,
+    /// Cancellous/trabecular bone. Compacts: few pieces, no shards.
+    Trabecular = 1,
+    /// Soft tissue. What every bake before this enum existed behaved as.
+    Soft = 2,
+}
+
+/// **How the cut plane is chosen.** One policy with a parameter, not a switch between two engines.
+///
+/// [`FaultPolicy::WeakAxis`] is what this crate always did: sample a few candidate normals and keep
+/// the one the piece is longest along. [`FaultPolicy::Morphology`] adds the loading mode, and
+/// [`crate::soup::choose_plane`] matches on this **once** — there is no second entry point, no
+/// "legacy" branch, and no dial that selects between two implementations of the same thing.
+///
+/// `CutSettings::new` sets `WeakAxis`, which is why every frozen bake in this crate is unmoved by the
+/// existence of the other arm.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum FaultPolicy {
+    /// Cut across the narrowest cross-section. Direction-blind, and correct for an axial load.
+    WeakAxis,
+    /// Cut the way this loading mode and this tissue actually fail.
+    Morphology {
+        /// How it was loaded.
+        mode: LoadingMode,
+        /// What is breaking.
+        tissue: TissueClass,
+        /// The subject's long axis, subject-local. A torsional helix is measured against it, and a
+        /// bend's tension face is the side it points away from.
+        axis: Vec3,
+        /// Applied torque, N·m. Drives the helix pitch.
+        torque: f32,
+        /// Impulse delivered, N·s. Below [`FractureSettings::greenstick_impulse`] a bend produces a
+        /// **greenstick** — no fault at all, and a permanent bend instead.
+        impulse: f32,
+    },
+}
 
 /// **The geometry dials for one bake**, without the ECS sizing policy that chooses `target`.
 ///
@@ -154,6 +256,31 @@ pub struct CutSettings {
     /// before this field existed. See [`Bore`].
     #[cfg_attr(feature = "serde", serde(default))]
     pub bores: Vec<Bore>,
+    /// **How the cut plane is chosen** — see [`FaultPolicy`].
+    ///
+    /// Defaults to [`FaultPolicy::WeakAxis`] through [`CutSettings::new`], which is what every bake
+    /// this crate has ever produced already did, so the frozen fracture goldens are unmoved by this
+    /// field existing. A caller that knows how the blow arrived sets `Morphology` and gets the
+    /// clinical silhouette for it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub fault: FaultPolicy,
+    /// Degrees the helical fault rotates per successive cut under torsion — see
+    /// [`FractureSettings::spiral_pitch_deg`].
+    #[cfg_attr(feature = "serde", serde(default = "default_spiral_pitch_deg"))]
+    pub spiral_pitch_deg: f32,
+    /// Impulse below which a bend is a greenstick rather than a fault — see
+    /// [`FractureSettings::greenstick_impulse`].
+    #[cfg_attr(feature = "serde", serde(default = "default_greenstick_impulse"))]
+    pub greenstick_impulse: f32,
+    /// **What is breaking** — see [`TissueClass`]. Biases fragment shape and count.
+    ///
+    /// Read even under [`FaultPolicy::WeakAxis`]? **No.** The tissue bias is part of the morphology
+    /// policy and is read only there, because applying it under `WeakAxis` would move every existing
+    /// bake — and a dial that silently changes a frozen output is the thing this crate's goldens
+    /// exist to catch. `Morphology` carries its own `tissue`; this field is what a caller sets when
+    /// it wants the tissue *without* naming a loading mode, and `cut_for` copies it into the policy.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub tissue: TissueClass,
 }
 
 impl CutSettings {
@@ -173,6 +300,12 @@ impl CutSettings {
             ejecta_soften: d.ejecta_soften,
             seed,
             bores: Vec::new(),
+            // The values every bake before these fields existed behaved as. Stated rather than
+            // derived from `Default`, because the whole point is that they are the *old* behaviour.
+            fault: FaultPolicy::WeakAxis,
+            tissue: TissueClass::Soft,
+            spiral_pitch_deg: d.spiral_pitch_deg,
+            greenstick_impulse: d.greenstick_impulse,
         }
     }
 }
@@ -237,6 +370,33 @@ pub struct FractureSettings {
     /// dial added here from now on should do the same.
     #[cfg_attr(feature = "serde", serde(default = "default_ejecta_soften"))]
     pub ejecta_soften: f32,
+    /// **Degrees the helical fault rotates per successive cut under torsion.**
+    ///
+    /// A torsional fracture is a spiral, and a spiral is a sequence of planes each rotated a little
+    /// about the long axis. 30° over the handful of cuts a limb takes traces most of a half-turn,
+    /// which is what gives the long sharp ends a spiral fracture is recognised by.
+    #[cfg_attr(feature = "serde", serde(default = "default_spiral_pitch_deg"))]
+    pub spiral_pitch_deg: f32,
+    /// **Impulse below which a bend produces a greenstick instead of a fault**, N·s.
+    ///
+    /// Greenstick is not a loading mode, it is an *outcome*: the tension cortex opens, the far cortex
+    /// does not, and the bone stays permanently bent
+    /// (`doi:10.3390/jimaging11060187`). Below this, `choose_plane` returns **no plane at all** and
+    /// the caller gets one fragment plus [`Fracture::bent`].
+    #[cfg_attr(feature = "serde", serde(default = "default_greenstick_impulse"))]
+    pub greenstick_impulse: f32,
+    /// Fracture toughness of cortical bone, J/m² — the `G_c` of Grady's energy balance.
+    #[cfg_attr(feature = "serde", serde(default = "default_toughness_cortical"))]
+    pub toughness_cortical: f32,
+    /// Fracture toughness of trabecular bone, J/m². An order below cortical: it crushes.
+    #[cfg_attr(feature = "serde", serde(default = "default_toughness_trabecular"))]
+    pub toughness_trabecular: f32,
+    /// Fracture toughness of soft tissue, J/m². High, because flesh tears rather than shatters.
+    #[cfg_attr(feature = "serde", serde(default = "default_toughness_soft"))]
+    pub toughness_soft: f32,
+    /// Density used by Grady's fragment-size law, kg/m³. Bone is about 1900.
+    #[cfg_attr(feature = "serde", serde(default = "default_density_kg_m3"))]
+    pub density_kg_m3: f32,
 }
 
 /// The shipped [`FractureSettings::ejecta_soften`], for serde to reach when an authored file predates
@@ -244,6 +404,48 @@ pub struct FractureSettings {
 /// different look than one that never had it — pinned by `the_serde_default_matches_the_shipped_one`.
 fn default_ejecta_soften() -> f32 {
     0.55
+}
+
+/// Degrees of helix per successive torsional cut. See [`FractureSettings::spiral_pitch_deg`].
+fn default_spiral_pitch_deg() -> f32 {
+    30.0
+}
+/// N·s below which a bend is a greenstick. See [`FractureSettings::greenstick_impulse`].
+fn default_greenstick_impulse() -> f32 {
+    12.0
+}
+/// J/m². Cortical bone's fracture toughness, the low end of the measured range for transverse
+/// crack growth — the value that makes a rifle round comminute and a pistol round wedge.
+fn default_toughness_cortical() -> f32 {
+    2500.0
+}
+/// J/m². Trabecular bone, an order below cortical: it compacts rather than splitting.
+fn default_toughness_trabecular() -> f32 {
+    250.0
+}
+/// J/m². Soft tissue tears, so its toughness is high relative to the energies involved and the
+/// characteristic fragment size it implies is large — which is why flesh yields few pieces.
+fn default_toughness_soft() -> f32 {
+    9000.0
+}
+/// kg/m³. Cortical bone is about 1900; the same value serves the whole subject because Grady's law
+/// takes one density and a per-tissue density would be a second material model.
+fn default_density_kg_m3() -> f32 {
+    1900.0
+}
+
+impl Default for FaultPolicy {
+    /// [`FaultPolicy::WeakAxis`] — what every bake before this enum existed did.
+    fn default() -> Self {
+        FaultPolicy::WeakAxis
+    }
+}
+
+impl Default for TissueClass {
+    /// [`TissueClass::Soft`] — likewise.
+    fn default() -> Self {
+        TissueClass::Soft
+    }
 }
 
 impl Default for FractureSettings {
@@ -263,6 +465,12 @@ impl Default for FractureSettings {
             // **Rounded even when the body is not.** Debris shares a boundary with nothing, so the
             // constraint that forces `soften` to 0 on a bored subject does not reach it.
             ejecta_soften: 0.55,
+            spiral_pitch_deg: default_spiral_pitch_deg(),
+            greenstick_impulse: default_greenstick_impulse(),
+            toughness_cortical: default_toughness_cortical(),
+            toughness_trabecular: default_toughness_trabecular(),
+            toughness_soft: default_toughness_soft(),
+            density_kg_m3: default_density_kg_m3(),
         }
     }
 }
@@ -343,9 +551,108 @@ impl FractureSettings {
             ejecta_soften: self.ejecta_soften,
             seed,
             bores,
+            // A bake driven from the resource has no blow to describe, so it takes the
+            // direction-blind policy — the one every bake before `FaultPolicy` existed used. A
+            // caller that *does* know how the blow arrived builds the `CutSettings` itself and sets
+            // `Morphology`; there is deliberately no `cut_for_blow` beside this, because two entry
+            // points to one bake is how they drift.
+            fault: FaultPolicy::WeakAxis,
+            tissue: TissueClass::Soft,
+            spiral_pitch_deg: self.spiral_pitch_deg,
+            greenstick_impulse: self.greenstick_impulse,
         }
     }
 }
+
+/// **How many fragments an impact should produce, from the energy — not from an artist constant.**
+///
+/// # Grady's energy balance
+///
+/// Grady, *"Local inertial effects in dynamic fragmentation"* (`doi:10.1063/1.329934`), balances the
+/// local kinetic energy of an expanding fragment against the fracture energy needed to create its
+/// surface, and gets a **characteristic fragment size**
+///
+/// > `s = (24 · G_c / (ρ · ε̇²))^(1/3)`
+///
+/// where `G_c` is the fracture toughness (J/m²), `ρ` the density and `ε̇` the strain rate. The count
+/// is the subject's volume divided by `s³`. That is the whole of it: **a faster load makes smaller
+/// pieces**, cubically, which is why a rifle round comminutes a bone that a pistol round wedges.
+///
+/// # The energy ceiling, and why both arguments are read
+///
+/// Grady's size depends on the strain rate alone, so on its own it would let a gentle blow at a high
+/// rate produce a hundred fragments it has no energy to create. Creating `n` fragments of size `s`
+/// makes roughly `6 n s²` of new surface, and that surface costs `G_c` per unit area — so the energy
+/// actually delivered is a **hard ceiling** on the count, and this returns the smaller of the two.
+/// Both bounds are physics; neither is a fudge factor.
+///
+/// # What this does not do
+///
+/// It returns a **count**, not a size distribution. The *spread* of fragment volumes comes from
+/// [`CutSettings::plane_jitter`] and [`size_spread`](CutSettings::size_spread), and
+/// `audit::the_shape_dials_widen_the_fragment_size_spread` is what measures it against Mott's
+/// qualitative shape — many small, few large (`doi:10.1098/rspa.1947.0042`). So the two halves of
+/// "how does it break" are separate and each is measured where it lives.
+///
+/// # Tissue
+///
+/// The toughness comes from `tissue`, and the two bone classes differ by an order of magnitude:
+/// cortical bone splits, trabecular bone **compacts**. So a trabecular subject is clamped to at most
+/// [`TRABECULAR_MAX_PIECES`] pieces no matter how hard it is hit, because a crushed cancellous bone
+/// does not produce shards — it produces a shorter bone.
+///
+/// Non-finite or non-positive inputs return [`FractureSettings::min_pieces`]: a blow nobody described
+/// is not a reason to invent a fragment count.
+pub fn grady_mott_target(
+    volume_m3: f32,
+    energy_j: f32,
+    strain_rate: f32,
+    tissue: TissueClass,
+    s: &FractureSettings,
+) -> usize {
+    let lo = s.min_pieces.max(1) as usize;
+    let hi = s.max_pieces.max(s.min_pieces).max(1) as usize;
+    let toughness = match tissue {
+        TissueClass::Cortical => s.toughness_cortical,
+        TissueClass::Trabecular => s.toughness_trabecular,
+        TissueClass::Soft => s.toughness_soft,
+    };
+    let ok = [volume_m3, energy_j, strain_rate, toughness, s.density_kg_m3]
+        .iter()
+        .all(|v| v.is_finite() && *v > 0.0);
+    if !ok {
+        return lo;
+    }
+
+    // Grady's characteristic fragment size.
+    let size = (24.0 * toughness / (s.density_kg_m3 * strain_rate * strain_rate)).cbrt();
+    if !size.is_finite() || size <= 0.0 {
+        return lo;
+    }
+    let by_rate = volume_m3 / (size * size * size);
+
+    // The energy ceiling: `6 n s²` of new surface at `G_c` per unit area.
+    let per_fragment = 6.0 * size * size * toughness;
+    let by_energy = if per_fragment > 0.0 { energy_j / per_fragment } else { f32::INFINITY };
+
+    let n = by_rate.min(by_energy);
+    if !n.is_finite() {
+        return lo;
+    }
+    let ceiling = match tissue {
+        // Crush, not shatter: trabecular bone tolerates ~30 % strain and compacts.
+        TissueClass::Trabecular => hi.min(TRABECULAR_MAX_PIECES),
+        _ => hi,
+    };
+    (n.round().max(0.0) as usize).clamp(lo.min(ceiling), ceiling)
+}
+
+/// **Ceiling on the fragment count for trabecular bone.**
+///
+/// Cancellous bone tolerates roughly 30 % strain against cortical bone's 2 %, so it *compacts* under
+/// a blow rather than splitting: the failure reads as a shorter, denser bone, not as shards. Three is
+/// the count at which that still reads as a break rather than as a shatter.
+pub const TRABECULAR_MAX_PIECES: usize = 3;
 
 /// **The carnage dials** — how a wound bleeds, sprays, stains and hits, with nothing in it that
 /// decides *when* any of that happens.
@@ -363,77 +670,27 @@ impl FractureSettings {
 ///
 /// **Ticks, not seconds, wherever time appears.** Nothing in the deterministic half of this crate
 /// reads a clock; a caller supplies its own fixed-tick counter. The shipped tick counts are derived
-/// for a 60 Hz fixed tick — see the module docs of [`bleed`](crate::bleed) for what to re-derive if
-/// yours is not.
+/// for a 60 Hz fixed tick — see `bloodstain::settings` for what to re-derive if yours is not.
+///
+/// # The blood dials are not here, and that is the `0.2.0` break
+///
+/// Everything about blood as a *material* — droplet counts, spray speeds, stain radii, the pulse
+/// train, pool spreading, clotting, drying — lives in [`blood`](Self::blood), which is
+/// `bloodstain::BloodSettings`. **One dial, one home:** a `droplets_per_m2` on this struct *and* on
+/// the leaf would be two values for one quantity, and they would disagree the first time either was
+/// authored. What stays here is what the leaf cannot own: hit feel, camera shake, particle capacity
+/// and the render budgets, all of which need an engine to mean anything.
 #[derive(Resource, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct CarnageSettings {
-    /// Droplets a wound throws per square metre of wound area, at severity 1.
+    /// **Blood as a material.** Every dial the spatter, stain, pool, bleed and drying models read.
     ///
-    /// **Count scales with area, not per hit**, because a wound is a surface and the amount of blood
-    /// that leaves it is a property of how much of it is open — a graze and a bisection are the same
-    /// event with two areas, and one dial covers both.
-    #[cfg_attr(feature = "serde", serde(default = "default_droplets_per_m2"))]
-    pub droplets_per_m2: f32,
-    /// Hard ceiling on one wound's droplet count, so a huge cut cannot exceed
-    /// [`effect_capacity`](Self::effect_capacity) in a single burst.
-    #[cfg_attr(feature = "serde", serde(default = "default_max_droplets_per_wound"))]
-    pub max_droplets_per_wound: u32,
-    /// Scales the measured 8…40 m/s spatter span. **`1.0` is the paper's own numbers, and it is a
-    /// physical measurement rather than a look.**
-    ///
-    /// Ship it at 1.0 because [`FORWARD_SPATTER_SPEED`](crate::FORWARD_SPATTER_SPEED) and
-    /// [`BACK_SPATTER_SPEED`](crate::BACK_SPATTER_SPEED) are measurements, and a default that quietly
-    /// divided them would make the constants lie about what they are. Scaling them is a game-feel
-    /// decision, and this crate does not take game-feel decisions on a caller's behalf — the same
-    /// division [`feel`](crate::feel) enforces by returning numbers instead of applying them.
-    ///
-    /// **Expect to lower it, and here is the arithmetic.** At 1.0 a droplet leaving straight up at
-    /// 40 m/s under the shipped 18 m/s² gravity rises `40² / (2·18) ≈ 44` metres. That is correct for
-    /// a real gunshot and absurd on a 1.8 m subject: the spray leaves frame and the stains land far
-    /// outside any floor. Both examples in this crate set **0.25**, which puts the throw at roughly
-    /// 1–3 metres — measured against the demo subject, and the reason they set it rather than the
-    /// default being changed.
-    #[cfg_attr(feature = "serde", serde(default = "default_spatter_speed_scale"))]
-    pub spatter_speed_scale: f32,
-    /// Half-angle of the forward spray cone, degrees, about the wound normal.
-    #[cfg_attr(feature = "serde", serde(default = "default_spatter_cone_deg"))]
-    pub spatter_cone_deg: f32,
-    /// Smallest droplet diameter, metres — the indivisible droplet end of the cluster span.
-    #[cfg_attr(feature = "serde", serde(default = "default_droplet_size_min"))]
-    pub droplet_size_min: f32,
-    /// Largest droplet diameter, metres — the many-droplet-cluster end of the span.
-    #[cfg_attr(feature = "serde", serde(default = "default_droplet_size_max"))]
-    pub droplet_size_max: f32,
-    /// Downward acceleration used to fly a droplet to its landing point, m/s².
-    ///
-    /// **Not 9.81, and deliberately.** It matches the examples' own integrator, because blood and
-    /// gibs falling at different rates in one scene reads as blood floating. A game sets this to
-    /// whatever its own physics uses.
-    #[cfg_attr(feature = "serde", serde(default = "default_gravity"))]
-    pub gravity: f32,
-    /// Linear drag on a droplet, 1/s — the game-scale stand-in for the two-phase air entrainment the
-    /// spatter paper models properly.
-    #[cfg_attr(feature = "serde", serde(default = "default_drag"))]
-    pub drag: f32,
-    /// Heartbeat rate driving the pulse train, beats per minute.
-    #[cfg_attr(feature = "serde", serde(default = "default_spurt_bpm"))]
-    pub spurt_bpm: f32,
-    /// Ticks of full-flow spurting before the taper starts. `210` is 3.5 s at 60 Hz.
-    #[cfg_attr(feature = "serde", serde(default = "default_spurt_ticks"))]
-    pub spurt_ticks: u32,
-    /// Ticks from opening to a clot, where flow reaches exactly zero. `360` is 6.0 s at 60 Hz.
-    ///
-    /// Must be at least [`spurt_ticks`](Self::spurt_ticks) — see [`CarnageSettings::validate`].
-    #[cfg_attr(feature = "serde", serde(default = "default_clot_ticks"))]
-    pub clot_ticks: u32,
-    /// Smallest stain radius, metres.
-    #[cfg_attr(feature = "serde", serde(default = "default_stain_radius_min"))]
-    pub stain_radius_min: f32,
-    /// Largest stain radius, metres.
-    #[cfg_attr(feature = "serde", serde(default = "default_stain_radius_max"))]
-    pub stain_radius_max: f32,
+    /// Nested rather than flattened, deliberately: an authored file says `blood: (droplets_per_m2:
+    /// 2400.0, …)`, which makes it obvious at a glance which dials belong to the leaf and are usable
+    /// without Bevy. Flattening would hide the boundary the whole extraction exists to draw.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub blood: BloodSettings,
     /// Trauma one severity-1 wound is worth, in `[0, 1]`, **before** the caller's own scaling.
     #[cfg_attr(feature = "serde", serde(default = "default_trauma_per_wound"))]
     pub trauma_per_wound: f32,
@@ -465,24 +722,35 @@ pub struct CarnageSettings {
     /// ceiling; see [`crate::gib_ribbon`]. 24 × 64 particles is 1,536, comfortably inside one slab.
     #[cfg_attr(feature = "serde", serde(default = "default_max_ribbons"))]
     pub max_ribbons: u32,
-    /// Stains landing within this distance of a pool join it instead of starting their own, metres.
-    #[cfg_attr(feature = "serde", serde(default = "default_pool_merge_radius"))]
-    pub pool_merge_radius: f32,
-    /// Multiplier from a pool's wetted-area-equivalent radius to its drawn radius.
+    /// **The palette a `Stylised` tier substitutes for blood**, linear sRGB.
     ///
-    /// Above 1 because blood spreads thinner than the discs that fed it: the area a droplet *wets* on
-    /// impact is measured at the moment of impact, and a slick keeps creeping outward after.
-    #[cfg_attr(feature = "serde", serde(default = "default_pool_spread"))]
-    pub pool_spread: f32,
-    /// Fraction of the remaining gap between drawn and target radius a pool closes per tick.
+    /// A spark yellow by default. This is what makes reduction a *substitution*: at
+    /// [`GoreTier::Stylised`] the same emitter fires at the same tick with the same magnitude and
+    /// paints with this instead. Gears of War 4 shipped exactly this trade and kept its hit
+    /// confirmation; Vermintide 2's gore-off deleted the channel and made the game harder to read.
+    #[cfg_attr(feature = "serde", serde(default = "default_substitute_srgb"))]
+    pub substitute_srgb: [f32; 3],
+    /// **Fraction of a second that may be spent frozen**, across every wound in it.
     ///
-    /// Must be in `(0, 1]` — see [`CarnageSettings::validate`].
-    #[cfg_attr(feature = "serde", serde(default = "default_pool_spread_rate"))]
-    pub pool_spread_rate: f32,
-    /// Hard ceiling on live pools. Past it a stain joins a nearby pool if it can and is dropped if it
-    /// cannot — dropping is correct at the ceiling of a system whose whole job is to accumulate.
-    #[cfg_attr(feature = "serde", serde(default = "default_max_pools"))]
-    pub max_pools: u32,
+    /// `0.1` is six ticks at 60 Hz. Read by [`coalesce_hitstop`], which takes the *maximum* pending
+    /// stop rather than the sum — hit stop spent everywhere reads as impact nowhere
+    /// (`doi:10.1109/tg.2021.3072241` §III-C).
+    #[cfg_attr(feature = "serde", serde(default = "default_hitstop_budget_per_second"))]
+    pub hitstop_budget_per_second: f32,
+    /// Ticks a stain decal lives before it is despawned, before
+    /// [`GorePolicy::persistence_scale`]. `3600` is a minute at 60 Hz.
+    ///
+    /// **Per class, and that is the shipped decomposition rather than a preference** — Killing Floor
+    /// 2 exposes exactly these three lifetimes separately, because a stain, a slick and a chunk have
+    /// different costs and different meanings.
+    #[cfg_attr(feature = "serde", serde(default = "default_stain_lifetime_ticks"))]
+    pub stain_lifetime_ticks: u32,
+    /// Ticks a pool decal lives. Longer than a stain: a slick is the evidence a body was here.
+    #[cfg_attr(feature = "serde", serde(default = "default_pool_lifetime_ticks"))]
+    pub pool_lifetime_ticks: u32,
+    /// Ticks a detached chunk lives. Shortest of the three: a chunk is an entity with a collider.
+    #[cfg_attr(feature = "serde", serde(default = "default_chunk_lifetime_ticks"))]
+    pub chunk_lifetime_ticks: u32,
 }
 
 /// The shipped [`CarnageSettings`] values, one function per dial.
@@ -492,59 +760,6 @@ pub struct CarnageSettings {
 /// `the_serde_default_matches_the_shipped_one` had to be written to catch on `FractureSettings`. Here
 /// the two cannot disagree, because there is only one of them.
 mod shipped {
-    // Count scales with wound area, not per hit.
-    pub(super) fn droplets_per_m2() -> f32 {
-        2400.0
-    }
-    // Keeps one burst inside `effect_capacity`.
-    pub(super) fn max_droplets_per_wound() -> u32 {
-        512
-    }
-    // Scales the measured 8…40 m/s span.
-    pub(super) fn spatter_speed_scale() -> f32 {
-        1.0
-    }
-    // Forward spray half-angle.
-    pub(super) fn spatter_cone_deg() -> f32 {
-        32.0
-    }
-    // Metres; the indivisible droplet.
-    pub(super) fn droplet_size_min() -> f32 {
-        0.000_8
-    }
-    // Metres; the cluster span's far end.
-    pub(super) fn droplet_size_max() -> f32 {
-        0.006
-    }
-    // Matches the examples' own integrator (`examples/common/body.rs`'s `GRAVITY`) so blood and gibs
-    // fall in one world; 9.81 would make blood float relative to the chunks.
-    pub(super) fn gravity() -> f32 {
-        18.0
-    }
-    // Stands in for the paper's two-phase air entrainment.
-    pub(super) fn drag() -> f32 {
-        1.6
-    }
-    // Pulse period is `60 / bpm`.
-    pub(super) fn spurt_bpm() -> f32 {
-        96.0
-    }
-    // 3.5 s at 60 Hz.
-    pub(super) fn spurt_ticks() -> u32 {
-        210
-    }
-    // 6.0 s at 60 Hz.
-    pub(super) fn clot_ticks() -> u32 {
-        360
-    }
-    // Metres.
-    pub(super) fn stain_radius_min() -> f32 {
-        0.02
-    }
-    // Metres.
-    pub(super) fn stain_radius_max() -> f32 {
-        0.12
-    }
     // At severity 1, before the caller's own scaling.
     pub(super) fn trauma_per_wound() -> f32 {
         0.55
@@ -569,65 +784,30 @@ mod shipped {
     pub(super) fn max_ribbons() -> u32 {
         24
     }
-    // Metres. About a hand's width — close enough that two spatter discs read as one wet patch.
-    pub(super) fn pool_merge_radius() -> f32 {
-        0.10
+    // A spark yellow: reads as a hit without reading as blood.
+    pub(super) fn substitute_srgb() -> [f32; 3] {
+        [1.0, 0.78, 0.25]
     }
-    // Blood creeps outward after the impact area was measured.
-    pub(super) fn pool_spread() -> f32 {
-        1.35
+    // 0.1 s — six ticks at 60 Hz, across every wound in that second.
+    pub(super) fn hitstop_budget_per_second() -> f32 {
+        0.1
     }
-    // Fraction of the remaining gap per tick; ≈0.2 s to close half the distance at 60 Hz.
-    pub(super) fn pool_spread_rate() -> f32 {
-        0.08
+    // One minute at 60 Hz.
+    pub(super) fn stain_lifetime_ticks() -> u32 {
+        3600
     }
-    // Live slicks. A forward decal each, so this is a draw-call ceiling like `max_ribbons`.
-    pub(super) fn max_pools() -> u32 {
-        256
+    // Two minutes: a slick is the evidence a body was here.
+    pub(super) fn pool_lifetime_ticks() -> u32 {
+        7200
+    }
+    // Twenty seconds: a chunk is an entity with a collider.
+    pub(super) fn chunk_lifetime_ticks() -> u32 {
+        1200
     }
 }
 
 // `serde(default = "path")` needs a free function per field. Each one forwards to `shipped`, which is
 // also what `Default` reads — so there is exactly one value per dial in this file.
-fn default_droplets_per_m2() -> f32 {
-    shipped::droplets_per_m2()
-}
-fn default_max_droplets_per_wound() -> u32 {
-    shipped::max_droplets_per_wound()
-}
-fn default_spatter_speed_scale() -> f32 {
-    shipped::spatter_speed_scale()
-}
-fn default_spatter_cone_deg() -> f32 {
-    shipped::spatter_cone_deg()
-}
-fn default_droplet_size_min() -> f32 {
-    shipped::droplet_size_min()
-}
-fn default_droplet_size_max() -> f32 {
-    shipped::droplet_size_max()
-}
-fn default_gravity() -> f32 {
-    shipped::gravity()
-}
-fn default_drag() -> f32 {
-    shipped::drag()
-}
-fn default_spurt_bpm() -> f32 {
-    shipped::spurt_bpm()
-}
-fn default_spurt_ticks() -> u32 {
-    shipped::spurt_ticks()
-}
-fn default_clot_ticks() -> u32 {
-    shipped::clot_ticks()
-}
-fn default_stain_radius_min() -> f32 {
-    shipped::stain_radius_min()
-}
-fn default_stain_radius_max() -> f32 {
-    shipped::stain_radius_max()
-}
 fn default_trauma_per_wound() -> f32 {
     shipped::trauma_per_wound()
 }
@@ -646,45 +826,37 @@ fn default_effect_capacity() -> u32 {
 fn default_max_ribbons() -> u32 {
     shipped::max_ribbons()
 }
-fn default_pool_merge_radius() -> f32 {
-    shipped::pool_merge_radius()
+fn default_substitute_srgb() -> [f32; 3] {
+    shipped::substitute_srgb()
 }
-fn default_pool_spread() -> f32 {
-    shipped::pool_spread()
+fn default_hitstop_budget_per_second() -> f32 {
+    shipped::hitstop_budget_per_second()
 }
-fn default_pool_spread_rate() -> f32 {
-    shipped::pool_spread_rate()
+fn default_stain_lifetime_ticks() -> u32 {
+    shipped::stain_lifetime_ticks()
 }
-fn default_max_pools() -> u32 {
-    shipped::max_pools()
+fn default_pool_lifetime_ticks() -> u32 {
+    shipped::pool_lifetime_ticks()
+}
+fn default_chunk_lifetime_ticks() -> u32 {
+    shipped::chunk_lifetime_ticks()
 }
 
 impl Default for CarnageSettings {
     fn default() -> Self {
         CarnageSettings {
-            droplets_per_m2: shipped::droplets_per_m2(),
-            max_droplets_per_wound: shipped::max_droplets_per_wound(),
-            spatter_speed_scale: shipped::spatter_speed_scale(),
-            spatter_cone_deg: shipped::spatter_cone_deg(),
-            droplet_size_min: shipped::droplet_size_min(),
-            droplet_size_max: shipped::droplet_size_max(),
-            gravity: shipped::gravity(),
-            drag: shipped::drag(),
-            spurt_bpm: shipped::spurt_bpm(),
-            spurt_ticks: shipped::spurt_ticks(),
-            clot_ticks: shipped::clot_ticks(),
-            stain_radius_min: shipped::stain_radius_min(),
-            stain_radius_max: shipped::stain_radius_max(),
+            blood: BloodSettings::default(),
             trauma_per_wound: shipped::trauma_per_wound(),
             hitstop_seconds: shipped::hitstop_seconds(),
             shake_amplitude: shipped::shake_amplitude(),
             shake_ticks: shipped::shake_ticks(),
             effect_capacity: shipped::effect_capacity(),
             max_ribbons: shipped::max_ribbons(),
-            pool_merge_radius: shipped::pool_merge_radius(),
-            pool_spread: shipped::pool_spread(),
-            pool_spread_rate: shipped::pool_spread_rate(),
-            max_pools: shipped::max_pools(),
+            substitute_srgb: shipped::substitute_srgb(),
+            hitstop_budget_per_second: shipped::hitstop_budget_per_second(),
+            stain_lifetime_ticks: shipped::stain_lifetime_ticks(),
+            pool_lifetime_ticks: shipped::pool_lifetime_ticks(),
+            chunk_lifetime_ticks: shipped::chunk_lifetime_ticks(),
         }
     }
 }
@@ -692,15 +864,19 @@ impl Default for CarnageSettings {
 impl CarnageSettings {
     /// Reject a settings block that cannot produce a sane schedule.
     ///
-    /// **Two of these are real crashes, not hypotheticals**, which is the same standard
-    /// [`FractureSettings::validate`] is held to. `shake_ticks` is a modulus, so zero panics the
-    /// first time a camera shakes; `spurt_bpm` at zero divides by zero deriving the pulse period. The
-    /// remaining checks catch inverted ranges, which do not panic but silently invert the model — a
-    /// `clot_ticks` below `spurt_ticks` would make flow rise before it fell.
+    /// **One of these is a real crash, not a hypothetical**, which is the same standard
+    /// [`FractureSettings::validate`] is held to: `shake_ticks` is a modulus, so zero panics the
+    /// first time a camera shakes. The rest catch dials that silently switch a feature off through a
+    /// ceiling.
+    ///
+    /// **The blood dials are validated by their owner.** This forwards to
+    /// [`BloodSettings::validate`] rather than re-checking them, because a second copy of
+    /// "`clot_ticks` must not be below `spurt_ticks`" is a second place for that rule to be wrong.
     ///
     /// Call it at load. Failing loudly at the door is the one path; clamping a bad pair here would be
     /// a second, quieter one.
     pub fn validate(&self) -> Result<(), String> {
+        self.blood.validate()?;
         if self.shake_ticks == 0 {
             return Err(
                 "carnage: shake_ticks is 0 — it is the modulus of the shake phase, so the first \
@@ -708,43 +884,11 @@ impl CarnageSettings {
                     .to_string(),
             );
         }
-        if !(self.spurt_bpm > 0.0) || !self.spurt_bpm.is_finite() {
-            return Err(format!(
-                "carnage: spurt_bpm is {} — the pulse period is `60 / bpm`, so this must be finite \
-                 and positive.",
-                self.spurt_bpm
-            ));
-        }
-        if self.clot_ticks < self.spurt_ticks {
-            return Err(format!(
-                "carnage: clot_ticks ({}) < spurt_ticks ({}) — flow is full until `spurt_ticks` and \
-                 zero at `clot_ticks`, so an inverted pair would have it rise before it fell.",
-                self.clot_ticks, self.spurt_ticks
-            ));
-        }
-        for (name, lo, hi) in [
-            ("droplet_size", self.droplet_size_min, self.droplet_size_max),
-            ("stain_radius", self.stain_radius_min, self.stain_radius_max),
-        ] {
-            if !(lo > 0.0) || !(hi >= lo) || !lo.is_finite() || !hi.is_finite() {
-                return Err(format!(
-                    "carnage: {name}_min ({lo}) and {name}_max ({hi}) must be finite with \
-                     0 < min <= max — the pair is lerped, and an inverted one reverses the model."
-                ));
-            }
-        }
         if !(0.0..=1.0).contains(&self.trauma_per_wound) {
             return Err(format!(
                 "carnage: trauma_per_wound is {} — trauma is in [0, 1] and the caller accumulates \
                  it, so a value outside that is not a stronger hit, it is a broken one.",
                 self.trauma_per_wound
-            ));
-        }
-        if !(0.0..=180.0).contains(&self.spatter_cone_deg) {
-            return Err(format!(
-                "carnage: spatter_cone_deg is {} — it is a half-angle about the wound normal, so it \
-                 must be in [0, 180].",
-                self.spatter_cone_deg
             ));
         }
         if self.effect_capacity == 0 {
@@ -761,30 +905,6 @@ impl CarnageSettings {
                  leaves the systems running and refusing every one."
                     .to_string(),
             );
-        }
-        if self.max_pools == 0 {
-            return Err(
-                "carnage: max_pools is 0 — every stain would be dropped and blood would never \
-                 accumulate, which is the whole feature switched off by a ceiling."
-                    .to_string(),
-            );
-        }
-        for (name, v) in
-            [("pool_merge_radius", self.pool_merge_radius), ("pool_spread", self.pool_spread)]
-        {
-            if !(v > 0.0) || !v.is_finite() {
-                return Err(format!(
-                    "carnage: {name} is {v} — it scales a radius, so it must be finite and positive."
-                ));
-            }
-        }
-        if !(self.pool_spread_rate > 0.0 && self.pool_spread_rate <= 1.0) {
-            return Err(format!(
-                "carnage: pool_spread_rate is {} — it is the fraction of the remaining gap closed \
-                 per tick, so it must be in (0, 1]. At 0 a pool never spreads; above 1 it \
-                 overshoots and oscillates.",
-                self.pool_spread_rate
-            ));
         }
         Ok(())
     }
@@ -812,6 +932,13 @@ pub struct Wounded {
     pub severity: f32,
     /// Which of the two things happened.
     pub kind: WoundKind,
+    /// **Which forensic pattern this wound throws** — impact spatter, an arterial arc, a cast-off
+    /// line, expirated mist, a drip trail or a transfer smear.
+    ///
+    /// Distinct from [`kind`](Self::kind), which says what *opened* the wound. A severance can bleed
+    /// arterially or not; a bullet channel can spurt or seep. The two answer different questions and
+    /// collapsing them would make the distinction the whole pattern layer exists to draw invisible.
+    pub class: PatternClass,
 }
 
 impl Wound {
@@ -827,14 +954,41 @@ impl Wound {
     /// `area` is carried across unchanged: scaling it correctly would need the scale factors in the
     /// wound's own plane, and a subject that is uniformly scaled is the only case where a single
     /// number would be right. A caller with a scaled subject scales `area` itself, knowingly.
-    pub fn to_world(self, xf: &GlobalTransform) -> Wounded {
+    ///
+    /// **`class` is a parameter and not a default, deliberately.** A default here would make the
+    /// arterial/impact distinction invisible at the call site, which is precisely the distinction
+    /// [`PatternClass`] exists to make — so every caller states it, and a caller that has not thought
+    /// about it is made to.
+    pub fn to_world(self, xf: &GlobalTransform, class: PatternClass) -> Wounded {
         Wounded {
             at: xf.transform_point(self.at),
             normal: (xf.affine().matrix3 * self.normal).normalize_or_zero(),
             area: self.area,
             severity: self.severity,
             kind: self.kind,
+            class,
         }
+    }
+}
+
+/// **A bleeding thing, as an entity.** The ECS half of [`Bleed`].
+///
+/// A newtype rather than a derive on `Bleed` itself, because `Bleed` lives in `bloodstain`, which has
+/// no engine in it to derive a `Component` from. This is the same facade-newtype shape this
+/// workspace's game reaches `bevy_stigmergy` and `bevy_light_grid` through, and it was chosen over
+/// the two alternatives on purpose: implementing a foreign trait for a foreign type is forbidden by
+/// the orphan rule, and giving the leaf an optional `bevy` dependency would have put an engine inside
+/// the crate whose whole point is not having one.
+///
+/// `Deref`/`DerefMut` to the value, so `bleeding.age(tick)` and `bleeding.area` read exactly as they
+/// did when `Bleed` was the component.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Deref, DerefMut)]
+pub struct Bleeding(pub Bleed);
+
+impl Bleeding {
+    /// Open a bleed at `tick` with a wound's area — [`Bleed::new`], wrapped.
+    pub fn new(opened_at: u32, area: f32) -> Self {
+        Bleeding(Bleed::new(opened_at, area))
     }
 }
 
@@ -872,6 +1026,16 @@ impl Plugin for CarnagePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FractureCache>()
             .init_resource::<FractureSettings>()
+            // **The framework surface, `init_resource`d rather than inserted.** A caller that owns
+            // the tone and the budgets inserts them *before* this plugin and its values win; there
+            // is no merge and no partial default, which is the same rule `FractureSettings` keeps.
+            //
+            // `FlashGate` and `DecalBudget` are state rather than policy, so they have no authored
+            // form at all — but they must exist, because a system taking `ResMut<FlashGate>` PANICS
+            // when the resource is absent rather than skipping.
+            .init_resource::<GorePolicy>()
+            .init_resource::<FlashGate>()
+            .init_resource::<DecalBudget>()
             .add_message::<Wounded>()
             // **Chained, not merely grouped.** `bake_fractures` requests the finest frontier as its
             // last act, and `materialise_fragments` is what turns a request into a mesh — a bake and
@@ -965,20 +1129,14 @@ mod tests {
     /// both read `shipped`. This test is what proves the construction actually holds, field by
     /// field, so a later hand-written literal in either place fails here rather than in a config
     /// file six months on.
+    ///
+    /// **The blood dials are not listed, because they are not this struct's** — they live in
+    /// `bloodstain::BloodSettings`, which pins the same construction with its own test over its own
+    /// `shipped` module. Listing them here would be the second home this whole extraction removed.
     #[test]
     fn every_carnage_serde_default_is_the_shipped_value() {
         let d = CarnageSettings::default();
         let pairs_f32: &[(&str, f32, f32)] = &[
-            ("droplets_per_m2", default_droplets_per_m2(), d.droplets_per_m2),
-            ("spatter_speed_scale", default_spatter_speed_scale(), d.spatter_speed_scale),
-            ("spatter_cone_deg", default_spatter_cone_deg(), d.spatter_cone_deg),
-            ("droplet_size_min", default_droplet_size_min(), d.droplet_size_min),
-            ("droplet_size_max", default_droplet_size_max(), d.droplet_size_max),
-            ("gravity", default_gravity(), d.gravity),
-            ("drag", default_drag(), d.drag),
-            ("spurt_bpm", default_spurt_bpm(), d.spurt_bpm),
-            ("stain_radius_min", default_stain_radius_min(), d.stain_radius_min),
-            ("stain_radius_max", default_stain_radius_max(), d.stain_radius_max),
             ("trauma_per_wound", default_trauma_per_wound(), d.trauma_per_wound),
             ("hitstop_seconds", default_hitstop_seconds(), d.hitstop_seconds),
             ("shake_amplitude", default_shake_amplitude(), d.shake_amplitude),
@@ -992,15 +1150,19 @@ mod tests {
             );
         }
         let pairs_u32: &[(&str, u32, u32)] = &[
-            ("max_droplets_per_wound", default_max_droplets_per_wound(), d.max_droplets_per_wound),
-            ("spurt_ticks", default_spurt_ticks(), d.spurt_ticks),
-            ("clot_ticks", default_clot_ticks(), d.clot_ticks),
             ("shake_ticks", default_shake_ticks(), d.shake_ticks),
             ("effect_capacity", default_effect_capacity(), d.effect_capacity),
+            ("max_ribbons", default_max_ribbons(), d.max_ribbons),
         ];
         for (name, serde_value, shipped_value) in pairs_u32 {
             assert_eq!(serde_value, shipped_value, "{name}: serde and shipped defaults disagree");
         }
+        // And the nested block takes the leaf's shipped values, not a second set written here.
+        assert_eq!(
+            d.blood,
+            BloodSettings::default(),
+            "the blood block must be exactly the leaf's shipped dials"
+        );
     }
 
     /// **An empty authored block must load as the shipped dials, and a typo must still be refused.**
@@ -1015,17 +1177,24 @@ mod tests {
             ron::from_str("()").expect("a config that omits every carnage dial must deserialize");
         assert_eq!(s, CarnageSettings::default(), "omitting every dial must give the shipped block");
 
-        let partial: CarnageSettings = ron::from_str("(spurt_bpm: 120.0)")
+        // The blood dials are authored under their own block now, which is the `0.2.0` shape: one
+        // dial, one owner, and an authored file that shows the boundary.
+        let partial: CarnageSettings = ron::from_str("(blood: (spurt_bpm: 120.0))")
             .expect("a config naming one dial must take the shipped values for the rest");
-        assert_eq!(partial.spurt_bpm, 120.0, "the authored dial must survive");
+        assert_eq!(partial.blood.spurt_bpm, 120.0, "the authored dial must survive");
         assert_eq!(
-            partial.clot_ticks,
-            default_clot_ticks(),
+            partial.blood.clot_ticks,
+            BloodSettings::default().clot_ticks,
             "an unauthored dial must take the shipped value"
+        );
+        assert_eq!(
+            partial.shake_ticks,
+            default_shake_ticks(),
+            "and an unauthored dial outside the blood block too"
         );
 
         assert!(
-            ron::from_str::<CarnageSettings>("(spurt_bmp: 120.0)").is_err(),
+            ron::from_str::<CarnageSettings>("(blood: (spurt_bmp: 120.0))").is_err(),
             "a misspelled dial must be refused — `deny_unknown_fields` is what keeps the per-field \
              defaults from becoming a fallback that swallows typos"
         );
@@ -1040,13 +1209,17 @@ mod tests {
             s.validate().expect_err("this block must be refused")
         };
         assert!(bad(|s| s.shake_ticks = 0).contains("shake_ticks"));
-        assert!(bad(|s| s.spurt_bpm = 0.0).contains("spurt_bpm"));
-        assert!(bad(|s| s.clot_ticks = 10).contains("clot_ticks"));
-        assert!(bad(|s| s.droplet_size_max = 0.0).contains("droplet_size"));
-        assert!(bad(|s| s.stain_radius_min = 0.0).contains("stain_radius"));
         assert!(bad(|s| s.trauma_per_wound = 1.5).contains("trauma_per_wound"));
-        assert!(bad(|s| s.spatter_cone_deg = 200.0).contains("spatter_cone_deg"));
         assert!(bad(|s| s.effect_capacity = 0).contains("effect_capacity"));
+        assert!(bad(|s| s.max_ribbons = 0).contains("max_ribbons"));
+        // **And the blood dials are still refused, by their owner.** `validate` forwards rather than
+        // re-checking, so this is what proves the forward is wired — a delegation nobody has seen
+        // fire is the same comment a `validate` nobody has seen fail is.
+        assert!(bad(|s| s.blood.spurt_bpm = 0.0).contains("spurt_bpm"));
+        assert!(bad(|s| s.blood.clot_ticks = 10).contains("clot_ticks"));
+        assert!(bad(|s| s.blood.droplet_size_max = 0.0).contains("droplet_size"));
+        assert!(bad(|s| s.blood.stain_radius_min = 0.0).contains("stain_radius"));
+        assert!(bad(|s| s.blood.spatter_cone_deg = 200.0).contains("spatter_cone_deg"));
     }
 
     /// **A normal is not a point.** The bug this test exists for: putting a direction through
@@ -1065,7 +1238,7 @@ mod tests {
         };
 
         let shifted = GlobalTransform::from(Transform::from_xyz(100.0, 50.0, -20.0));
-        let out = w.to_world(&shifted);
+        let out = w.to_world(&shifted, PatternClass::Impact);
         assert_eq!(out.at, Vec3::new(100.1, 50.2, -19.7), "the point must be translated");
         assert_eq!(out.normal, Vec3::X, "a pure translation must not turn the normal at all");
         assert_eq!(out.area, w.area, "area is carried across unchanged");
@@ -1091,6 +1264,6 @@ mod tests {
     }
 
     fn turned_normal(w: &Wound, xf: &GlobalTransform) -> Vec3 {
-        w.to_world(xf).normal
+        w.to_world(xf, PatternClass::Impact).normal
     }
 }

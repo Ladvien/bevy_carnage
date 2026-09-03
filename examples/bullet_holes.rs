@@ -142,11 +142,11 @@ fn main() {
         .init_resource::<Status>()
         .init_resource::<body::Thrown>()
         .init_resource::<body::Pools>()
-        // **`build_splats`, without `CarnageVfxPlugin`.** `body::bleed` draws its slicks as the
-        // crate's forward decals now, and those need the four generated splat textures. This demo
-        // wants none of the particle half, so it takes the one `Startup` system it does need rather
-        // than the whole plugin and Hanabi with it.
-        .add_systems(Startup, (setup, bevy_carnage::build_splats))
+        // **No splat setup, and none is needed.** `body::bleed` draws its slicks as the crate's
+        // forward decals, whose masks are now rasterised from each stain's own silhouette into a
+        // `StainMasks` cache — a `Default` resource `body::bleed` takes out of the world and puts
+        // back. So this demo still gets blood on the floor without any of the particle half.
+        .add_systems(Startup, setup)
         // `fire` re-bakes and throws; `integrate` and `bleed` carry what was thrown through its whole
         // life, from flying chunk to flat stain. Chained so a plug cannot be integrated and settled in
         // the same frame it was spawned.

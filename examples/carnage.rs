@@ -46,11 +46,13 @@
 use std::collections::HashSet;
 
 use bevy::core_pipeline::prepass::DepthPrepass;
+use bevy::pbr::decal::ForwardDecalMaterial;
 use bevy::prelude::*;
 use bevy_carnage::{
-    Bleed, BondId, CarnagePlugin, CarnageSettings, CarnageVfxPlugin, FragmentId, SplatTextures,
-    Wound, WoundKind, Wounded, clotted, hitstop_ticks, largest_cap, pulse_wound, shake_offset,
-    spawn_stain, stains, trauma_for, wound_of_channel, wounds_from_bonds,
+    Bleeding, BloodSettings, BondId, CarnagePlugin, CarnageSettings, CarnageVfxPlugin, FragmentId,
+    PatternClass, StainMasks, Wound, WoundKind, Wounded, blood, flows, hitstop_ticks, largest_cap,
+    pulse_wound, shake_offset, spawn_stain, trauma_for, wound_of_channel, wounds_from_bonds,
+    yield_stress,
 };
 
 mod common;
@@ -177,7 +179,10 @@ fn main() {
         // `CarnageSettings`, which no-ops when it is already present — so a caller that authors its
         // own block inserts it first and its values win. There is no merge and no partial default.
         .insert_resource(CarnageSettings {
-            spatter_speed_scale: SPEED_SCALE,
+            blood: BloodSettings {
+                spatter_speed_scale: SPEED_SCALE,
+                ..BloodSettings::default()
+            },
             ..CarnageSettings::default()
         })
         // The deterministic half and the cosmetic half are separate plugins on purpose — a headless
@@ -195,8 +200,9 @@ fn main() {
         .init_resource::<StainRing>()
         .init_resource::<LastBlow>()
         .init_resource::<Status>()
-        // `build_splats` is `CarnageVfxPlugin`'s own `Startup` system — registering it again here
-        // would build a second set of splat textures and overwrite the resource with them.
+        // `StainMasks` is `CarnageVfxPlugin`'s own `init_resource` — the mask cache builds itself
+        // on demand from each stain's silhouette, so there is no texture-building `Startup` system
+        // to register here and none to accidentally register twice.
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -431,11 +437,13 @@ fn open_wounds(world: &mut World, wounds: &[Wound]) -> usize {
     }
 
     // Stains, on the CPU, deterministically. **Core, not `vfx`** — where blood lands is read by
-    // simulation on the consuming side, so this half exists with the render feature off.
+    // simulation on the consuming side, so this half exists with the render feature off. Each stain
+    // now comes back paired with the silhouette its **own** droplet implies, which is what the decal
+    // draws instead of one of four baked splats.
     let mut world_stains = Vec::new();
     for w in wounds {
-        let world_wound = Wound { at: ORIGIN + w.at, ..*w };
-        world_stains.extend(stains(&world_wound, &settings, FLOOR_Y));
+        let world_wound = common::blood_wound(&Wound { at: ORIGIN + w.at, ..*w });
+        world_stains.extend(common::stains_with_shapes(&world_wound, &settings.blood, FLOOR_Y));
     }
 
     // The message the particle half reads. Written here rather than by the crate: the crate does not
@@ -446,27 +454,44 @@ fn open_wounds(world: &mut World, wounds: &[Wound]) -> usize {
         area: w.area,
         severity: w.severity,
         kind: w.kind,
+        // Impact spatter: this is the opening a blow or a channel just made, thrown by the hit
+        // itself. The arterial case is the heartbeat path in `bleed_wounds`, never this one.
+        class: PatternClass::Impact,
     }));
 
     let stamped = world_stains.len();
-    let Some(splats) = world.remove_resource::<SplatTextures>() else {
-        // The splats are built on `Startup`; a blow in the same frame arrives before them.
-        return 0;
-    };
     let mut spawned = Vec::with_capacity(stamped);
-    world.commands();
-    {
-        let mut commands = world.commands();
-        for stain in &world_stains {
-            let entity = spawn_stain(&mut commands, &splats, stain);
-            spawned.push(entity);
-        }
-    }
-    world.flush();
+    // The mask cache, both asset stores and the `Commands` are all borrows of one `World`, so the
+    // cache comes out for the duration and goes back in afterwards.
+    let mut masks = world.remove_resource::<StainMasks>().unwrap_or_default();
+    world.resource_scope(|world: &mut World, mut images: Mut<Assets<Image>>| {
+        world.resource_scope(
+            |world: &mut World,
+             mut materials: Mut<Assets<ForwardDecalMaterial<StandardMaterial>>>| {
+                // `commands` is scoped and dropped before `flush` — a `Commands` holds the world
+                // mutably, and flushing while it is still live is the one thing that shape gets
+                // wrong.
+                {
+                    let mut commands = world.commands();
+                    for (stain, shape) in &world_stains {
+                        spawned.push(spawn_stain(
+                            &mut commands,
+                            &mut masks,
+                            &mut images,
+                            &mut materials,
+                            stain,
+                            shape,
+                        ));
+                    }
+                }
+                world.flush();
+            },
+        );
+    });
+    world.insert_resource(masks);
     for entity in &spawned {
         world.entity_mut(*entity).insert(StainMark);
     }
-    world.insert_resource(splats);
 
     // The ring: oldest out when the cap is exceeded. A stain that faded would say blood dries.
     {
@@ -519,7 +544,7 @@ struct ChunkWound(Wound);
 fn attach_bleeds(world: &mut World) {
     let tick = world.resource::<Tick>().0;
     let fresh: Vec<(Entity, Wound)> = {
-        let mut q = world.query_filtered::<(Entity, &Chunk), Without<Bleed>>();
+        let mut q = world.query_filtered::<(Entity, &Chunk), Without<Bleeding>>();
         let candidates: Vec<(Entity, Option<FragmentId>)> =
             q.iter(world).map(|(e, c)| (e, c.fragment)).collect();
         let baked = world.resource::<body::Baked>();
@@ -544,7 +569,7 @@ fn attach_bleeds(world: &mut World) {
             .collect()
     };
     for (entity, wound) in fresh {
-        world.entity_mut(entity).insert((Bleed::new(tick, wound.area), ChunkWound(wound)));
+        world.entity_mut(entity).insert((Bleeding::new(tick, wound.area), ChunkWound(wound)));
     }
 }
 
@@ -554,40 +579,58 @@ fn bleed_wounds(
     mut commands: Commands,
     tick: Res<Tick>,
     settings: Res<CarnageSettings>,
-    splats: Option<Res<SplatTextures>>,
+    mut masks: ResMut<StainMasks>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
     mut ring: ResMut<StainRing>,
     mut wounded: MessageWriter<Wounded>,
-    bleeding: Query<(Entity, &Bleed, &ChunkWound, &GlobalTransform)>,
+    bleeding: Query<(Entity, &Bleeding, &ChunkWound, &GlobalTransform)>,
 ) {
     let t = tick.0;
     for (entity, bleed, wound, xf) in &bleeding {
-        if clotted(bleed, t, HZ, &settings) {
-            // A clotted wound stops being a wound. Removing the components is what makes "once
-            // clotted, never again" true of the scene as well as of the arithmetic.
-            commands.entity(entity).remove::<Bleed>();
+        // **The clot is now the same yield-stress crossing that arrests a rivulet on a wall.**
+        let age = bleed.0.age(t);
+        let stopped = !flows(
+            blood::bleed::driving_stress(&bleed.0, t, HZ, &settings.blood),
+            yield_stress(age, HZ, &settings.blood),
+        );
+        if stopped {
+            // A wound that has stopped stops being a wound. Removing the components is what makes
+            // "once clotted, never again" true of the scene as well as of the arithmetic.
+            commands.entity(entity).remove::<Bleeding>();
             commands.entity(entity).remove::<ChunkWound>();
             continue;
         }
         // **The chunk's own cut face**, carried since it detached and rotated into world space by the
         // chunk's transform — so blood leaves the wound the way the wound is facing, and a tumbling
         // gib's spray tumbles with it.
-        let Some(pulse) = pulse_wound(bleed, &wound.0, t, HZ, &settings) else { continue };
-        let world_wound = pulse.to_world(xf);
+        let local = common::blood_wound(&wound.0);
+        let Some(pulse) = pulse_wound(&bleed.0, &local, t, HZ, &settings.blood) else { continue };
+        // A pulse scales the severity and nothing else, so the wound that goes to world space is the
+        // chunk's own cut face at the pulse's severity.
+        // Arterial: this wound is thrown by the heartbeat, which is exactly the arterial case.
+        let world_wound =
+            Wound { severity: pulse.severity, ..wound.0 }.to_world(xf, PatternClass::ArterialSpurt);
         wounded.write(world_wound);
 
-        if let Some(splats) = splats.as_ref() {
-            let cpu = Wound {
-                at: world_wound.at,
-                normal: world_wound.normal,
-                area: world_wound.area,
-                severity: world_wound.severity,
-                kind: world_wound.kind,
-            };
-            for stain in stains(&cpu, &settings, FLOOR_Y) {
-                let e = spawn_stain(&mut commands, splats, &stain);
-                commands.entity(e).insert(StainMark);
-                ring.0.push(e);
-            }
+        let cpu = common::blood_wound(&Wound {
+            at: world_wound.at,
+            normal: world_wound.normal,
+            area: world_wound.area,
+            severity: world_wound.severity,
+            kind: world_wound.kind,
+        });
+        for (stain, shape) in common::stains_with_shapes(&cpu, &settings.blood, FLOOR_Y) {
+            let e = spawn_stain(
+                &mut commands,
+                &mut masks,
+                &mut images,
+                &mut materials,
+                &stain,
+                &shape,
+            );
+            commands.entity(e).insert(StainMark);
+            ring.0.push(e);
         }
     }
     let excess = ring.0.len().saturating_sub(MAX_STAINS);
@@ -635,7 +678,7 @@ fn hud(
     ring: Res<StainRing>,
     hitstop: Res<Hitstop>,
     standing: Query<(), With<body::Attached>>,
-    bleeding: Query<(), With<Bleed>>,
+    bleeding: Query<(), With<Bleeding>>,
     mut line: Query<&mut Text, With<HudStatus>>,
 ) {
     let text = format!(

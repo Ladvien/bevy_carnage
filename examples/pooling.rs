@@ -129,8 +129,8 @@ fn hud(
         "{} plug(s) thrown  ->  {} slick(s) of {} max, widest {widest:.3} m  |  merge radius {:.2} m",
         thrown.0,
         decals.iter().count(),
-        settings.max_pools,
-        settings.pool_merge_radius,
+        settings.blood.max_pools,
+        settings.blood.pool_merge_radius,
     );
     for mut t in &mut line {
         if t.0 != text {

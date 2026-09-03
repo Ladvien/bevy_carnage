@@ -375,7 +375,21 @@ pub(crate) fn shatter(
         let s = seed
             .wrapping_add(cut.wrapping_mul(2_654_435_761))
             .wrapping_add(live.len() as u32);
-        let plane = choose_plane(&live[i].0, s, weak_axis, plane_jitter);
+        // **A plug shatters direction-blind, deliberately.** The debris a bore ejects has no long
+        // axis and no tension face — it is already off the subject — so the loading-mode policy has
+        // nothing to say about it, and passing one through would invent a morphology for a coin of
+        // meat. `WeakAxis` is what this loop always used.
+        let Some(plane) = choose_plane(
+            &live[i].0,
+            s,
+            weak_axis,
+            plane_jitter,
+            &crate::FaultPolicy::WeakAxis,
+            cut,
+            &crate::soup::MorphologyDials { spiral_pitch_deg: 0.0, greenstick_impulse: 0.0 },
+        ) else {
+            continue;
+        };
         cut += 1;
         // **`FaceKind::Cut`, not `Bore`.** A shatter face is a fracture face on a piece of debris, so
         // it should be crumpled and rounded like every other one. The plug's *barrel* faces stay

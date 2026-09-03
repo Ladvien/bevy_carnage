@@ -26,7 +26,8 @@ use std::time::Duration;
 
 mod common;
 use common::body::{self, Chunk, ORIGIN};
-use common::{Recorder, arg, light_and_floor};
+use common::recorder::Recorder;
+use common::{arg, light_and_floor};
 
 const WIDTH: u32 = 960;
 const HEIGHT: u32 = 680;
@@ -115,9 +116,9 @@ fn digest(pools: &[Pool]) -> u64 {
         }
     };
     for p in pools {
-        eat(p.at.x.to_bits());
-        eat(p.at.y.to_bits());
-        eat(p.at.z.to_bits());
+        eat(p.at[0].to_bits());
+        eat(p.at[1].to_bits());
+        eat(p.at[2].to_bits());
         eat(p.radius.to_bits());
         eat(p.wetted.to_bits());
         eat(p.seed);

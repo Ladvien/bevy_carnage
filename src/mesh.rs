@@ -600,7 +600,7 @@ pub fn fracture_mesh(parts: &[(&Mesh, Mat4)], proxy: &[ProxyCell], cut: &CutSett
 
     // `bond_graph` reads the pieces' cells and must run before they are handed to `Fracture::new`.
     let ejecta = ejected.into_iter().map(ejecta_from_piece).collect();
-    Fracture::new(pieces, tree, bonds, ejecta)
+    Fracture::new(pieces, tree, bonds, ejecta, crate::soup::residual_bend(cut))
 }
 
 /// Match up which of a bake's finest fragments share a face.
@@ -660,6 +660,16 @@ pub struct Fracture {
     /// because unlike a fragment a plug has exactly one moment it can be spawned — the bake — so
     /// deferring it would defer it forever. See [`Ejecta`].
     pub ejecta: Vec<Ejecta>,
+    /// **The residual bend a greenstick left**, subject-local, or zero when the subject parted.
+    ///
+    /// Non-zero means exactly one thing: this bake produced **one fragment and no fault**, because
+    /// the bend was below [`CutSettings::greenstick_impulse`]. The tension cortex opened, the far
+    /// cortex held, and the bone stays bent in this direction by this much
+    /// (`doi:10.3390/jimaging11060187`).
+    ///
+    /// A caller bows the drawn mesh along it, or reads it as "that limb is broken but still attached"
+    /// — which is what a greenstick is and what no fragment count can express.
+    pub bent: Vec3,
 }
 
 impl Fracture {
@@ -669,6 +679,7 @@ impl Fracture {
         tree: FragmentTree,
         bonds: BondGraph,
         ejecta: Vec<Ejecta>,
+        bent: Vec3,
     ) -> Self {
         let solids = pieces
             .iter()
@@ -676,7 +687,15 @@ impl Fracture {
             .map(|(i, p)| FragmentSolid { id: FragmentId(i as u32), cell: p.cell.clone() })
             .collect();
         let built = pieces.iter().map(|_| None).collect();
-        Fracture { solids, pending: pieces.into_iter().map(Some).collect(), built, tree, bonds, ejecta }
+        Fracture {
+            solids,
+            pending: pieces.into_iter().map(Some).collect(),
+            built,
+            tree,
+            bonds,
+            ejecta,
+            bent,
+        }
     }
 
     /// **Tier A for every node**, materialised or not — the cells, which is what a collider, a volume

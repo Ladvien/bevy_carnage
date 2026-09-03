@@ -40,6 +40,12 @@ use crate::proxy::ProxyCell;
 use crate::severance::Reach;
 use crate::soup::MIN_CROSS2;
 
+/// **`WoundKind` lives in `bloodstain` now**, because its discriminant is mixed into every blood
+/// seed and the seed function moved with the blood model. One enum, one home: a copy here would be a
+/// second numbering of the same fact, and the two would disagree the first time either gained a
+/// variant. Re-exported from `lib.rs` under the name it always had.
+pub use bloodstain::WoundKind;
+
 /// A wound surface in subject-local space. Deterministic: derived only from baked geometry.
 ///
 /// **A value, not an entity.** It has no lifetime, no handle and no id, so a caller can compute one,
@@ -60,20 +66,6 @@ pub struct Wound {
     pub kind: WoundKind,
 }
 
-/// What opened the wound.
-///
-/// **`u32`-valued and part of the seed**, so a severance and a channel at the same point do not draw
-/// the same spray. The discriminants are written out because [`crate::spatter::wound_seed`] casts
-/// this, and a reordered enum would silently move every seed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[repr(u32)]
-pub enum WoundKind {
-    /// Two fragments stopped sharing a face.
-    Severance = 0,
-    /// A bore left an interior wall open to the air.
-    Channel = 1,
-}
 
 /// One cut face of a convex cell — the wound surface that travels with a fragment or a plug.
 ///

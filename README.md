@@ -276,17 +276,45 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.1.0`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.2.0`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.2.0` broke, and why it was a de-duplication rather than a rename
+
+**The whole blood model moved out to [`bloodstain`](https://github.com/Ladvien/bloodstain)** — the Comiskey percolation spatter, the pools, the bleed schedule, `hash_f32` and `WoundKind`. None of it needed Bevy and all of it was reusable, so it is now an engine-free `no_std` crate with **no math library in its public API** (`[f32; 3]` everywhere), which is the property that lets anything depend on it.
+
+This crate **re-exports every moved name**, so `use bevy_carnage::{Droplet, Stain, Pool, Bleed, hash_f32}` resolves exactly as it did at `0.1.1`, and `bevy_carnage::blood` reaches the rest. Four things do break:
+
+| what changed | from | to |
+|---|---|---|
+| The blood dials moved under one field | `settings.droplets_per_m2` | `settings.blood.droplets_per_m2` — one dial, one owner |
+| A wound announces its forensic class | `Wounded { .. }` | `Wounded { .., class: PatternClass }`, and `Wound::to_world(&xf, class)` |
+| Cessation is a material comparison, not a timer | `bleed::clotted(..)` | `flows(driving_stress(..), yield_stress(..))` — the same predicate that arrests a rivulet on a wall |
+| Stains are derived, not chosen from four textures | `SPLAT_VARIANTS`, `splat_image(variant)` | `StainMasks` + `bloodstain::stain::rasterise` from the stain's own `StainShape` |
+
+The last one is the one worth the break. Four baked splats picked by `seed % 4` contain a repeat among any four consecutive stains with probability `1 − 4!/4⁴ = 90.6 %`, so a floor read as tiled by the fourth stain; a derived stain repeats only when the impact does.
+
+`Bleed` is now a plain value (its crate has no ECS); the component is `Bleeding`, a newtype that derefs to it.
+
+### New in `0.2.0`
 
 | area | state |
 |---|---|
+| **Fracture that knows how it was loaded** | `FaultPolicy::Morphology` — torsional spiral, bending butterfly, axial transverse, comminution, and greenstick as an *outcome* (`Fracture::bent`). Closes the limitation Sellán et al. name in `10.1145/3549540` §6 |
+| **Fragment count from the energy** | `grady_mott_target` — Grady's characteristic size, with the delivered energy as a hard ceiling. A pistol wedges; a rifle comminutes |
+| **Tissue class** | Cortical splits along its own grain and splinters; trabecular compacts and is clamped to three pieces at any energy |
+| **The framework surface** | `GoreTier` mapped to ESRB/PEGI descriptors, a WCAG 2.1 SC 2.3.1 flash gate that cannot be configured upward, an aim-exclusion cone, a decal budget, and hit-stop coalescing |
 | Cutting, capping, colliders | Stable. Every fragment audits as a closed convex solid, swept across seeds and shape dials |
-| Hierarchy, bond graph, region queries | Landed and tested; the API may still move before 0.2 |
-| Look dials (`plane_jitter`, `size_spread`, `weak_axis`, `cap_relief`, `soften`) | Newest surface here. Defaults are tuned by eye on a blockout, not measured against real assets |
+| Hierarchy, bond graph, region queries | Landed and tested |
+| Look dials (`plane_jitter`, `size_spread`, `weak_axis`, `cap_relief`, `soften`) | Defaults tuned by eye on a blockout, not measured against real assets |
 | Skinned meshes | Bind pose only — see above |
 | Cross-architecture reproducibility | Not claimed |
 
-The API is **not** stable before 0.2. `0.1` pins it exactly enough — Cargo's caret range on a `0.x` admits `0.1.z` only, so a breaking change arrives as `0.2` and never by surprise.
+**Every frozen golden survived the move unchanged**, which is the evidence that it was a move: `hash_f32_is_frozen`, `the_spatter_model_is_frozen`, `the_stain_placement_is_frozen` and `the_pool_model_is_frozen` all pass in their new crate with the same bits, and `fracture_output_is_bit_identical_across_runs` passes here with `FaultPolicy::WeakAxis` still what `CutSettings::new` selects.
+
+The API is **not** stable before 1.0. Cargo's caret range on a `0.x` admits `0.2.z` only, so the next breaking change arrives as `0.3` and never by surprise.
+
+**Ten of this crate's examples also build for the browser.** They are published at
+[ladvien.github.io/foundation_vs_slop](https://ladvien.github.io/foundation_vs_slop/) from the monorepo, which is the only tree where all four gore crates are visible to one cargo workspace. Wasm builds never enable `vfx` — `bevy_hanabi`'s wasm support is WebGPU-compute-only — so every new visual in them is CPU-side.
 
 Known limitations are listed under "What it deliberately does not do" rather than hidden; `BACKLOG.md` carries the reasoning behind each decision, including the predictions that turned out wrong.
 

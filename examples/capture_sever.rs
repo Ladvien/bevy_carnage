@@ -30,7 +30,8 @@ use bevy::prelude::*;
 
 mod common;
 use common::body::{self, Blow, Chunk};
-use common::{Recorder, arg, light_and_floor};
+use common::recorder::Recorder;
+use common::{arg, light_and_floor};
 
 /// Capture size, matching `capture.rs` so the two GIFs sit together on a page.
 const WIDTH: u32 = 720;

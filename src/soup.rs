@@ -112,11 +112,15 @@ pub(crate) const EPS: f32 = 1.0e-5;
 /// Endpoint-weld lattice step for boundary-loop assembly (quantize positions to this grid so cut
 /// segments from adjacent triangles share canonical vertex ids even on non-watertight input).
 ///
+/// **`bloodstain::WELD` is the one home, and this is a re-export of it.** The blood model quantises
+/// every wound seed onto the same lattice, and two copies of a quantisation step is how a wound seeds
+/// one way in the blood and another way in the geometry that opened it.
+///
 /// `pub(crate)` so [`crate::audit`] can derive its validation tolerance *from* it rather than pick a
 /// second one. An audit that welded on a different lattice than the cap assembly used would be asking
 /// about a different mesh: finer, and the cap↔skin seam reads as open purely from the mismatch;
 /// coarser, and it closes seams the slicer left open.
-pub(crate) const WELD: f32 = 1.0e-4;
+pub(crate) const WELD: f32 = bloodstain::WELD;
 /// Squared length of the cross product below which a triangle is not worth emitting — the
 /// zero-area filter, in one place so the three sites that apply it cannot drift apart.
 ///
@@ -144,17 +148,16 @@ fn face_normal(a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
 
 /// The crate's only random source: a 32-bit integer hash mapped into `[0, 1)`.
 ///
-/// **Hand-rolled, and pinned.** There is deliberately no RNG crate here. The fracture's whole
-/// reproducibility argument rests on this function returning the same bits on every machine and every
-/// toolchain, and a dependency that reserves the right to change its stream between minor versions
-/// cannot promise that. Its exact output is frozen by a test in this crate, so the fracture cannot move
-/// underneath you without something going red.
-pub fn hash_f32(x: u32) -> f32 {
-    let mut h = x.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
-    h = ((h >> ((h >> 28).wrapping_add(4))) ^ h).wrapping_mul(277_803_737);
-    h = (h >> 22) ^ h;
-    (h as f32) / (u32::MAX as f32)
-}
+/// **`bloodstain::hash_f32` is the one home, and this is a re-export of it.** The function was
+/// written here and moved out with the blood model on 2026-09-02, because both halves draw from it
+/// and a generator with two homes is two streams waiting to diverge. Its bits are frozen by a golden
+/// in that crate under the same name, `hash_f32_is_frozen`, and the consuming game's
+/// `tests/rng_guard.rs` asserts its own `util::hash_f32` matches this symbol.
+///
+/// **Still no RNG crate.** The fracture's whole reproducibility argument rests on this returning the
+/// same bits on every machine and every toolchain, and a dependency that reserves the right to change
+/// its stream between minor versions cannot promise that.
+pub use bloodstain::hash_f32;
 
 /// A vertex sample carried through clipping (interpolated at edge–plane crossings).
 #[derive(Clone, Copy)]
@@ -297,11 +300,15 @@ fn clip_half(v: [Vtx; 3], s: [f32; 3], keep_above: bool, interior: bool, out: &m
 }
 
 /// Two orthonormal in-plane axes for a given plane normal (for cross-section UVs).
+///
+/// **Delegates to `bloodstain::plane_basis`, which is the one home.** Every direction in both crates
+/// is derived against this basis — a spray cone and a cut face have to agree about what "sideways"
+/// means, and a second copy of these four lines is exactly how they would stop agreeing. The leaf's
+/// version is the same operations in the same order over `[f32; 3]`, mirroring `glam` deliberately,
+/// so the conversion here cannot move a bit: `bloodstain`'s frozen spatter golden is what proves it.
 pub(crate) fn plane_basis(n: Vec3) -> (Vec3, Vec3) {
-    let a = if n.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
-    let u = n.cross(a).normalize_or_zero();
-    let v = n.cross(u);
-    (u, v)
+    let (u, v) = bloodstain::plane_basis(crate::v3::to_v3(n));
+    (crate::v3::from_v3(u), crate::v3::from_v3(v))
 }
 
 /// Random unit vector on the sphere from a hash seed (always exactly unit length — never zero).
@@ -492,7 +499,37 @@ pub(crate) fn fracture(
         ejecta_soften,
         seed,
         ref bores,
+        ref fault,
+        tissue: _,
+        spiral_pitch_deg,
+        greenstick_impulse,
     } = *cut;
+    let dials = MorphologyDials { spiral_pitch_deg, greenstick_impulse };
+
+    // **The tissue bias, in one place, and read only under a morphology policy.**
+    //
+    // What a material does to the *debris* is not a direction, so it does not belong in
+    // `choose_plane` beside the fault normal — it belongs to the dials the cut loop runs under.
+    // Strain to failure is the whole of it: cortical bone fails at ~2 % and splinters, so it is
+    // allowed thinner pieces and pushed harder toward the longest axis; trabecular bone tolerates
+    // ~30 % and compacts, so it is clamped to a handful of pieces and its faces are crumpled more,
+    // which is what reads as crushing rather than shattering.
+    //
+    // **Gated on `Morphology`.** Applying it under `WeakAxis` would move every frozen bake in the
+    // crate, and `CutSettings::tissue` exists so a caller can *state* the tissue; `cut_for` puts it
+    // into the policy, which is the one thing the loop reads.
+    let (target, min_fraction, weak_axis, cap_relief) = match fault {
+        crate::FaultPolicy::Morphology { tissue: crate::TissueClass::Cortical, .. } => {
+            (target, min_fraction * 0.5, weak_axis.max(0.9), cap_relief)
+        }
+        crate::FaultPolicy::Morphology { tissue: crate::TissueClass::Trabecular, .. } => (
+            target.min(crate::TRABECULAR_MAX_PIECES),
+            min_fraction,
+            weak_axis,
+            (cap_relief * 1.6).min(1.0),
+        ),
+        _ => (target, min_fraction, weak_axis, cap_relief),
+    };
     // **Bores first, because a channel is part of the subject's shape and not part of its breakage.**
     // Subtracting here means a bored cell reaches the loop as ordinary convex root cells, so the tree
     // stays binary and `fragments[id.index()]` stays parallel with `tree.node(id)`. The plugs come
@@ -656,9 +693,18 @@ pub(crate) fn fracture(
         let s = seed
             .wrapping_add((cut_index as u32).wrapping_mul(2_654_435_761))
             .wrapping_add(live.len() as u32);
-        let plane = choose_plane(&pieces[parent].cell, s, weak_axis, plane_jitter);
+        let Some(plane) =
+            choose_plane(&pieces[parent].cell, s, weak_axis, plane_jitter, fault, cut_index as u32, &dials)
+        else {
+            // **A greenstick, and it is retired rather than retried.** The policy said this load
+            // opens the tension cortex without parting the bone, so there is no plane to cut — and
+            // asking again with a different seed would be a second answer to a question already
+            // answered. `mesh::fracture_mesh` reports the residual bend through `Fracture::bent`.
+            unsplittable[slot] = true;
+            continue;
+        };
 
-        let (Some(above), Some(below)) = pieces[parent].cell.clip(&plane, crate::proxy::FaceKind::Cut)
+        let (Some(above), Some(below)) = pieces[parent].cell.clip(&plane, face_kind_for(fault, cut_index as u32))
         else {
             unsplittable[slot] = true;
             continue;
@@ -790,8 +836,118 @@ pub(crate) fn fracture(
 /// along *this* normal, scaled back toward the centre by `plane_jitter` — so with jitter below 1.0
 /// the plane is always strictly inside the cell and a cut can never be silently lost to a plane that
 /// missed.
-pub(crate) fn choose_plane(cell: &ProxyCell, s: u32, weak_axis: f32, plane_jitter: f32) -> Plane {
+///
+/// # One entry point, matched on the policy
+///
+/// [`FaultPolicy::Morphology`] adds the loading modes the fracture literature says geometric
+/// prefracture is blind to. **`None` is a real answer**, not a failure: a bend below the greenstick
+/// impulse produces no fault at all, and the caller's fragment stays whole with a residual bend.
+pub(crate) fn choose_plane(
+    cell: &ProxyCell,
+    s: u32,
+    weak_axis: f32,
+    plane_jitter: f32,
+    fault: &crate::FaultPolicy,
+    cut_index: u32,
+    fs: &MorphologyDials,
+) -> Option<Plane> {
     let centroid = cell.centroid();
+
+    // The direction the fault runs. One `match`, no second entry point.
+    let normal = match fault {
+        crate::FaultPolicy::WeakAxis => weak_axis_normal(cell, s, weak_axis, centroid),
+        crate::FaultPolicy::Morphology { mode, tissue, axis, torque, impulse } => {
+            match morphology_normal(
+                cell, s, weak_axis, centroid, *mode, *tissue, *axis, *torque, *impulse, cut_index,
+                fs,
+            ) {
+                Some(n) => n,
+                // **Greenstick: the tension cortex opened and the far cortex did not.** No plane, so
+                // the piece stays whole and the caller reports the residual bend
+                // (`doi:10.3390/jimaging11060187`).
+                None => return None,
+            }
+        }
+    };
+
+    let offset = if plane_jitter > 0.0 {
+        let (lo, hi) = cell.span_along(normal, centroid);
+        (lo + (hi - lo) * hash_f32(s ^ 0x5BD1_E995)) * plane_jitter
+    } else {
+        0.0
+    };
+    Some(Plane { point: centroid + normal * offset, normal })
+}
+
+/// **Cortical bone splits along its own grain**, so its cut planes contain the long axis.
+///
+/// Not a style bias. Cortical bone is built of osteons running along the shaft, and its fracture
+/// toughness is far lower for a crack running *along* that direction than across it — which is why a
+/// splintered long bone yields long sharp slivers rather than discs. Projecting the fault normal into
+/// the plane perpendicular to the long axis is exactly that: the cut surface then contains the axis,
+/// and the fragments come out long.
+///
+/// Applied to **torsion and axial loads only**. A bend's butterfly is a transverse-plus-oblique
+/// break — the clinically named shape — and projecting its transverse plane away would destroy the
+/// very morphology that arm exists to produce; comminution has no preferred direction at all by
+/// definition. Anything but cortical bone, or a degenerate projection, is returned untouched.
+fn longitudinal_if_cortical(n: Vec3, long: Vec3, tissue: crate::TissueClass) -> Vec3 {
+    if tissue != crate::TissueClass::Cortical {
+        return n;
+    }
+    let projected = (n - long * n.dot(long)).normalize_or_zero();
+    if projected == Vec3::ZERO { n } else { projected }
+}
+
+/// **The residual bend a greenstick leaves**, or zero when the subject actually parted.
+///
+/// Greenstick is an *outcome*, not a mode: under a bend too gentle to fault the bone, the tension
+/// cortex opens and the far cortex does not, so the subject stays in one piece and stays permanently
+/// bent (`doi:10.3390/jimaging11060187`). The direction is the tension face's own in-plane axis and
+/// the magnitude is how far short of `greenstick_impulse` the blow fell — so a barely-sub-threshold
+/// blow leaves a barely-bent bone, and a feeble one leaves a badly bent one, which is the right way
+/// round: a stronger blow gets closer to breaking instead of bending.
+pub(crate) fn residual_bend(cut: &CutSettings) -> Vec3 {
+    let crate::FaultPolicy::Morphology { mode: crate::LoadingMode::Bending, axis, impulse, .. } =
+        cut.fault
+    else {
+        return Vec3::ZERO;
+    };
+    if !(impulse < cut.greenstick_impulse) || !(cut.greenstick_impulse > 0.0) {
+        return Vec3::ZERO;
+    }
+    let long = axis.normalize_or_zero();
+    if long == Vec3::ZERO {
+        return Vec3::ZERO;
+    }
+    let (u, _) = plane_basis(long);
+    u * (1.0 - impulse / cut.greenstick_impulse).clamp(0.0, 1.0)
+}
+
+/// **Which face a cut leaves, given the policy and which cut this is.**
+///
+/// Only a *bend* produces two distinguishable faces, so only `Bending` returns anything but
+/// `FaceKind::Cut` — and the mapping is the butterfly's own order: the transverse plane lies on the
+/// tension face, the two oblique branches carry the wedge toward compression. Every other policy
+/// leaves an ordinary cut face, which is why no existing bake's relief moves.
+pub(crate) fn face_kind_for(fault: &crate::FaultPolicy, cut_index: u32) -> crate::proxy::FaceKind {
+    match fault {
+        crate::FaultPolicy::Morphology { mode: crate::LoadingMode::Bending, .. } => {
+            match cut_index % 3 {
+                0 => crate::proxy::FaceKind::Tension,
+                _ => crate::proxy::FaceKind::Compression,
+            }
+        }
+        _ => crate::proxy::FaceKind::Cut,
+    }
+}
+
+/// **The direction-blind choice**: sample candidates, keep the axis the piece is longest along.
+///
+/// Lifted out of [`choose_plane`] unchanged when the morphology arm arrived, and it is byte-for-byte
+/// the arithmetic every bake before that produced — same draws, same order, same tie rule. That is
+/// what keeps `fracture_output_is_bit_identical_across_runs` and the locked topology counts unmoved.
+fn weak_axis_normal(cell: &ProxyCell, s: u32, weak_axis: f32, centroid: Vec3) -> Vec3 {
     let candidates = 1 + (weak_axis.clamp(0.0, 1.0) * 7.0).round() as u32;
     let mut normal = random_dir(s);
     if candidates > 1 {
@@ -811,13 +967,103 @@ pub(crate) fn choose_plane(cell: &ProxyCell, s: u32, weak_axis: f32, plane_jitte
             }
         }
     }
-    let offset = if plane_jitter > 0.0 {
-        let (lo, hi) = cell.span_along(normal, centroid);
-        (lo + (hi - lo) * hash_f32(s ^ 0x5BD1_E995)) * plane_jitter
-    } else {
-        0.0
-    };
-    Plane { point: centroid + normal * offset, normal }
+    normal
+}
+
+/// The morphology dials [`choose_plane`] needs, without dragging the whole resource into this module.
+///
+/// A borrowed struct rather than five loose arguments, because the call chain
+/// (`fracture` → `choose_plane`) would otherwise grow a parameter every time a mode learned a dial.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MorphologyDials {
+    /// Degrees of helix per successive torsional cut.
+    pub(crate) spiral_pitch_deg: f32,
+    /// Impulse below which a bend is a greenstick rather than a fault, N·s.
+    pub(crate) greenstick_impulse: f32,
+}
+
+/// **The fault direction a loading mode actually produces.** `None` is a greenstick.
+///
+/// Each arm cites the measurement it implements:
+///
+/// - **Torsion** → a helix. Under torsion the tensile stress is maximum in a plane at **45° to the
+///   long axis**, and a material weaker in tension than in shear cracks along that spiral; each
+///   successive cut is rotated by `spiral_pitch_deg` about the axis, which is what produces the long
+///   sharp ends (Miyasaka et al., `doi:10.3233/BME-1991-1102`).
+/// - **Bending** → a butterfly, **in the measured order**: the transverse plane on the tension face
+///   first, then oblique planes branching from it toward the compression face. The order matters and
+///   it is the observed one — the wedge forms as fracture initiates in tension, branches obliquely,
+///   then terminates back on the tension face, so the transverse portion is what forms *last*
+///   (Isa et al., `doi:10.1016/j.forsciint.2021.110899`). Below `greenstick_impulse` there is no
+///   fault at all.
+/// - **Axial** → the weak-axis choice, which is what an axial load actually produces.
+/// - **DirectHighEnergy** → comminution: no preferred plane, so the direction is the unbiased draw
+///   and the *count* is what carries the energy (see [`crate::grady_mott_target`]).
+#[allow(clippy::too_many_arguments)]
+fn morphology_normal(
+    cell: &ProxyCell,
+    s: u32,
+    weak_axis: f32,
+    centroid: Vec3,
+    mode: crate::LoadingMode,
+    tissue: crate::TissueClass,
+    axis: Vec3,
+    torque: f32,
+    impulse: f32,
+    cut_index: u32,
+    fs: &MorphologyDials,
+) -> Option<Vec3> {
+    // A subject with no stated long axis has no torsion and no tension face; the honest answer is the
+    // direction-blind one rather than a fabricated axis.
+    let long = axis.normalize_or_zero();
+    if long == Vec3::ZERO {
+        return Some(weak_axis_normal(cell, s, weak_axis, centroid));
+    }
+    let (u, v) = plane_basis(long);
+
+    match mode {
+        crate::LoadingMode::Torsion => {
+            // 45° to the long axis, rotated about it by the pitch per successive cut. A larger torque
+            // tightens the helix, because a faster twist runs the crack further per unit length.
+            let twist = (fs.spiral_pitch_deg * (1.0 + torque.abs().min(4.0) * 0.25)).to_radians()
+                * cut_index as f32;
+            let radial = (u * twist.cos() + v * twist.sin()).normalize_or_zero();
+            let n = (long + radial).normalize_or_zero();
+            let n = if n == Vec3::ZERO { long } else { n };
+            Some(longitudinal_if_cortical(n, long, tissue))
+        }
+        crate::LoadingMode::Bending => {
+            if impulse < fs.greenstick_impulse {
+                return None;
+            }
+            // The butterfly, in the measured order. Cut 0 is the transverse plane on the tension
+            // face; cuts 1 and 2 are the oblique branches that carry the wedge toward compression;
+            // anything past that is transverse again, because a bend that keeps breaking is breaking
+            // somewhere else along the shaft.
+            let n = match cut_index % 3 {
+                0 => long,
+                1 => (long + u * 0.9).normalize_or_zero(),
+                _ => (long - u * 0.9).normalize_or_zero(),
+            };
+            Some(if n == Vec3::ZERO { long } else { n })
+        }
+        crate::LoadingMode::Axial => {
+            // The *dial* bias (thinner pieces, harder weak-axis sampling) is applied once, in
+            // `fracture`'s prologue where those dials live. What is applied here is the *direction*
+            // bias, which is a different thing and has a different reason — see
+            // `longitudinal_if_cortical`.
+            Some(longitudinal_if_cortical(
+                weak_axis_normal(cell, s, weak_axis, centroid),
+                long,
+                tissue,
+            ))
+        }
+        crate::LoadingMode::DirectHighEnergy => {
+            // Comminution has no preferred plane: an unbiased draw, deliberately *not* the weak-axis
+            // sample, because a preferred direction is exactly what a shattering blow does not have.
+            Some(random_dir(s ^ 0x0DE1_C0DE))
+        }
+    }
 }
 
 /// Split a render payload by a plane into both half-spaces. **Clipping only** — a render fragment is a
@@ -840,27 +1086,13 @@ pub(crate) fn split_render(src: &Soup, plane: &Plane, above: &mut Soup, below: &
 mod tests {
     use super::*;
 
-    /// **The fracture RNG is frozen.**
+    /// **The generator's golden moved to `bloodstain` with the generator.**
     ///
-    /// These bits are the whole reproducibility story: [`hash_f32`] drives every cut plane's direction,
-    /// so a changed constant re-partitions every mesh this crate has ever fractured. Treat this test as
-    /// a lock, not a snapshot to re-bless: if it goes red, the fracture moved.
-    #[test]
-    fn hash_f32_is_frozen() {
-        let got: Vec<u32> = (0..8u32).map(|i| hash_f32(i).to_bits()).collect();
-        assert_eq!(
-            got,
-            [1022846460, 1059634922, 1056243097, 1056841197, 1042407458, 1057018071, 1064390834, 1056755236],
-            "the fracture RNG moved. Every cut plane's direction comes from these bits, so a change \
-             here re-partitions every mesh this crate has ever fractured."
-        );
-        // Every value must land in [0, 1) — the contract `random_dir` multiplies against.
-        for i in 0..1024u32 {
-            let v = hash_f32(i);
-            assert!((0.0..1.0).contains(&v), "hash_f32({i}) = {v} escaped [0, 1)");
-        }
-    }
-
+    /// `hash_f32` is a re-export now, and the frozen table for it lives in that crate under the same
+    /// name, `hash_f32_is_frozen`. A copy of the table here would be a second set of expected values
+    /// for one function — and the first time either was re-blessed they would disagree. What this
+    /// module still owns is the property that depends on the generator *and* on this crate's own
+    /// geometry, which is the test below.
     #[test]
     fn random_dir_is_unit_length_and_never_zero() {
         for i in 0..512u32 {
