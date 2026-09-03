@@ -514,7 +514,7 @@ impl Scene {
                 sink.stain(&st);
             }
             counts.hitstop += u64::from(hitstop_ticks(&w, HZ, &self.settings));
-            live.push((w, Bleed::new(tick, w.area)));
+            live.push((w, Bleed::new(tick, &blood_wound(&w))));
         }
     }
 

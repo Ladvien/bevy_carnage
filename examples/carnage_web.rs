@@ -45,6 +45,16 @@ mod common;
 /// The fixed tick rate every integer clock in the three crates is quoted against.
 const HZ: u32 = 60;
 
+/// **An intact subject, as a wound.** Zero area throws no droplets and schedules no beat, so this is
+/// what the state holds before the first shot rather than an `Option` every reader would unwrap.
+const UNWOUNDED: blood::Wound = blood::Wound {
+    at: [0.0, 0.0, 0.0],
+    normal: [0.0, 1.0, 0.0],
+    area: 0.0,
+    severity: 0.0,
+    kind: blood::WoundKind::Channel,
+};
+
 /// Where the subject stands. The blockout's lowest point is a leg bottom at `y = -0.92`.
 const ORIGIN: Vec3 = Vec3::new(0.0, 0.92, 0.0);
 
@@ -287,7 +297,9 @@ fn setup(
         bent: Vec3::ZERO,
         drops: Vec::new(),
         landed: Vec::new(),
-        bleed: blood::Bleed::new(0, 0.0),
+        // Nothing has been shot yet, so there is no wound: a zero-area one bleeds nothing until
+        // `fire` replaces it with the channel's own.
+        bleed: blood::Bleed::new(0, &UNWOUNDED),
         strands: Vec::new(),
         mesentery: Vec::new(),
         visc: ViscSettings::default(),
@@ -414,7 +426,7 @@ fn shoot(state: &mut Flagship) {
         severity: 1.0,
         kind: blood::WoundKind::Channel,
     };
-    state.bleed = blood::Bleed::new(state.tick, wound.area);
+    state.bleed = blood::Bleed::new(state.tick, &wound);
     state.fired_at = state.tick;
     state.drops.clear();
     state.landed.clear();

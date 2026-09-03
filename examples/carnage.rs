@@ -591,7 +591,7 @@ fn attach_bleeds(world: &mut World) {
             .collect()
     };
     for (entity, wound) in fresh {
-        world.entity_mut(entity).insert((Bleeding::new(tick, wound.area), ChunkWound(wound)));
+        world.entity_mut(entity).insert((Bleeding::new(tick, &wound), ChunkWound(wound)));
     }
 }
 

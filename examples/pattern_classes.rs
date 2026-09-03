@@ -285,7 +285,7 @@ fn setup(
         active: None,
         armed: 0,
         pending: false,
-        bleed: Bleed::new(0, WOUND_AREA),
+        bleed: Bleed::new(0, &wound_at(ARTERIAL_AT, ARTERIAL_NORMAL)),
         systoles: 0,
         load: 0.0,
         load_start: 0.0,
@@ -345,7 +345,9 @@ fn arm(
     blood.active = Some(class);
     blood.armed = tick;
     blood.pending = true;
-    blood.bleed = Bleed::new(tick, WOUND_AREA);
+    // The arterial wound is the only one this bleed schedules, so it is the one the phase and the
+    // area come from. See `Bleed::seed`.
+    blood.bleed = Bleed::new(tick, &wound_at(ARTERIAL_AT, ARTERIAL_NORMAL));
     blood.systoles = 0;
     blood.swings = 0;
     blood.tip = PIVOT + swing_offset(0);

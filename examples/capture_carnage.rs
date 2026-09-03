@@ -433,7 +433,7 @@ fn attach_bleeds(rec: &mut Recorder, frame: u32) {
     for (entity, wound) in fresh {
         rec.world()
             .entity_mut(entity)
-            .insert((Bleeding::new(frame, wound.area), ChunkWound(wound)));
+            .insert((Bleeding::new(frame, &wound), ChunkWound(wound)));
     }
 }
 

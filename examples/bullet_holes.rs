@@ -51,8 +51,15 @@ const GRANULARITY: usize = 0;
 /// the largest is a cannon on a 1.0-tall subject.
 const CALIBRES: [f32; 5] = [0.015, 0.025, 0.035, 0.05, 0.08];
 
-/// The raggedness settings `J` cycles.
-const JAGGEDNESS: [f32; 4] = [0.0, 0.35, 0.7, 1.0];
+/// The raggedness settings `J` cycles, and **the default is the second**, matching `Bore::new`.
+///
+/// Measured offscreen on this example's own first shot at radius 0.035: the bite is inward-only, so
+/// the dial narrows the hole as well as roughening its rim. At `0.15` it is a round hole with an
+/// irregular edge — a bullet. At `0.35` it already reads as a shrunken polygon, and `1.0` leaves a
+/// sliver instead of a hole, which is what a shot that then "carves nothing" ran into. The high end
+/// stays on the ladder because seeing it is how the dial is understood; it is no longer what the
+/// window opens with.
+const JAGGEDNESS: [f32; 4] = [0.0, 0.15, 0.4, 1.0];
 
 /// The exit-flare settings `F` cycles.
 const FLARES: [f32; 3] = [0.0, 0.25, 0.6];

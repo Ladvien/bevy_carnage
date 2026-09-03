@@ -26,7 +26,7 @@ pub use bake::{
     FractureSubject, bake_fractures, materialise_fragments,
 };
 pub use bond::{Bond, BondGraph, BondId, BondSet};
-pub use bore::Bore;
+pub use bore::{Bore, MAX_SAG, MAX_SIDES, MIN_ROUND_SIDES, sides_for};
 #[cfg(feature = "vfx")]
 pub use decal::{
     PoolDecal, StainMask, StainMasks, spawn_pool, spawn_stain, update_pool_decals,
@@ -986,9 +986,12 @@ impl Wound {
 pub struct Bleeding(pub Bleed);
 
 impl Bleeding {
-    /// Open a bleed at `tick` with a wound's area — [`Bleed::new`], wrapped.
-    pub fn new(opened_at: u32, area: f32) -> Self {
-        Bleeding(Bleed::new(opened_at, area))
+    /// Open a bleed at `tick` for a wound — [`Bleed::new`], wrapped.
+    ///
+    /// The wound crosses [`v3`](crate::v3)'s boundary on the way in, because `Bleed`'s seed is
+    /// [`bloodstain::wound_seed`] of the leaf's own `Wound`. Five field copies, once per wound.
+    pub fn new(opened_at: u32, wound: &Wound) -> Self {
+        Bleeding(Bleed::new(opened_at, &crate::v3::wound(wound)))
     }
 }
 
