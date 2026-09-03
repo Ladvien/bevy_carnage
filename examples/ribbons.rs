@@ -30,6 +30,7 @@
 //!
 //! Run: `cargo run --release -p bevy_carnage --example ribbons`
 
+use bevy::math::Isometry3d;
 use bevy::prelude::*;
 use bevy_carnage::{BleedingChunk, CarnageSettings, CarnageVfxPlugin, RibbonInstance};
 
@@ -48,9 +49,12 @@ const SOFTEN: f32 = 0.5;
 #[derive(Resource)]
 struct Aim(Vec3);
 
-/// Marks the little sphere that shows [`Aim`].
-#[derive(Component)]
-struct AimMarker;
+/// **The aim ring's radius** — the radius of the opaque sphere it replaces.
+const AIM_RADIUS: f32 = 0.05;
+
+/// The aim ring's colour: the aim material's own `base_color`, so the marker did not change
+/// appearance when it stopped being a mesh (`examples/common/body.rs`, `BodyMaterials::new`).
+const AIM_COLOR: Color = Color::srgb(0.95, 0.85, 0.25);
 
 /// Marks the line reporting the ribbon count against the cap.
 #[derive(Component)]
@@ -70,8 +74,8 @@ fn main() {
         // the pure path. `CarnageVfxPlugin` is what brings in Hanabi and the ribbon systems.
         .add_plugins(CarnageVfxPlugin)
         .insert_resource(Aim(Vec3::new(0.0, 0.25, 0.0)))
-        .add_systems(Startup, setup)
-        .add_systems(Update, (aim_marker, strike, mark_bleeding, integrate, hud).chain())
+        .add_systems(Startup, (setup, aim_on_top))
+        .add_systems(Update, (aim_marker, strike, mark_bleeding, integrate, hud, draw_aim).chain())
         .run();
 }
 
@@ -85,14 +89,6 @@ fn setup(world: &mut World) {
     let baked = body::Baked::bake(world, SOFTEN, &[], &[GRANULARITY]);
     let materials = BodyMaterials::new(world);
     let damage = body::Damage::fresh(&baked, GRANULARITY);
-
-    let marker = world.resource_mut::<Assets<Mesh>>().add(Mesh::from(Sphere::new(0.05)));
-    world.spawn((
-        AimMarker,
-        Mesh3d(marker),
-        MeshMaterial3d(materials.aim.clone()),
-        Transform::from_translation(ORIGIN),
-    ));
 
     world.insert_resource(baked);
     world.insert_resource(materials);
@@ -161,13 +157,8 @@ fn hud(
     }
 }
 
-/// Move the aim marker, and keep the sphere on it.
-fn aim_marker(
-    keys: Res<ButtonInput<KeyCode>>,
-    time: Res<Time>,
-    mut aim: ResMut<Aim>,
-    mut marker: Query<&mut Transform, With<AimMarker>>,
-) {
+/// Move the aim point. What *draws* it is [`draw_aim`].
+fn aim_marker(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut aim: ResMut<Aim>) {
     let step = 1.1 * time.delta_secs();
     let mut d = Vec3::ZERO;
     for (key, delta) in [
@@ -186,9 +177,22 @@ fn aim_marker(
     }
     aim.0 += d * step;
     aim.0 = aim.0.clamp(Vec3::new(-0.8, -0.7, -0.6), Vec3::new(0.8, 1.2, 0.6));
-    for mut t in &mut marker {
-        t.translation = ORIGIN + aim.0;
-    }
+}
+
+/// **The aim point is inside the subject as often as not**, and an opaque marker there is simply
+/// invisible — measured: this example's sphere sat at the aim point with no standoff, inside a torso
+/// 0.28 deep. A gizmo at `depth_bias = -1.0` renders in front of everything, so the marker is
+/// readable at any aim and at any camera angle. Same fix `carnage.rs` and `sever.rs` carry.
+fn aim_on_top(mut store: ResMut<GizmoConfigStore>) {
+    let (config, _) = store.config_mut::<DefaultGizmoConfigGroup>();
+    config.depth_bias = -1.0;
+}
+
+/// Draw the aim: a ring, and a cross that gives it a centre to read when it is behind geometry.
+fn draw_aim(mut gizmos: Gizmos, aim: Res<Aim>) {
+    let at = Isometry3d::from_translation(ORIGIN + aim.0);
+    gizmos.sphere(at, AIM_RADIUS, AIM_COLOR).resolution(24);
+    gizmos.cross(at, AIM_RADIUS * 1.8, AIM_COLOR);
 }
 
 /// Read the keyboard and hand the chosen region to [`body::strike`].

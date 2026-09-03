@@ -53,6 +53,16 @@ const CALIBRE: f32 = 0.05;
 /// How many shards the plug shatters into — more plugs, more stains landing near each other.
 const SHATTER: u32 = 6;
 
+/// **How far in front of the skin the aim marker floats**, and it is clearance from the surface the
+/// shot enters rather than from the subject's origin plane — the parts' front faces are 40 mm apart,
+/// so one absolute number leaves an arm's marker half-sunk. `bullet_holes.rs` carries the parallax
+/// arithmetic that sets it; this demo shoots the same way down `-Z`, so it uses the same value.
+///
+/// **Drawn at the aim point itself the marker is invisible**, which is what this example was: `Aim` is
+/// a point on the bore's *axis*, and the torso's front face is at `z = 0.14`, so a 0.04 sphere at
+/// `z = 0` sits entirely inside the body.
+const MARKER_STANDOFF: f32 = 0.10;
+
 /// Where the next channel goes, in subject-local space.
 #[derive(Resource)]
 struct Aim(Vec3);
@@ -104,7 +114,7 @@ fn setup(world: &mut World) {
         AimMarker,
         Mesh3d(marker),
         MeshMaterial3d(materials.aim.clone()),
-        Transform::from_translation(ORIGIN),
+        Transform::from_translation(marker_at(world.resource::<Aim>().0)),
     ));
 
     world.insert_resource(baked);
@@ -151,7 +161,14 @@ fn hud(
     }
 }
 
-/// Move the aim marker, and keep the sphere on it.
+/// **Where the marker floats for one aim**: on the surface that aim's shot enters, pushed out by
+/// [`MARKER_STANDOFF`]. `aim.z` is dropped — a bore's axis is along `Z`, so the marker rides the
+/// entry plane rather than a point on the axis nothing can see. Same helper `bullet_holes.rs` uses.
+fn marker_at(aim: Vec3) -> Vec3 {
+    ORIGIN + Vec3::new(aim.x, aim.y, body::entry_plane_z(aim) + MARKER_STANDOFF)
+}
+
+/// Move the aim point, and keep the sphere on the skin it enters.
 fn aim_marker(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
@@ -177,7 +194,7 @@ fn aim_marker(
     aim.0 += d * step;
     aim.0 = aim.0.clamp(Vec3::new(-0.4, -0.5, -0.4), Vec3::new(0.4, 0.6, 0.4));
     for mut t in &mut marker {
-        t.translation = ORIGIN + aim.0;
+        t.translation = marker_at(aim.0);
     }
 }
 
