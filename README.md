@@ -121,6 +121,8 @@ cargo run --release --example carnage          # needs a GPU
 cargo run --release --example sever            # needs a GPU
 cargo run --release --example explode          # needs a GPU
 cargo run --release --example bullet_holes     # needs a GPU
+cargo run --release --example ribbons          # needs a GPU — a blood strand per flying chunk
+cargo run --release --example entrails         # needs a GPU — torso chunks pull their guts out
 cargo run --release --example fracture_cube    # terminal only — no window, no GPU
 ```
 
