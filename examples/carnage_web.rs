@@ -34,7 +34,7 @@
 
 use bevy::prelude::*;
 use bevy_carnage::{
-    BloodSettings, Bore, CarnageSettings, CutSettings, FaultPolicy, GorePolicy, GoreTier,
+    BloodSettings, CarnageSettings, CutSettings, FaultPolicy, GorePolicy, GoreTier,
     LoadingMode, ProxyCell, TissueClass, blood, fracture_mesh,
 };
 use bevy_viscera::{Mesentery, Strand, ViscSettings, step, tube_mesh};
@@ -407,7 +407,17 @@ fn shoot(state: &mut Flagship) {
             impulse,
         },
         tissue,
-        bores: vec![Bore::new(shot.at(), Vec3::Z, 0.035)],
+        // **`bore_at`, not `Bore::new(at, Vec3::Z, r)`.** A `Bore` is a *segment*: `to` is where the
+        // channel ends, not which way it points. Passing `Vec3::Z` ran the channel from the wound to
+        // the fixed point one metre up the Z axis — a diagonal stub starting inside the body — for
+        // every shot that was not at the origin. `bore_at` starts and ends outside the solid, which
+        // is what a shot that goes clean through is.
+        bores: vec![common::body::bore_at(shot.at(), 0.035, 4)],
+        // **Flat, because this bakes a channel.** `soften` relaxes each shard's skin independently
+        // and does not pin the shared boundary, so the wedges around a hole pull apart into a
+        // pinwheel of red slices — captured on `capture_pooling`, which had the same defect, and the
+        // reason every other bore-firing example here is at 0.0. `CutSettings::new` defaults to 0.5.
+        soften: 0.0,
         ..CutSettings::new(target, 0.08, SEED)
     };
     let bake = fracture_mesh(&parts, &proxy, &cut);

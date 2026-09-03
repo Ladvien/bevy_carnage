@@ -34,8 +34,20 @@ use common::light_and_floor;
 /// The frontier the subject stands at — coarse, because this demo is about the floor rather than the
 /// body, and a body that falls apart takes the aim point with it.
 const GRANULARITY: usize = 0;
-/// Rounded, matching the other body demos.
-const SOFTEN: f32 = 0.5;
+/// **Rendered flat, because this demo fires channels** — the same measurement `bullet_holes.rs`,
+/// `capture_holes.rs` and `carnage.rs` all record, and this was the one bore-firing example that
+/// still carried the other value.
+///
+/// `soften` relaxes each fragment's drawn skin *independently* and does not pin the boundary it
+/// shares with its neighbour, so on a bored subject the wedges around a channel pull apart. At 0.5,
+/// captured offscreen: the eight shards of the hole separate into a pinwheel of red slices radiating
+/// from the entry wound — reported as "a spiral pattern, like a nautilus shell". At `0.0` the shards
+/// share their boundary vertices exactly and the only opening is the bore.
+///
+/// **The gore is still rounded**, on `CutSettings::ejecta_soften`, which `Baked::bake` leaves at its
+/// shipped 0.55 — and the plugs are what this demo exists to watch land. Debris shares a boundary
+/// with nothing, so nothing can open up beside it.
+const SOFTEN: f32 = 0.0;
 /// The channel's radius. Wide enough that each shot throws several plugs worth pooling.
 const CALIBRE: f32 = 0.05;
 /// How many shards the plug shatters into — more plugs, more stains landing near each other.

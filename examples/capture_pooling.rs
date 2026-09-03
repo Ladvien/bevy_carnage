@@ -34,7 +34,9 @@ const HEIGHT: u32 = 680;
 
 /// Coarse, because the clip is about the floor: a body that falls apart takes the aim point with it.
 const GRANULARITY: usize = 0;
-const SOFTEN: f32 = 0.5;
+/// Flat, matching `pooling.rs` — this clip bores, and `soften` opens the wedges around a channel
+/// into a pinwheel of red slices. See that file's `SOFTEN` for the capture.
+const SOFTEN: f32 = 0.0;
 const CALIBRE: f32 = 0.05;
 const SHATTER: u32 = 6;
 
