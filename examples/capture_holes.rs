@@ -143,7 +143,7 @@ fn main() {
 /// re-baking on every shot neither recalls debris already in the air nor duplicates it.
 fn rebake(rec: &mut Recorder, bores: &[Bore]) {
     body::clear(rec.world());
-    let baked = body::Baked::bake(rec.world(), SOFTEN, bores);
+    let baked = body::Baked::bake(rec.world(), SOFTEN, bores, &[GRANULARITY]);
     let damage = body::Damage::fresh(&baked, GRANULARITY);
     rec.world().insert_resource(baked);
     let materials = body::BodyMaterials::new(rec.world());

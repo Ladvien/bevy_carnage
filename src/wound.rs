@@ -243,7 +243,7 @@ mod tests {
     /// Fracture the unit cube and build the finest frontier's bond graph — the same three lines every
     /// bond test in this crate writes, so they are written once here.
     fn baked_graph(cut: CutSettings) -> BondGraph {
-        let (pieces, tree, _) = fracture(crate::soup::Soup::default(), &unit_cube_cells(), &cut);
+        let (pieces, tree, _, _) = fracture(crate::soup::Soup::default(), &unit_cube_cells(), &cut);
         let leaves = tree.leaves();
         let members: Vec<_> =
             leaves.iter().filter_map(|&id| pieces.get(id.index()).map(|p| (id, &p.cell))).collect();
@@ -312,7 +312,7 @@ mod tests {
     /// — `1e-4` on a normal that was built by normalising a float cross product.
     #[test]
     fn a_cut_cell_has_a_unit_normal_cap_of_real_area() {
-        let (pieces, _, _) =
+        let (pieces, _, _, _) =
             fracture(crate::soup::Soup::default(), &unit_cube_cells(), &CutSettings::new(2, 0.1, 0x00C0_FFEE));
         let with_caps: Vec<_> =
             pieces.iter().filter(|p| !cap_faces(&p.cell).is_empty()).collect();
@@ -347,7 +347,7 @@ mod tests {
             ..Bore::new(Vec3::new(-1.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 0.08)
         };
         let cut = CutSettings { bores: vec![bore], ..CutSettings::new(2, 0.1, 0x00C0_FFEE) };
-        let (pieces, _, _) = fracture(crate::soup::Soup::default(), &unit_cube_cells(), &cut);
+        let (pieces, _, _, _) = fracture(crate::soup::Soup::default(), &unit_cube_cells(), &cut);
 
         let walls: Vec<CapFace> = pieces
             .iter()
@@ -369,7 +369,7 @@ mod tests {
         const FLARE_TILT: f32 = 0.02;
         let flared = Bore::new(Vec3::new(-1.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 0.08);
         let cut = CutSettings { bores: vec![flared], ..CutSettings::new(2, 0.1, 0x00C0_FFEE) };
-        let (pieces, _, _) = fracture(crate::soup::Soup::default(), &unit_cube_cells(), &cut);
+        let (pieces, _, _, _) = fracture(crate::soup::Soup::default(), &unit_cube_cells(), &cut);
         assert!(
             pieces
                 .iter()
@@ -382,7 +382,7 @@ mod tests {
     /// `largest_cap` picks the widest face, not the first — checked against the set it came from.
     #[test]
     fn the_largest_cap_is_the_widest_one() {
-        let (pieces, _, _) =
+        let (pieces, _, _, _) =
             fracture(crate::soup::Soup::default(), &unit_cube_cells(), &CutSettings::new(8, 0.05, 0xD00D));
         for p in &pieces {
             let all = cap_faces(&p.cell);

@@ -99,7 +99,9 @@ struct BloodEffect {
     base_radius: f32,
     /// Cone height, metres — how far ahead of the wound the droplets start.
     height: f32,
-    /// Speed range, m/s.
+    /// Speed range, m/s, **already scaled** — the caller applies
+    /// [`crate::BloodSettings::spatter_speed_scale`] when its numbers come from the measured
+    /// constants.
     speed: [f32; 2],
     /// Lifetime range, seconds.
     lifetime: [f32; 2],
@@ -221,10 +223,18 @@ pub fn spatter_burst(s: &CarnageSettings) -> EffectAsset {
         name: "carnage:spatter",
         base_radius: 0.03,
         height: 0.06,
-        speed: [BACK_SPATTER_SPEED, FORWARD_SPATTER_SPEED],
-        lifetime: [0.35, 0.85],
-        drag_scale: 1.0,
-        size: 0.022,
+        speed: [
+            BACK_SPATTER_SPEED * s.blood.spatter_speed_scale,
+            FORWARD_SPATTER_SPEED * s.blood.spatter_speed_scale,
+        ],
+        // **Tuned, not measured.** At `drag = drag * 2.6` a droplet's speed e-folds in about a
+        // quarter of a second, so it visibly decelerates and then falls at the terminal speed
+        // `gravity/drag` instead of flying flat; the longer lifetime is what lets that fall be seen
+        // rather than the droplet dying at the top of its arc; and the larger billboard is what
+        // makes it read as a cohesive drop rather than as dust.
+        lifetime: [0.55, 1.30],
+        drag_scale: 2.6,
+        size: 0.030,
         space: SimulationSpace::Global,
         condition: SimulationCondition::WhenVisible,
         spawner: SpawnerSettings::once(1.0.into()),
@@ -240,7 +250,10 @@ pub fn mist_puff(s: &CarnageSettings) -> EffectAsset {
         name: "carnage:mist",
         base_radius: 0.05,
         height: 0.04,
-        speed: [FORWARD_SPATTER_SPEED, FORWARD_SPATTER_SPEED],
+        speed: [
+            FORWARD_SPATTER_SPEED * s.blood.spatter_speed_scale,
+            FORWARD_SPATTER_SPEED * s.blood.spatter_speed_scale,
+        ],
         lifetime: [0.10, 0.22],
         drag_scale: 6.0,
         size: 0.010,
@@ -262,10 +275,15 @@ pub fn arterial_spurt(s: &CarnageSettings) -> EffectAsset {
         name: "carnage:spurt",
         base_radius: 0.015,
         height: 0.05,
-        speed: [FORWARD_SPATTER_SPEED * 0.35, FORWARD_SPATTER_SPEED * 0.6],
-        lifetime: [0.45, 0.95],
-        drag_scale: 0.8,
-        size: 0.026,
+        speed: [
+            FORWARD_SPATTER_SPEED * 0.35 * s.blood.spatter_speed_scale,
+            FORWARD_SPATTER_SPEED * 0.6 * s.blood.spatter_speed_scale,
+        ],
+        // Tuned, not measured — same reasoning as the burst above, at a lighter drag because a jet
+        // is meant to carry further than an impact spray.
+        lifetime: [0.60, 1.40],
+        drag_scale: 1.8,
+        size: 0.034,
         space: SimulationSpace::Global,
         condition: SimulationCondition::Always,
         spawner: SpawnerSettings::burst(24.0.into(), period.into()),
@@ -280,6 +298,9 @@ pub fn wound_seep(s: &CarnageSettings) -> EffectAsset {
         name: "carnage:seep",
         base_radius: 0.012,
         height: 0.02,
+        // `spatter_speed_scale` is deliberately **not** applied: these are not the paper's numbers,
+        // they are authored at demo scale already, and scaling them would apply the dial twice for
+        // one meaning.
         speed: [0.15, 0.6],
         lifetime: [0.5, 1.1],
         drag_scale: 2.0,

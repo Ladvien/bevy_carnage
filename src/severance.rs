@@ -492,7 +492,7 @@ mod tests {
     fn the_queries_are_pure_and_reproducible() {
         let cells = vec![ProxyCell::from_box(Vec3::ZERO, Vec3::splat(0.5))];
         let build = || -> (BondGraph, FragmentTree) {
-            let (pieces, tree, _) = fracture(Soup::default(), &cells, &CutSettings::new(8, 0.05, 0xD00D));
+            let (pieces, tree, _, _) = fracture(Soup::default(), &cells, &CutSettings::new(8, 0.05, 0xD00D));
             (crate::mesh::bond_graph(&pieces, &tree), tree)
         };
         let (ga, _) = build();
@@ -528,7 +528,7 @@ mod tests {
             ProxyCell::from_box(Vec3::ZERO, Vec3::new(0.35, 0.55, 0.2)),
             ProxyCell::from_box(Vec3::new(0.0, 0.75, 0.0), Vec3::splat(0.2)),
         ];
-        let (pieces, tree, _) = fracture(Soup::default(), &cells, &CutSettings::new(34, 0.08, 0x00C0_FFEE));
+        let (pieces, tree, _, _) = fracture(Soup::default(), &cells, &CutSettings::new(34, 0.08, 0x00C0_FFEE));
         let standing = tree.leaves();
         let graph = crate::mesh::bond_graph(&pieces, &tree);
         assert!(standing.len() > 12, "need a fine enough bake to take a small piece off");

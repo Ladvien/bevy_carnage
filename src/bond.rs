@@ -557,7 +557,7 @@ mod tests {
     /// other while nothing is broken.
     #[test]
     fn a_baked_graph_is_symmetric_and_connected() {
-        let (pieces, tree, _) = fracture(crate::soup::Soup::default(), &unit_cube_cells(), &CutSettings::new(8, 0.05, 0x1234));
+        let (pieces, tree, _, _) = fracture(crate::soup::Soup::default(), &unit_cube_cells(), &CutSettings::new(8, 0.05, 0x1234));
         let leaves = tree.leaves();
         let members: Vec<_> =
             leaves.iter().filter_map(|&id| pieces.get(id.index()).map(|p| (id, &p.cell))).collect();
@@ -585,7 +585,7 @@ mod tests {
     /// each other are exactly coplanar however deep either one sits.
     #[test]
     fn every_frontier_has_its_own_connected_graph() {
-        let (pieces, tree, _) =
+        let (pieces, tree, _, _) =
             fracture(crate::soup::Soup::default(), &unit_cube_cells(), &CutSettings::new(12, 0.03, 0x0FF1_CE));
         assert!(tree.cuts() >= 6, "need a deep enough bake to have coarse frontiers");
 
@@ -617,7 +617,7 @@ mod tests {
     /// fragment alone; the rest stays a single connected body.
     #[test]
     fn severing_one_fragments_bonds_detaches_only_it() {
-        let (pieces, tree, _) = fracture(crate::soup::Soup::default(), &unit_cube_cells(), &CutSettings::new(8, 0.05, 0x1234));
+        let (pieces, tree, _, _) = fracture(crate::soup::Soup::default(), &unit_cube_cells(), &CutSettings::new(8, 0.05, 0x1234));
         let leaves = tree.leaves();
         let members: Vec<_> =
             leaves.iter().filter_map(|&id| pieces.get(id.index()).map(|p| (id, &p.cell))).collect();
@@ -646,7 +646,7 @@ mod tests {
     /// Progressive damage: the set only grows, and islands only ever fragment further.
     #[test]
     fn repeated_severing_only_ever_breaks_things_further() {
-        let (pieces, tree, _) = fracture(crate::soup::Soup::default(), &unit_cube_cells(), &CutSettings::new(8, 0.05, 0xBEEF));
+        let (pieces, tree, _, _) = fracture(crate::soup::Soup::default(), &unit_cube_cells(), &CutSettings::new(8, 0.05, 0xBEEF));
         let leaves = tree.leaves();
         let members: Vec<_> =
             leaves.iter().filter_map(|&id| pieces.get(id.index()).map(|p| (id, &p.cell))).collect();

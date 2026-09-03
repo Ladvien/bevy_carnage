@@ -129,7 +129,7 @@ fn digest(pools: &[Pool]) -> u64 {
 /// Re-cut the subject with the accumulated channels, stand it back up, and throw what came out.
 fn rebake(rec: &mut Recorder, bores: &[Bore]) {
     body::clear(rec.world());
-    let baked = body::Baked::bake(rec.world(), SOFTEN, bores);
+    let baked = body::Baked::bake(rec.world(), SOFTEN, bores, &[GRANULARITY]);
     let damage = body::Damage::fresh(&baked, GRANULARITY);
     rec.world().insert_resource(baked);
     let materials = body::BodyMaterials::new(rec.world());

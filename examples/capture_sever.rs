@@ -66,7 +66,7 @@ fn main() {
     let Some(mut rec) = Recorder::new(WIDTH, HEIGHT, camera, &out) else { return };
 
     light_and_floor(rec.world());
-    let baked = body::Baked::bake(rec.world(), SOFTEN, &[]);
+    let baked = body::Baked::bake(rec.world(), SOFTEN, &[], &[GRANULARITY]);
     let materials = body::BodyMaterials::new(rec.world());
     let damage = body::Damage::fresh(&baked, GRANULARITY);
     rec.world().insert_resource(baked);

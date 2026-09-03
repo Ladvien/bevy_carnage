@@ -61,19 +61,29 @@ const FLARES: [f32; 3] = [0.0, 0.25, 0.6];
 /// corer look, and having it on the dial is the only way to see what the others are fixing.
 const SHATTERS: [u32; 5] = [1, 2, 4, 6, 8];
 
-/// **How far in front of the subject the aim marker floats.**
+/// **How far in front of the skin the aim marker floats.**
 ///
 /// `Aim` is a point on the bore's *axis*, not on the surface — so drawn at the aim point itself the
-/// marker sits **inside the torso** and is invisible, which is exactly what the first run of this
-/// example showed. Pushed out along `+z` it sits on the line the shot travels instead.
+/// marker sits **inside the torso** and is invisible. This is clearance from the surface the shot
+/// enters ([`body::entry_plane_z`]), not from the subject's origin plane, because the parts' front
+/// faces are 40 mm apart: one number measured off the torso leaves an arm's marker half-sunk.
 ///
-/// **Small on purpose.** The first fix used 0.42, which is visible but wrong in a subtler way: the
-/// camera is off-axis, so a marker that far forward parallaxes away from the hole it predicts and
-/// stops being an aiming aid. The subject's own front faces sit at `z = 0.10` (arms) to `0.14`
-/// (torso), so 0.20 clears the skin by more than the marker's radius while staying close enough that
-/// marker and entry wound read as the same place. `sever.rs` has the same latent problem and a
-/// different excuse: its blows are regions, not rays, so its marker has no line to sit on.
-const MARKER_STANDOFF: f32 = 0.20;
+/// **The size is set by parallax, and is why the number is small.** The camera sits at
+/// `(1.50, 1.15, 1.95)` looking at `ORIGIN - Y*0.16`, so the view direction through the marker is
+/// about `(0.60, 0.16, 0.78)` normalised and a `+Z` offset of `d` shifts the marker's silhouette
+/// against the surface behind it by roughly `0.77 d`. The marker is 0.070 across, so reading as *in
+/// front of* the skin rather than sunk into it needs `0.77 d >= 0.070`, i.e. `d >= 0.09`. At 0.10 the
+/// torso puts the marker centre at `z = 0.24`, the head at 0.23, an arm at 0.20 — and the first fix's
+/// 0.42 stays rejected, because that far forward it parallaxes away from the hole it predicts and
+/// stops being an aiming aid.
+const MARKER_STANDOFF: f32 = 0.10;
+
+/// **The most channels the subject carries at once.** A bore is a bake input, so every shot re-bores
+/// the whole list and the cost tracks triangles x cells — measured on this example, 85 ms at one
+/// channel and 2661 ms at eighteen, where 6 proxy cells had become 160. Twelve holds the worst bake
+/// near a tenth of that while leaving the subject more hole than body. The oldest goes when a new one
+/// arrives, so firing never stops working and the channel that leaves closes up.
+const MAX_CHANNELS: usize = 12;
 
 /// Where the next shot enters, in subject-local space.
 #[derive(Resource)]
@@ -168,7 +178,7 @@ fn setup(world: &mut World) {
     world.spawn((Camera3d::default(), bevy::core_pipeline::prepass::DepthPrepass, camera));
     light_and_floor(world);
 
-    let baked = body::Baked::bake(world, SOFTEN, &[]);
+    let baked = body::Baked::bake(world, SOFTEN, &[], &[GRANULARITY]);
     let materials = BodyMaterials::new(world);
     let damage = body::Damage::fresh(&baked, GRANULARITY);
 
@@ -178,7 +188,7 @@ fn setup(world: &mut World) {
         AimMarker,
         Mesh3d(marker),
         MeshMaterial3d(materials.aim.clone()),
-        Transform::from_translation(ORIGIN + aim + Vec3::Z * MARKER_STANDOFF),
+        Transform::from_translation(marker_at(aim)),
     ));
 
     world.insert_resource(baked);
@@ -186,6 +196,14 @@ fn setup(world: &mut World) {
     world.insert_resource(damage);
     body::stand(world, GRANULARITY);
     body::spawn_gore(world);
+    // The clearance, as numbers in the terminal rather than as a claim in a doc comment.
+    for (name, centre, _) in body::parts() {
+        let plane = body::entry_plane_z(centre);
+        info!(
+            "aim marker: over {name} the skin is at z {plane:.3}, so the marker centre sits at {:.3}",
+            plane + MARKER_STANDOFF
+        );
+    }
     spawn_hud(world);
 }
 
@@ -238,6 +256,15 @@ fn hud(
     }
 }
 
+/// **Where the marker floats for one aim**: on the surface that aim's shot enters, pushed out by
+/// [`MARKER_STANDOFF`].
+///
+/// `aim.z` is deliberately dropped — no key moves it and a bore's axis is along `Z`, so the marker
+/// rides the entry plane rather than a point on the axis nothing can see.
+fn marker_at(aim: Vec3) -> Vec3 {
+    ORIGIN + Vec3::new(aim.x, aim.y, body::entry_plane_z(aim) + MARKER_STANDOFF)
+}
+
 /// Move the aim marker, and keep the sphere on it. Same clamp as `sever`'s.
 fn aim_marker(
     keys: Res<ButtonInput<KeyCode>>,
@@ -264,7 +291,7 @@ fn aim_marker(
     aim.0 += d * step;
     aim.0 = aim.0.clamp(Vec3::new(-0.8, -0.7, -0.6), Vec3::new(0.8, 1.2, 0.6));
     for mut t in &mut marker {
-        t.translation = ORIGIN + aim.0 + Vec3::Z * MARKER_STANDOFF;
+        t.translation = marker_at(aim.0);
     }
 }
 
@@ -325,6 +352,7 @@ fn fire(world: &mut World) {
     if reset {
         world.resource_mut::<Bores>().0.clear();
     }
+    let mut capped = false;
     if shot {
         let at = world.resource::<Aim>().0;
         let (radius, jaggedness, flare, shatter) = {
@@ -338,12 +366,20 @@ fn fire(world: &mut World) {
              shape",
             bore.from, bore.to, bore.sides
         );
-        world.resource_mut::<Bores>().0.push(bore);
+        // **The cap, and the oldest channel is the one that goes.** A bore is a bake input, so the
+        // list is the cost; see [`MAX_CHANNELS`]. Dropping the newest instead would make firing stop
+        // working, which is worse than a hole closing up.
+        let mut list = world.resource_mut::<Bores>();
+        if list.0.len() == MAX_CHANNELS {
+            list.0.remove(0);
+            capped = true;
+        }
+        list.0.push(bore);
     }
 
     let bores = world.resource::<Bores>().0.clone();
     body::clear(world);
-    let baked = body::Baked::bake(world, SOFTEN, &bores);
+    let baked = body::Baked::bake(world, SOFTEN, &bores, &[GRANULARITY]);
     let damage = body::Damage::fresh(&baked, GRANULARITY);
     world.insert_resource(baked);
     world.insert_resource(damage);
@@ -356,11 +392,33 @@ fn fire(world: &mut World) {
     }
     body::spawn_gore(world);
 
+    // **Prune to what landed.** A bore aimed at material an earlier shot already removed carves
+    // nothing and never will, so keeping it means paying for it in every later bake — which is what
+    // took the eighteenth shot in the reported run to 2661 ms. `landed_bores` is ascending, so the
+    // retained list keeps its firing order and describes exactly the geometry that was just baked:
+    // no second bake, and the crate is not the one deciding what the caller's channel list holds.
+    let landed = world.resource::<body::Baked>().landed_bores.clone();
+    let kept: Vec<Bore> =
+        landed.iter().filter_map(|&i| bores.get(i as usize).copied()).collect();
+    let dead = bores.len() - kept.len();
+    world.resource_mut::<Bores>().0 = kept;
+
     let standing = world.resource::<body::Baked>().tree.roots().len();
+    let held = world.resource::<Bores>().0.len();
     world.resource_mut::<Status>().0 = if reset {
         "reset - an unbored subject".into()
     } else {
-        format!("fired: {} hole(s), the proxy is now {standing} cells", bores.len())
+        // ASCII only; see `HudStatus`. Both events are reported because both are otherwise
+        // mysterious: a repeated shot at one aim leaves the hole count unchanged, and a capped shot
+        // closes a hole the player did not ask to close.
+        let mut note = String::new();
+        if dead > 0 {
+            note.push_str(" (that shot carved nothing - the material was already gone)");
+        }
+        if capped {
+            note.push_str(&format!(" (the oldest channel closed - the cap is {MAX_CHANNELS})"));
+        }
+        format!("fired: {held} hole(s), the proxy is now {standing} cells{note}")
     };
 }
 

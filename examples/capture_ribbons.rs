@@ -79,7 +79,7 @@ fn main() {
     }
 
     light_and_floor(rec.world());
-    let baked = body::Baked::bake(rec.world(), SOFTEN, &[]);
+    let baked = body::Baked::bake(rec.world(), SOFTEN, &[], &[GRANULARITY]);
     let damage = body::Damage::fresh(&baked, GRANULARITY);
     rec.world().insert_resource(baked);
     let materials = body::BodyMaterials::new(rec.world());

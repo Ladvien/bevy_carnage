@@ -515,7 +515,10 @@ pub fn bake_fractures(
         // others is exactly the ambiguity `CLAUDE.md`'s one-path rule exists to prevent, and buying it
         // for 0.33 ms would be a bad trade twice over.
         let bores = bores.map(|b| b.0.clone()).unwrap_or_default();
-        let (pieces, tree, ejected) =
+        // The landed list is deliberately dropped on the plugin path: `FractureBores` is the
+        // caller's own component, and a crate that silently rewrote it would be deciding a policy
+        // that belongs to whoever accumulates the channels. Reporting and deciding stay separate.
+        let (pieces, tree, ejected, _) =
             fracture(body, &proxy.0, &settings.cut_for(target, seed_from_path(&asset_path), bores));
         let graph = crate::mesh::bond_graph(&pieces, &tree);
         // **Tier A for every node, Tier B for none — yet.** The interior nodes of the hierarchy are

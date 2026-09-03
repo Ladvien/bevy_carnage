@@ -84,6 +84,11 @@ pub const SOFTENINGS: [f32; 4] = [0.0, 0.25, 0.5, 0.75];
 /// roots — uncut. That is dismemberment; the last entry is gibs; the two in between are the range.
 pub const GRANULARITIES: [usize; 4] = [6, 12, 20, TARGET];
 
+/// Every index into [`GRANULARITIES`] — **for the one example that cycles the dial against a single
+/// cached bake.** Anything that stands at one granularity asks for that one instead; see
+/// [`Baked::bake`].
+pub const ALL_FRONTIERS: [usize; GRANULARITIES.len()] = [0, 1, 2, 3];
+
 /// **Where the demo's shots land**: `(frame, entry point, radius, shatter)`, subject-local.
 ///
 /// Front to back along `-z`, because the camera sits at `+z` and the entry hole is the thing worth
@@ -173,6 +178,25 @@ pub fn parts() -> Vec<(&'static str, Vec3, Vec3)> {
     ]
 }
 
+/// The frontmost face any part has, subject-local — the plane a shot that enters nothing rides.
+pub fn subject_front_z() -> f32 {
+    parts().into_iter().map(|(_, c, h)| c.z + h.z).fold(f32::NEG_INFINITY, f32::max)
+}
+
+/// **Where a shot down `-Z` at `(x, y)` breaks the skin**, subject-local.
+///
+/// The parts do not overlap in `x`/`y`, so at most one contains the aim; the fold takes the frontmost
+/// anyway rather than asserting that. A shot that enters nothing gets [`subject_front_z`], so the
+/// marker stays in one readable plane and a miss looks like a miss.
+pub fn entry_plane_z(at: Vec3) -> f32 {
+    let entered = parts()
+        .into_iter()
+        .filter(|(_, c, h)| (at.x - c.x).abs() <= h.x && (at.y - c.y).abs() <= h.y)
+        .map(|(_, c, h)| c.z + h.z)
+        .fold(f32::NEG_INFINITY, f32::max);
+    if entered.is_finite() { entered } else { subject_front_z() }
+}
+
 /// Which body part a fragment came out of, by walking the hierarchy back to its root cell.
 pub fn part_of(id: FragmentId, tree: &FragmentTree) -> &'static str {
     let root = tree.root_of(id).unwrap_or(id);
@@ -205,6 +229,10 @@ pub struct Baked {
     /// Off the tree and off the bond graph, because the crate keeps it off both — so nothing here has
     /// to remember that a plug is not a frontier piece.
     pub gore: Vec<GorePart>,
+    /// **Which of the bake's `bores` actually carved something**, as indices into the list handed to
+    /// [`Baked::bake`]. A caller accumulating channels prunes its list with this; see
+    /// `bullet_holes.rs`.
+    pub landed_bores: Vec<u32>,
 }
 
 /// One ejected plug, resolved to handles at bake time exactly like a [`Part`].
@@ -237,7 +265,11 @@ impl Baked {
     /// `bores` are channels subtracted from the proxy before any cut — see [`bore_at`]. Taking them
     /// here rather than in each caller is what keeps the windowed demo and the recorder honest: there
     /// is one bake definition, so a hole in the GIF is a hole you can reproduce by keypress.
-    pub fn bake(world: &mut World, soften: f32, bores: &[Bore]) -> Baked {
+    ///
+    /// `frontiers` are indices into [`GRANULARITIES`] — the granularities this caller can actually
+    /// stand at. An index outside the array is skipped rather than panicking: that is a caller typo,
+    /// and a bake with no frontier draws nothing, which is visible immediately.
+    pub fn bake(world: &mut World, soften: f32, bores: &[Bore], frontiers: &[usize]) -> Baked {
         let owned = subject();
         let parts: Vec<(&Mesh, Mat4)> = owned.iter().map(|(m, x)| (m, *x)).collect();
         let cut = CutSettings {
@@ -258,14 +290,18 @@ impl Baked {
         );
         info!("soften {soften:.2} — rounding the drawn surface only; the colliders are unchanged");
 
-        // **Only the frontiers this demo can ever stand at get meshes.** The tree keeps every piece
+        // **Only the frontiers this caller can ever stand at get meshes.** The tree keeps every piece
         // the cut loop split, and the interior levels are pure waste unless something draws them — so
-        // ask for exactly the four granularities the `G` key cycles plus the leaves, and leave the
-        // rest unmaterialised. The union, not just the leaves: `frontier_of` legitimately returns
-        // interior ids, which is the whole point of the granularity dial.
-        let mut wanted: Vec<FragmentId> =
-            GRANULARITIES.iter().flat_map(|g| baked.tree.frontier_of(*g)).collect();
-        wanted.extend(baked.tree.leaves());
+        // ask for exactly the granularities the caller named and leave the rest unmaterialised. Not
+        // just the leaves: `frontier_of` legitimately returns interior ids, which is the whole point
+        // of the granularity dial. And not the leaves *as well*: at `GRANULARITIES[3] == TARGET` the
+        // finest frontier already is the leaves, so a caller standing there loses no mesh, while a
+        // caller standing at the roots was paying for every gib it can never draw.
+        let mut wanted: Vec<FragmentId> = frontiers
+            .iter()
+            .filter_map(|&i| GRANULARITIES.get(i))
+            .flat_map(|g| baked.tree.frontier_of(*g))
+            .collect();
         // SORT-OK: by tree index, which is unique per node; the dedup below is the whole purpose.
         wanted.sort_unstable_by_key(|id| id.index());
         wanted.dedup();
@@ -275,6 +311,7 @@ impl Baked {
         // query touches.
         let tree = std::mem::take(&mut baked.tree);
         let ejecta = std::mem::take(&mut baked.ejecta);
+        let landed_bores = std::mem::take(&mut baked.landed_bores);
 
         let gore = ejecta
             .into_iter()
@@ -310,7 +347,7 @@ impl Baked {
                 cell: f.cell,
             });
         }
-        Baked { tree, parts, gore }
+        Baked { tree, parts, gore, landed_bores }
     }
 
     /// The adjacency for one frontier.
@@ -796,7 +833,7 @@ pub fn bleed(world: &mut World) {
 /// impact to read and no honest direction of travel. It gets a **perpendicular** impact built from
 /// what the pool does know — its own width — which is exactly the case `stain_shape` answers with a
 /// round mask and no spine axis, and which is what a slick looks like.
-fn pool_shape(pool: &Pool, s: &BloodSettings) -> StainShape {
+pub fn pool_shape(pool: &Pool, s: &BloodSettings) -> StainShape {
     let impact = Impact {
         speed: 0.0,
         diameter: pool.radius * 2.0,

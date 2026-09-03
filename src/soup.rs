@@ -486,7 +486,7 @@ pub(crate) fn fracture(
     render: Soup,
     proxy: &[ProxyCell],
     cut: &CutSettings,
-) -> (Vec<Piece>, FragmentTree, Vec<Ejected>) {
+) -> (Vec<Piece>, FragmentTree, Vec<Ejected>, Vec<u32>) {
     let CutSettings {
         target,
         min_fraction,
@@ -538,7 +538,7 @@ pub(crate) fn fracture(
     // The **skin** is carved a few lines down, per closed shell, rather than here: a carved skin has
     // boundary edges at every hole rim, so classifying it after the carve reads a bored solid as a
     // sheet and carries the whole subject to one fragment. See [`crate::bore::carve`].
-    let (bored, prisms, plugs) = crate::bore::apply(proxy, bores);
+    let (bored, prisms, plugs, landed_bores) = crate::bore::apply(proxy, bores);
     let proxy: &[ProxyCell] = &bored;
     // One slot per landed prism, filled by the per-shell carve below with the skin that channel took.
     let mut torn: Vec<Soup> = (0..prisms.len()).map(|_| Soup::default()).collect();
@@ -806,7 +806,7 @@ pub(crate) fn fracture(
         })
         .collect();
 
-    (pieces, FragmentTree::from_nodes(nodes, cuts), ejecta)
+    (pieces, FragmentTree::from_nodes(nodes, cuts), ejecta, landed_bores)
 }
 
 /// **Where to cut one convex cell, given a mixed seed and the shape dials.** The crate's single cut

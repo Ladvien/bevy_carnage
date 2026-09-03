@@ -82,7 +82,7 @@ fn setup(world: &mut World) {
     world.spawn((Camera3d::default(), bevy::core_pipeline::prepass::DepthPrepass, camera));
     light_and_floor(world);
 
-    let baked = body::Baked::bake(world, SOFTEN, &[]);
+    let baked = body::Baked::bake(world, SOFTEN, &[], &[GRANULARITY]);
     let materials = BodyMaterials::new(world);
     let damage = body::Damage::fresh(&baked, GRANULARITY);
 

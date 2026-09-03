@@ -46,12 +46,14 @@
 use std::collections::HashSet;
 
 use bevy::core_pipeline::prepass::DepthPrepass;
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::pbr::decal::ForwardDecalMaterial;
 use bevy::prelude::*;
 use bevy_carnage::{
     Bleeding, BloodSettings, BondId, CarnagePlugin, CarnageSettings, CarnageVfxPlugin, FragmentId,
-    PatternClass, StainMasks, Wound, WoundKind, Wounded, blood, flows, hitstop_ticks, largest_cap,
-    pulse_wound, shake_offset, spawn_stain, trauma_for, wound_of_channel, wounds_from_bonds,
+    PatternClass, Pool, PoolDecal, Stain, StainMasks, Wound, WoundKind, Wounded, absorb, blood,
+    flows, hitstop_ticks, largest_cap, pulse_wound, shake_offset, spawn_pool, spawn_stain,
+    spread_pools, trauma_for, update_pool_decals, wound_of_channel, wounds_from_bonds,
     yield_stress,
 };
 
@@ -100,9 +102,12 @@ const SPEED_SCALE: f32 = 0.25;
 #[derive(Resource)]
 struct Aim(Vec3);
 
-/// Marks the little sphere that shows [`Aim`].
-#[derive(Component)]
-struct AimMarker;
+/// **The aim ring's radius** — the radius of the opaque sphere it replaces.
+const AIM_RADIUS: f32 = 0.05;
+
+/// The aim ring's colour: the aim material's own `base_color`, so the marker did not change
+/// appearance when it stopped being a mesh (`examples/common/body.rs`, `BodyMaterials::new`).
+const AIM_COLOR: Color = Color::srgb(0.95, 0.85, 0.25);
 
 /// Every channel fired so far. Kept rather than derived, exactly as in `bullet_holes`: each shot
 /// re-bakes from the accumulated list, so two overlapping shots make one channel.
@@ -187,7 +192,10 @@ fn main() {
         })
         // The deterministic half and the cosmetic half are separate plugins on purpose — a headless
         // harness adds only the first. `CarnageVfxPlugin` is what brings in Hanabi.
-        .add_plugins((CarnagePlugin, CarnageVfxPlugin))
+        // `FrameTimeDiagnosticsPlugin` is here because "a ton of lag" needs a number: the HUD reports
+        // fps beside the mark and slick counts, so a change to the blood can be judged against what
+        // it costs rather than against an impression.
+        .add_plugins((CarnagePlugin, CarnageVfxPlugin, FrameTimeDiagnosticsPlugin::default()))
         .insert_resource(Aim(Vec3::new(-0.30, 0.16, 0.0)))
         .init_resource::<Bores>()
         // **`body::spawn_gore` and `reset` both read this**, and it is not `init_resource`d by
@@ -198,15 +206,29 @@ fn main() {
         .init_resource::<Tick>()
         .init_resource::<Hitstop>()
         .init_resource::<StainRing>()
+        // The drips' pools. `body::bleed` owns this in the other demos; this one folds its own
+        // heartbeat stains into it — see `bleed_wounds`.
+        .init_resource::<body::Pools>()
         .init_resource::<LastBlow>()
         .init_resource::<Status>()
         // `StainMasks` is `CarnageVfxPlugin`'s own `init_resource` — the mask cache builds itself
         // on demand from each stain's silhouette, so there is no texture-building `Startup` system
         // to register here and none to accidentally register twice.
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, aim_on_top))
         .add_systems(
             Update,
-            (advance_tick, aim_marker, strike, bleed_wounds, integrate, camera_shake, hud).chain(),
+            (
+                advance_tick,
+                aim_marker,
+                strike,
+                bleed_wounds,
+                spread_blood,
+                integrate,
+                camera_shake,
+                hud,
+                draw_aim,
+            )
+                .chain(),
         )
         .run();
 }
@@ -224,17 +246,9 @@ fn setup(world: &mut World) {
     ));
     light_and_floor(world);
 
-    let baked = body::Baked::bake(world, SOFTEN, &[]);
+    let baked = body::Baked::bake(world, SOFTEN, &[], &[GRANULARITY]);
     let materials = BodyMaterials::new(world);
     let damage = body::Damage::fresh(&baked, GRANULARITY);
-
-    let marker = world.resource_mut::<Assets<Mesh>>().add(Mesh::from(Sphere::new(0.05)));
-    world.spawn((
-        AimMarker,
-        Mesh3d(marker),
-        MeshMaterial3d(materials.aim.clone()),
-        Transform::from_translation(ORIGIN),
-    ));
 
     world.insert_resource(baked);
     world.insert_resource(materials);
@@ -272,13 +286,8 @@ fn advance_tick(mut tick: ResMut<Tick>, mut hitstop: ResMut<Hitstop>) {
     hitstop.0 = hitstop.0.saturating_sub(1);
 }
 
-/// Move the aim marker, and keep the sphere on it. Same clamp as `sever`'s.
-fn aim_marker(
-    keys: Res<ButtonInput<KeyCode>>,
-    time: Res<Time>,
-    mut aim: ResMut<Aim>,
-    mut marker: Query<&mut Transform, With<AimMarker>>,
-) {
+/// Move the aim point. Same clamp as `sever`'s. What *draws* it is [`draw_aim`].
+fn aim_marker(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut aim: ResMut<Aim>) {
     let step = 1.1 * time.delta_secs();
     let mut d = Vec3::ZERO;
     for (key, delta) in [
@@ -297,9 +306,22 @@ fn aim_marker(
     }
     aim.0 += d * step;
     aim.0 = aim.0.clamp(Vec3::new(-0.8, -0.7, -0.6), Vec3::new(0.8, 1.2, 0.6));
-    for mut t in &mut marker {
-        t.translation = ORIGIN + aim.0;
-    }
+}
+
+/// **The aim point is inside the subject as often as not**, and an opaque marker there is simply
+/// invisible — measured: this example's sphere sat at the aim point with no standoff, inside a torso
+/// 0.28 deep. A gizmo at `depth_bias = -1.0` renders in front of everything, so the marker is
+/// readable at any aim and at any camera angle.
+fn aim_on_top(mut store: ResMut<GizmoConfigStore>) {
+    let (config, _) = store.config_mut::<DefaultGizmoConfigGroup>();
+    config.depth_bias = -1.0;
+}
+
+/// Draw the aim: a ring, and a cross that gives it a centre to read when it is behind geometry.
+fn draw_aim(mut gizmos: Gizmos, aim: Res<Aim>) {
+    let at = Isometry3d::from_translation(ORIGIN + aim.0);
+    gizmos.sphere(at, AIM_RADIUS, AIM_COLOR).resolution(24);
+    gizmos.cross(at, AIM_RADIUS * 1.8, AIM_COLOR);
 }
 
 /// Read the keyboard, land the blow, and turn what it opened into carnage.
@@ -384,7 +406,7 @@ fn shoot_through(world: &mut World) {
     let bores = world.resource::<Bores>().0.clone();
 
     body::clear(world);
-    let baked = body::Baked::bake(world, SOFTEN, &bores);
+    let baked = body::Baked::bake(world, SOFTEN, &bores, &[GRANULARITY]);
     let damage = body::Damage::fresh(&baked, GRANULARITY);
     world.insert_resource(baked);
     world.insert_resource(damage);
@@ -575,6 +597,16 @@ fn attach_bleeds(world: &mut World) {
 
 /// **Every bleeding fragment, pulsing.** One heartbeat at a time, at a falling severity, until it
 /// clots — and the same spatter model serves the first jet and the last seep.
+///
+/// **A pulse's drips become pools, and that is the fix for the churn.** The version this replaced
+/// spawned one forward decal per stain per heartbeat per bleeding chunk, bounded only by
+/// [`MAX_STAINS`], so a body bleeding from a dozen wounds spent the whole scene spawning and
+/// despawning hundreds of decals a second once the ring was full. [`absorb`] is the same merge
+/// `body::bleed` already uses: a drip landing in an existing pool grows the decal that is already
+/// drawn, so the decal count tracks the *wet floor* rather than the drip rate.
+///
+/// The one-shot impact spatter in [`strike`] is deliberately untouched — those individual marks are
+/// the pattern this demo exists to show, and one burst per keypress is already bounded.
 fn bleed_wounds(
     mut commands: Commands,
     tick: Res<Tick>,
@@ -582,10 +614,11 @@ fn bleed_wounds(
     mut masks: ResMut<StainMasks>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
-    mut ring: ResMut<StainRing>,
+    mut pools: ResMut<body::Pools>,
     mut wounded: MessageWriter<Wounded>,
     bleeding: Query<(Entity, &Bleeding, &ChunkWound, &GlobalTransform)>,
 ) {
+    let mut drips: Vec<Stain> = Vec::new();
     let t = tick.0;
     for (entity, bleed, wound, xf) in &bleeding {
         // **The clot is now the same yield-stress crossing that arrests a rivulet on a wall.**
@@ -620,23 +653,44 @@ fn bleed_wounds(
             severity: world_wound.severity,
             kind: world_wound.kind,
         });
-        for (stain, shape) in common::stains_with_shapes(&cpu, &settings.blood, FLOOR_Y) {
-            let e = spawn_stain(
-                &mut commands,
-                &mut masks,
-                &mut images,
-                &mut materials,
-                &stain,
-                &shape,
-            );
-            commands.entity(e).insert(StainMark);
-            ring.0.push(e);
-        }
+        // Only the stain positions are kept: a pool has no droplet and is drawn from its own width
+        // by `body::pool_shape`, so the per-drip silhouette would be thrown away anyway.
+        drips.extend(
+            common::stains_with_shapes(&cpu, &settings.blood, FLOOR_Y).into_iter().map(|(s, _)| s),
+        );
     }
-    let excess = ring.0.len().saturating_sub(MAX_STAINS);
-    for entity in ring.0.drain(..excess) {
-        commands.entity(entity).try_despawn();
+
+    if drips.is_empty() {
+        return;
     }
+    let before = pools.0.len();
+    absorb(&mut pools.0, &drips, t, &settings.blood);
+    // `absorb` only ever pushes, so everything from `before` on is a pool nothing has drawn yet and
+    // its index is stable — which is what `PoolDecal` holds.
+    let fresh: Vec<(usize, Pool)> =
+        pools.0.iter().enumerate().skip(before).map(|(i, p)| (i, *p)).collect();
+    for (index, pool) in &fresh {
+        spawn_pool(
+            &mut commands,
+            &mut masks,
+            &mut images,
+            &mut materials,
+            *index,
+            pool,
+            &body::pool_shape(pool, &settings.blood),
+        );
+    }
+}
+
+/// Spread every pool one tick and push the new radii onto their decals. A slick that appeared at
+/// full size would read as a decal being switched on.
+fn spread_blood(
+    settings: Res<CarnageSettings>,
+    mut pools: ResMut<body::Pools>,
+    mut decals: Query<(&PoolDecal, &mut Transform)>,
+) {
+    spread_pools(&mut pools.0, &settings.blood);
+    update_pool_decals(&pools.0, decals.iter_mut());
 }
 
 /// **The hit stop, applied by skipping this example's own integrator.**
@@ -671,24 +725,38 @@ fn camera_shake(tick: Res<Tick>, settings: Res<CarnageSettings>, mut q: Query<(&
     }
 }
 
-/// Keep the status line current.
+/// Keep the status line current — including **the frame cost**, because the blood's cost is the
+/// thing this demo was reported to get wrong and an impression cannot be compared.
+///
+/// The marks are `strike`'s one-shot spatter and the slicks are `bleed_wounds`' merged pools, counted
+/// from the entities rather than from [`StainRing`] so the numbers are the scene's and not the
+/// bookkeeping's.
 fn hud(
     status: Res<Status>,
     last: Res<LastBlow>,
-    ring: Res<StainRing>,
     hitstop: Res<Hitstop>,
+    diagnostics: Res<DiagnosticsStore>,
     standing: Query<(), With<body::Attached>>,
     bleeding: Query<(), With<Bleeding>>,
+    marks: Query<(), With<StainMark>>,
+    slicks: Query<(), With<PoolDecal>>,
     mut line: Query<&mut Text, With<HudStatus>>,
 ) {
+    // Absent only on the first frames, before the diagnostic has a smoothed value.
+    let fps = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|d| d.smoothed())
+        .map_or_else(|| "--".to_string(), |v| format!("{v:.0}"));
     let text = format!(
-        "{}\n{} standing  |  {} wound(s) last blow  |  {} stain(s) on the floor  |  {} bleeding{}",
+        "{}\n{} standing  |  {} wound(s) last blow  |  {} bleeding{}\n{fps} fps  |  {} mark(s)  |  \
+         {} slick(s)",
         status.0,
         standing.iter().count(),
         last.wounds,
-        ring.0.len(),
         bleeding.iter().count(),
         if hitstop.0 > 0 { format!("  |  hitstop {}", hitstop.0) } else { String::new() },
+        marks.iter().count(),
+        slicks.iter().count(),
     );
     for mut t in &mut line {
         if t.0 != text {
@@ -704,7 +772,7 @@ fn reset(world: &mut World) {
     body::wipe(world);
     world.resource_mut::<body::Thrown>().0 = 0;
 
-    let baked = body::Baked::bake(world, SOFTEN, &[]);
+    let baked = body::Baked::bake(world, SOFTEN, &[], &[GRANULARITY]);
     let damage = body::Damage::fresh(&baked, GRANULARITY);
     world.insert_resource(baked);
     world.insert_resource(damage);

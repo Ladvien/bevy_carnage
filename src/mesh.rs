@@ -595,12 +595,12 @@ pub fn fracture_mesh(parts: &[(&Mesh, Mat4)], proxy: &[ProxyCell], cut: &CutSett
     if soup.is_empty() {
         return Fracture::default();
     }
-    let (pieces, tree, ejected) = fracture(soup, proxy, cut);
+    let (pieces, tree, ejected, landed_bores) = fracture(soup, proxy, cut);
     let bonds = bond_graph(&pieces, &tree);
 
     // `bond_graph` reads the pieces' cells and must run before they are handed to `Fracture::new`.
     let ejecta = ejected.into_iter().map(ejecta_from_piece).collect();
-    Fracture::new(pieces, tree, bonds, ejecta, crate::soup::residual_bend(cut))
+    Fracture::new(pieces, tree, bonds, ejecta, crate::soup::residual_bend(cut), landed_bores)
 }
 
 /// Match up which of a bake's finest fragments share a face.
@@ -670,6 +670,13 @@ pub struct Fracture {
     /// A caller bows the drawn mesh along it, or reads it as "that limb is broken but still attached"
     /// — which is what a greenstick is and what no fragment count can express.
     pub bent: Vec3,
+    /// **Which of the bake's [`CutSettings::bores`](crate::CutSettings::bores) actually carved
+    /// something**, as indices into that list, ascending.
+    ///
+    /// A bore aimed at material an earlier one already removed reaches no cell and is absent here —
+    /// a caller accumulating a channel list prunes it with this, because that bore can never carve
+    /// again and re-attempting it costs a full bake forever.
+    pub landed_bores: Vec<u32>,
 }
 
 impl Fracture {
@@ -680,6 +687,7 @@ impl Fracture {
         bonds: BondGraph,
         ejecta: Vec<Ejecta>,
         bent: Vec3,
+        landed_bores: Vec<u32>,
     ) -> Self {
         let solids = pieces
             .iter()
@@ -695,6 +703,7 @@ impl Fracture {
             bonds,
             ejecta,
             bent,
+            landed_bores,
         }
     }
 
@@ -857,8 +866,8 @@ mod tests {
     #[test]
     fn fracture_reaches_target_and_is_deterministic() {
         let proxy = cube_proxy();
-        let (a, ta, _) = fracture(cube_soup(), &proxy, &CutSettings::new(8, 0.05, 0xABCD_1234));
-        let (b, tb, _) = fracture(cube_soup(), &proxy, &CutSettings::new(8, 0.05, 0xABCD_1234));
+        let (a, ta, _, _) = fracture(cube_soup(), &proxy, &CutSettings::new(8, 0.05, 0xABCD_1234));
+        let (b, tb, _, _) = fracture(cube_soup(), &proxy, &CutSettings::new(8, 0.05, 0xABCD_1234));
         assert_eq!(a.len(), b.len());
         assert_eq!(ta, tb, "the hierarchy is reproducible, not just the geometry");
         let leaves = ta.leaves();
@@ -879,7 +888,7 @@ mod tests {
     #[test]
     fn every_frontier_of_one_bake_conserves_the_whole_volume() {
         let proxy = cube_proxy();
-        let (pieces, tree, _) = fracture(cube_soup(), &proxy, &CutSettings::new(8, 0.05, 0xABCD_1234));
+        let (pieces, tree, _, _) = fracture(cube_soup(), &proxy, &CutSettings::new(8, 0.05, 0xABCD_1234));
         let whole: f32 = proxy.iter().map(|c| c.volume()).sum();
         for cuts in 0..=tree.cuts() {
             let v: f32 = tree
@@ -947,7 +956,7 @@ mod tests {
         assert!(below.is_some(), "the whole cell lies below it");
         // A `min_fraction` this large stops the recursion early; the loop must *terminate* there
         // rather than spin to its hard cap looking for a cut it is never allowed to make.
-        let (out, tree, _) = fracture(cube_soup(), &cube_proxy(), &CutSettings::new(4, 0.6, 42));
+        let (out, tree, _, _) = fracture(cube_soup(), &cube_proxy(), &CutSettings::new(4, 0.6, 42));
         assert!(!out.is_empty());
         assert!(tree.cuts() <= 4, "the volume floor bounded the cuts, got {}", tree.cuts());
         assert!(tree.leaves().len() <= 4, "and so bounded the finest frontier");
@@ -957,7 +966,7 @@ mod tests {
     /// spin, and it does not silently produce a deeper tree than asked for.
     #[test]
     fn max_depth_bounds_the_hierarchy_without_looping() {
-        let (_, tree, _) = fracture(cube_soup(), &cube_proxy(), &CutSettings { max_depth: 2, ..CutSettings::new(32, 0.001, 0x5EED_1234) });
+        let (_, tree, _, _) = fracture(cube_soup(), &cube_proxy(), &CutSettings { max_depth: 2, ..CutSettings::new(32, 0.001, 0x5EED_1234) });
         assert!(tree.cuts() > 0, "a depth of 2 still permits cuts");
         assert!(
             tree.iter().all(|(_, n)| n.depth <= 2),

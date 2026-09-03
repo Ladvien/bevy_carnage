@@ -414,20 +414,25 @@ pub(crate) fn shatter(
 /// The returned prisms are the ones the caller must also [`carve`] out of the skin, in the same
 /// order. A bore that reached no proxy cell is **not** in that list and contributes no plug: a
 /// channel that touched no solid must not open the skin, and it cannot have ejected anything either.
+///
+/// The fourth return is **which** of `bores` those prisms came from, as ascending indices. A caller
+/// that keeps an accumulating channel list needs this to prune it, because a bore whose material is
+/// already gone will never carve again and re-attempting it costs a full bake forever.
 pub(crate) fn apply(
     cells: &[ProxyCell],
     bores: &[Bore],
-) -> (Vec<ProxyCell>, Vec<Vec<Plane>>, Vec<Plug>) {
+) -> (Vec<ProxyCell>, Vec<Vec<Plane>>, Vec<Plug>, Vec<u32>) {
     // With an empty `bores` this is one clone of a handful of cells and the pipeline is otherwise
     // byte-identical. One path, no `if bores.is_empty()` branch to diverge.
     let mut cells: Vec<ProxyCell> = cells.to_vec();
     let mut landed: Vec<Vec<Plane>> = Vec::new();
+    let mut landed_bores: Vec<u32> = Vec::new();
     let mut plugs: Vec<Plug> = Vec::new();
     let cells_before = cells.len();
     let mut ejected = 0.0f32;
     let mut consumed = 0usize;
 
-    for bore in bores {
+    for (index, bore) in bores.iter().enumerate() {
         let Some(prism) = prism(bore) else { continue }; // already warned
         let axis = (bore.to - bore.from).normalize_or_zero();
         let mut next: Vec<ProxyCell> = Vec::with_capacity(cells.len());
@@ -463,6 +468,7 @@ pub(crate) fn apply(
         }
         cells = next;
         landed.push(prism);
+        landed_bores.push(index as u32);
         plugs.append(&mut mine);
     }
 
@@ -478,7 +484,7 @@ pub(crate) fn apply(
             info!("carnage: {consumed} of those cells were swallowed whole and left as plugs");
         }
     }
-    (cells, landed, plugs)
+    (cells, landed, plugs, landed_bores)
 }
 
 #[cfg(test)]
@@ -867,6 +873,27 @@ mod tests {
         );
         assert_eq!(left.len(), 1, "one of the two cells should be gone, got {} left", left.len());
         assert_eq!(left[0], cells[1], "the cell the bore missed must come back untouched");
+    }
+
+    /// **A second shot down the same channel carves nothing, and `apply` says which one did.**
+    ///
+    /// This is the contract a caller accumulating a channel list prunes with: the dead bore can never
+    /// carve again, so keeping it costs a full bake for nothing, forever. Prediction: the first bore
+    /// is reported as landed, the identical second one is not, and the cells are the same as if only
+    /// the first had been applied.
+    #[test]
+    fn only_the_bores_that_carved_are_reported_as_landed() {
+        let cells = vec![ProxyCell::from_box(Vec3::ZERO, Vec3::new(0.5, 1.0, 0.5))];
+        let shot = through_y(0.5, 8, 0.0, 0.0);
+
+        let (once, _, _, first) = apply(&cells, &[shot]);
+        assert_eq!(first, vec![0], "the only bore fired must be the one that landed");
+
+        let (twice, prisms, plugs, landed) = apply(&cells, &[shot, shot]);
+        assert_eq!(landed, vec![0], "the second shot down an open channel reaches no cell");
+        assert_eq!(prisms.len(), 1, "and contributes no prism to carve out of the skin");
+        assert_eq!(plugs.len(), 1, "and ejects nothing");
+        assert_eq!(twice, once, "so the subject is exactly what one shot left");
     }
 
     /// **The bore conserves volume now: shards plus plug is the cell, exactly.**

@@ -83,7 +83,7 @@ fn setup(world: &mut World) {
     world.spawn((Camera3d::default(), bevy::core_pipeline::prepass::DepthPrepass, camera));
     light_and_floor(world);
 
-    let baked = body::Baked::bake(world, SOFTEN, &[]);
+    let baked = body::Baked::bake(world, SOFTEN, &[], &[GRANULARITY]);
     let materials = body::BodyMaterials::new(world);
     let damage = body::Damage::fresh(&baked, GRANULARITY);
 
@@ -199,7 +199,7 @@ fn shoot(world: &mut World) {
 fn rebake(world: &mut World) {
     let bores = world.resource::<Bores>().0.clone();
     body::clear(world);
-    let baked = body::Baked::bake(world, SOFTEN, &bores);
+    let baked = body::Baked::bake(world, SOFTEN, &bores, &[GRANULARITY]);
     let damage = body::Damage::fresh(&baked, GRANULARITY);
     world.insert_resource(baked);
     world.insert_resource(damage);
