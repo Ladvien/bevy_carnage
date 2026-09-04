@@ -12,7 +12,7 @@
 //! The SWGSTAIN / ASB TR-033 taxonomy is a classification of *mechanisms* — an analyst reads a scene
 //! backwards from stain morphology to whatever produced it — so a game that throws one isotropic cone
 //! for every event has one pattern at six volumes, and a player reads it as one thing happening
-//! repeatedly. Each key here drives a different `bloodstain::patterns` generator, and each one is
+//! repeatedly. Each key here drives a different `bevy_carnage::bloodstain::patterns` generator, and each one is
 //! visibly its own thing:
 //!
 //! - **`2` fires once per systole**, not continuously: `arterial_arc` returns nothing between beats,
@@ -39,7 +39,7 @@
 //! # Where the blood is drawn, and what it is drawn with
 //!
 //! Two surfaces: the floor, and a wall behind the subject. A droplet's landing point on the **floor**
-//! is `bloodstain::landing`'s own closed form and its impact is `impact_at_plane`'s; the **wall** is a
+//! is `bevy_carnage::bloodstain::landing`'s own closed form and its impact is `impact_at_plane`'s; the **wall** is a
 //! vertical plane, which that pair does not cover, so the crossing is solved here — the same ballistic
 //! parabola, read against `z` instead of `y`. Because `z(t)` is linear and monotone the crossing is
 //! unique, so "the wall crossing happens above the floor" *is* the test for which surface came first,
@@ -665,7 +665,7 @@ fn paint_drops(
 
 /// A per-stain seed from a **place and an ordinal**, quantised on `WELD` before hashing.
 ///
-/// The rule `bloodstain::wound_seed` uses, and for the same reason: two runs that place a burst a
+/// The rule `bevy_carnage::bloodstain::wound_seed` uses, and for the same reason: two runs that place a burst a
 /// float ULP apart must seed identically, so no jitter here comes from an accumulator or an entity id.
 fn drop_seed(from: Vec3, index: usize) -> u32 {
     let q = |x: f32| (x / blood::WELD).round() as i64 as u32;
@@ -679,7 +679,7 @@ fn drop_seed(from: Vec3, index: usize) -> u32 {
 ///
 /// The wall first: `z(t)` is linear and monotone, so a droplet has exactly one wall-plane crossing,
 /// and that crossing landing above the floor and inside the wall's bounds *is* the test for "the wall
-/// came first". Otherwise the floor, through `bloodstain::landing` and `impact_at_plane` — the crate's
+/// came first". Otherwise the floor, through `bevy_carnage::bloodstain::landing` and `impact_at_plane` — the crate's
 /// own closed form, unduplicated.
 fn first_hit(from: Vec3, drop: &Droplet, s: &BloodSettings, seed: u32) -> Option<Hit> {
     let velocity = Vec3::new(drop.dir[0], drop.dir[1], drop.dir[2]) * drop.speed;

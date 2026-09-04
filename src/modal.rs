@@ -13,7 +13,7 @@
 //! way. Morphology — *how* each opened face is cut — stays with [`crate::FaultPolicy`]: the modes
 //! decide the partition, the loading mode decides the faces.
 
-use bevy_fracture_modes::{BakeError, CellGraph, Impact, ModeSet, ModeSettings};
+use crate::fracture_modes::{BakeError, CellGraph, Impact, ModeSet, ModeSettings};
 
 use crate::bond::{BondGraph, BondId};
 use crate::proxy::ProxyCell;

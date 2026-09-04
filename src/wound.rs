@@ -44,7 +44,7 @@ use crate::soup::MIN_CROSS2;
 /// seed and the seed function moved with the blood model. One enum, one home: a copy here would be a
 /// second numbering of the same fact, and the two would disagree the first time either gained a
 /// variant. Re-exported from `lib.rs` under the name it always had.
-pub use bloodstain::WoundKind;
+pub use crate::bloodstain::WoundKind;
 
 /// A wound surface in subject-local space. Deterministic: derived only from baked geometry.
 ///

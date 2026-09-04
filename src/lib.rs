@@ -72,17 +72,18 @@ pub use wound::{
 /// **`Bleed` is a plain value here, not a `Component`.** The leaf has no ECS to derive one from, so
 /// the component is [`Bleeding`], a newtype over it — the same facade-newtype shape `bevy_stigmergy`
 /// and `bevy_light_grid` are reached through in this workspace's game.
-pub use bloodstain::{
+pub use crate::bloodstain::{
     Appearance, BACK_SPATTER_SPEED, BLOOD_DENSITY, BLOOD_SURFACE_TENSION, Bleed, BloodSettings,
     Droplet, FORWARD_SPATTER_SPEED, Impact, PatternClass, Pool, Stain, StainShape, WELD, WoundKind,
     absorb, appearance, area_of_origin, droplet, droplet_count, droplets, flow, flows, hash_f32,
     landing, pick, pulse_period, pulse_wound, pulses_on, spread_pools, viscosity, wound_seed,
     yield_stress,
 };
-pub use bloodstain::stain::{impact_at_plane, rasterise, stain_radius, stain_shape, stains};
+pub use crate::bloodstain::stain::{impact_at_plane, rasterise, stain_radius, stain_shape, stains};
 /// The blood model's own modules, re-exported so a caller can reach the parts that have no
 /// single-name entry point — `bevy_carnage::blood::patterns::cast_off`, `blood::rheo::flows`,
 /// `blood::dry::dry_ticks`. One path to each function, spelled the way the leaf spells it.
+pub mod bloodstain;
 pub use bloodstain as blood;
 
 /// **The six kernels this crate composes**, re-exported whole so a consumer needs one dependency
@@ -94,12 +95,12 @@ pub use bloodstain as blood;
 /// [`modal`], [`FractureRegion`] and [`FragmentGeometry::annotate_cap`]. `wetmap` and `viscera` were
 /// dependencies without a door until 0.3.1; `examples/entrails.rs` and `carnage_web.rs` had to name
 /// them directly, which is the two-versions hazard this block exists to close.
-pub use bevy_cross_section as cross_section;
-pub use bevy_flaymap as flaymap;
-pub use bevy_fracture_modes as fracture_modes;
-pub use bevy_laceration as laceration;
-pub use bevy_viscera as viscera;
-pub use bevy_wetmap as wetmap;
+pub mod cross_section;
+pub mod flaymap;
+pub mod fracture_modes;
+pub mod laceration;
+pub mod viscera;
+pub mod wetmap;
 
 use bevy::prelude::*;
 
@@ -695,13 +696,13 @@ pub const TRABECULAR_MAX_PIECES: usize = 3;
 ///
 /// **Ticks, not seconds, wherever time appears.** Nothing in the deterministic half of this crate
 /// reads a clock; a caller supplies its own fixed-tick counter. The shipped tick counts are derived
-/// for a 60 Hz fixed tick — see `bloodstain::settings` for what to re-derive if yours is not.
+/// for a 60 Hz fixed tick — see `crate::bloodstain::settings` for what to re-derive if yours is not.
 ///
 /// # The blood dials are not here, and that is the `0.2.0` break
 ///
 /// Everything about blood as a *material* — droplet counts, spray speeds, stain radii, the pulse
 /// train, pool spreading, clotting, drying — lives in [`blood`](Self::blood), which is
-/// `bloodstain::BloodSettings`. **One dial, one home:** a `droplets_per_m2` on this struct *and* on
+/// `crate::bloodstain::BloodSettings`. **One dial, one home:** a `droplets_per_m2` on this struct *and* on
 /// the leaf would be two values for one quantity, and they would disagree the first time either was
 /// authored. What stays here is what the leaf cannot own: hit feel, camera shake, particle capacity
 /// and the render budgets, all of which need an engine to mean anything.
@@ -1014,7 +1015,7 @@ impl Bleeding {
     /// Open a bleed at `tick` for a wound — [`Bleed::new`], wrapped.
     ///
     /// The wound crosses [`v3`](crate::v3)'s boundary on the way in, because `Bleed`'s seed is
-    /// [`bloodstain::wound_seed`] of the leaf's own `Wound`. Five field copies, once per wound.
+    /// [`crate::bloodstain::wound_seed`] of the leaf's own `Wound`. Five field copies, once per wound.
     pub fn new(opened_at: u32, wound: &Wound) -> Self {
         Bleeding(Bleed::new(opened_at, &crate::v3::wound(wound)))
     }
@@ -1068,7 +1069,7 @@ impl Plugin for CarnagePlugin {
             // `Option` and falls back to the leaf's defaults, so this is a courtesy rather than a
             // requirement — and it is `init_resource`d for the same reason the four above are: a
             // caller who inserted its own before this plugin keeps it.
-            .init_resource::<bevy_fracture_modes::ModeSettings>()
+            .init_resource::<crate::fracture_modes::ModeSettings>()
             .add_message::<Wounded>()
             // **Chained, not merely grouped.** `bake_fractures` requests the finest frontier as its
             // last act, and `materialise_fragments` is what turns a request into a mesh — a bake and
@@ -1124,7 +1125,7 @@ mod tests {
     #[cfg(feature = "serde")]
     fn a_layer_table_written_before_bone_mm_still_loads() {
         let authored = "(skin_mm: 2.0, fat_mm: 6.0, muscle_mm: 20.0, cortex_mm: 5.0, marrow_mm: 10.0)";
-        let layers: bevy_cross_section::Layers =
+        let layers: crate::cross_section::Layers =
             ron::from_str(authored).expect("a 0.1.1 layer table must deserialize in 0.1.2");
         assert!(layers.bone_mm.is_infinite(), "an absent bone is the depth-only model");
         assert_eq!(layers.muscle_mm, 20.0, "the authored fields must survive");
@@ -1179,7 +1180,7 @@ mod tests {
     /// file six months on.
     ///
     /// **The blood dials are not listed, because they are not this struct's** — they live in
-    /// `bloodstain::BloodSettings`, which pins the same construction with its own test over its own
+    /// `crate::bloodstain::BloodSettings`, which pins the same construction with its own test over its own
     /// `shipped` module. Listing them here would be the second home this whole extraction removed.
     #[test]
     fn every_carnage_serde_default_is_the_shipped_value() {

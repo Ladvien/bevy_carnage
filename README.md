@@ -10,22 +10,22 @@ That is `examples/explode.rs` at its own 0.4× playback. The subject is intact, 
 
 > **This repository is a mirror; [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop) is the source of truth.** The crate is vendored there as a workspace member at `crates/bevy_carnage/`, developed and verified there against that lockfile, and this repository is re-derived from it by `git subtree split`. The flow is one-way and has exactly three stops: **monorepo → this mirror → crates.io**. An earlier revision of this banner claimed the arrow pointed the other way — it did, between 2026-08-16 and 2026-09-01, and `BACKLOG.md` records why it was reversed: the crate was pinned by rev in the game, so every fix meant a sibling clone, a push and a rev bump, which is not a way to do sustained work. **The stale-read hazard that arrangement named is still real:** a `subtree split` carries only *commits*, so anything sitting uncommitted in the monorepo's working tree cannot arrive here.
 
-## The family
+## The family — one crate, seven kernels
 
-This crate is one of eight that make up one gore stack. **`bevy_carnage` is the umbrella**: depend on it alone and every kernel below is re-exported under its own name, so a game needs one dependency line and can never end up with two versions of a leaf. Depend on a kernel directly only when you want it without the rest — each one stands alone, and none depends on `bevy_carnage` back.
+This crate is the whole gore stack. **Depend on it alone**: every kernel below is a module of it, reached by the path in the last column, and there is nothing else to add — no second dependency line, no version pin to keep aligned with this one. Each was a published crate of its own until 0.5.0 (the links are the archived repositories, kept for their history); a game never needed seven, so they came home.
 
-| crate | what it is | reach it as |
+| module | what it is | reach it as |
 |---|---|---|
-| **`bevy_carnage` — this crate** | the umbrella — plane cuts with watertight caps, bores, energy-driven fracture, wounds, decals, impact feel; **re-exports every crate below** | `bevy_carnage` |
-| [`bloodstain`](https://github.com/Ladvien/bloodstain) · [crates.io](https://crates.io/crates/bloodstain) | blood as a material: Carreau–Yasuda rheology, Comiskey spatter, stain morphology, drying, spectral colour by thickness and oxygenation — engine-free, `no_std` | `bevy_carnage::blood` |
-| [`bevy_wetmap`](https://github.com/Ladvien/bevy_wetmap) · [crates.io](https://crates.io/crates/bevy_wetmap) | texture-space blood that runs, spreads and dries — CPU-authoritative, so a canvas can be hashed | `bevy_carnage::wetmap` |
-| [`bevy_viscera`](https://github.com/Ladvien/bevy_viscera) · [crates.io](https://crates.io/crates/bevy_viscera) | XPBD strands with a tearing mesentery: guts that spill, coil, tether and tear | `bevy_carnage::viscera` |
-| [`bevy_cross_section`](https://github.com/Ladvien/bevy_cross_section) · [crates.io](https://crates.io/crates/bevy_cross_section) | anatomical bands on a cut face from a sourced per-region thickness table, via `UV_1` | `bevy_carnage::cross_section` |
-| [`bevy_flaymap`](https://github.com/Ladvien/bevy_flaymap) · [crates.io](https://crates.io/crates/bevy_flaymap) | texture-space flaying: skin, fat, muscle, cortex peel under hits, with a once-per-canvas bone handoff | `bevy_carnage::flaymap` |
-| [`bevy_laceration`](https://github.com/Ladvien/bevy_laceration) · [crates.io](https://crates.io/crates/bevy_laceration) | a cut that gapes on a time curve, scaled by skin tension and Langer-line orientation | `bevy_carnage::laceration` |
-| [`bevy_fracture_modes`](https://github.com/Ladvien/bevy_fracture_modes) · [crates.io](https://crates.io/crates/bevy_fracture_modes) | Sellán's fracture modes on a cell graph: a fixed-schedule bake, impact projection, gluing partition | `bevy_carnage::fracture_modes` |
+| the umbrella | plane cuts with watertight caps, bores, energy-driven fracture, wounds, decals, impact feel, the flesh material and the preset | `bevy_carnage` |
+| [`bloodstain`](docs/bloodstain.md) | blood as a material: Carreau–Yasuda rheology, Comiskey spatter, stain morphology, drying, spectral colour by thickness and oxygenation, and the three injury kernels (bruise, burn, wick) — engine-free, `[f32; 3]` in every signature | `bevy_carnage::bloodstain` (also `::blood`) |
+| [`wetmap`](docs/wetmap.md) | texture-space blood that runs, spreads and dries — CPU-authoritative, so a canvas can be hashed | `bevy_carnage::wetmap` |
+| [`viscera`](docs/viscera.md) | XPBD strands with a tearing mesentery: guts that spill, coil, tether and tear | `bevy_carnage::viscera` |
+| [`cross_section`](docs/cross_section.md) | anatomical bands on a cut face from a sourced per-region thickness table, via `UV_1` | `bevy_carnage::cross_section` |
+| [`flaymap`](docs/flaymap.md) | texture-space flaying: skin, fat, muscle, cortex peel under hits, with a once-per-canvas bone handoff | `bevy_carnage::flaymap` |
+| [`laceration`](docs/laceration.md) | a cut that gapes on a time curve, scaled by skin tension and Langer-line orientation | `bevy_carnage::laceration` |
+| [`fracture_modes`](docs/fracture_modes.md) | Sellán's fracture modes on a cell graph: a fixed-schedule bake, impact projection, gluing partition | `bevy_carnage::fracture_modes` |
 
-Every crate is deterministic where it can be — fixed schedules, no clocks, frozen digests over its CPU state — and every one carries the same *Vibe Coded* warning as this file. The four added on 2026-09-04 (`bevy_cross_section`, `bevy_flaymap`, `bevy_laceration`, `bevy_fracture_modes`) are kernels `bevy_carnage` composes; `bloodstain` is the one with no engine in it at all. Fourteen of the family's examples run in a browser at [ladvien.github.io/foundation_vs_slop](https://ladvien.github.io/foundation_vs_slop/).
+Every module is deterministic where it can be — fixed schedules, no clocks, frozen digests over its CPU state. `bloodstain` has no engine in it at all, and `tests/leaf.rs` keeps it that way now that it is a module rather than a crate boundary. Fourteen of the family's examples run in a browser at [ladvien.github.io/foundation_vs_slop](https://ladvien.github.io/foundation_vs_slop/).
 
 ## Features
 
@@ -42,14 +42,14 @@ Every crate is deterministic where it can be — fixed schedules, no clocks, fro
 - **A spatter model with a citation, not a preset.** Comiskey, Yarin & Attinger (*Phys. Rev. Fluids* 3, 063901, 2018) show blood disintegrating by *percolation*, which makes droplet size and initial speed **inversely** correlated — many small ones fast, few large ones slow, bracketed by their measured 40 m/s forward and 8 m/s back spatter. One draw sets size and its inverse sets speed, on the CPU and in the shader both, and a test asserts the correlation (Pearson `r < -0.9`) rather than a comment claiming it. Landing points are solved in closed form, so **where blood lands exists with the render feature off** — which matters when a pool's position feeds simulation.
 - **A pulsatile bleed schedule in integer ticks.** One state machine over `tick - opened_at`: integer modulo for the heartbeat, so a pulse train cannot drift or depend on frame rate, and a monotone taper to *exactly* zero at the clot. `pulse_wound` scales the wound's severity, so the first arterial jet and the last seep are the same model at two numbers.
 - **Impact feel as numbers you apply.** Trauma, hit-stop ticks and a tick-indexed shake offset eased along the wound normal — grounded in Pichlmair & Johansen's game-feel survey, which says in as many words that shake should *not* be random. The crate never writes `Time<Virtual>` and never touches a camera: it returns values and you own both.
-- **GPU blood behind a feature.** `bevy_hanabi` is optional and gated on `vfx`, so the default-off build resolves no particle system and no render stack. It is admitted on the terms that keep the boundary meaningful, and one of them is sharp: Hanabi 0.19 has **no GPU→CPU readback at all**, so a particle cannot reach a golden even by mistake.
+- **GPU blood behind a feature.** `bevy_hanabi` is optional and gated on `vfx`, so the default-off build resolves no particle system (the render crate itself is always present — the wetmap and flaymap author `Image`s, though never a shader). It is admitted on the terms that keep the boundary meaningful, and one of them is sharp: Hanabi 0.19 has **no GPU→CPU readback at all**, so a particle cannot reach a golden even by mistake.
 - **No physics dependency, no RNG dependency, no game logic.** `bevy`, optional `serde`, `isomesh` for validation, and optional `bevy_hanabi` behind `vfx`. `hash_f32` is the only source of randomness in the crate, and it is frozen by a test.
 
 ## Install
 
 ```toml
 [dependencies]
-bevy_carnage = "0.4"
+bevy_carnage = "0.5"
 ```
 
 Requires **Bevy 0.19** and a Rust toolchain with **edition 2024**. That one line brings the whole family: `bevy_carnage::blood` (the material), `::wetmap`, `::viscera`, `::cross_section`, `::flaymap`, `::laceration` and `::fracture_modes` are the seven sibling crates re-exported whole, so nothing has to be named twice and no two versions of a leaf can meet in one graph.
@@ -166,13 +166,13 @@ assert!(pieces.iter().all(|p| p.outer.is_some() || p.cap.is_some()));
 | ![flesh](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/flesh.gif) | ![preset](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/preset.gif) |
 | `capture_flesh` — the material: a banded limb, a skin sphere, a sheet, under a walking light | `capture_preset` — the preset: a blow, a burn, a slash, and shots to the bone |
 
-The seven kernels have a clip each, on their own READMEs, and every one was cut from a headless recorder in this crate's `examples/` — `capture_gore` for the four cut-face kernels, `capture_family` for the blood pair, `capture_entrails` for the strands — so the clip you see is a script two runs must reproduce digest-for-digest:
+The seven kernels have a clip each, on their own pages under `docs/`, and every one was cut from a headless recorder in this crate's `examples/` — `capture_gore` for the four cut-face kernels, `capture_family` for the blood pair, `capture_entrails` for the strands — so the clip you see is a script two runs must reproduce digest-for-digest:
 
 | | | |
 |---|---|---|
-| [![cross-section](https://raw.githubusercontent.com/Ladvien/bevy_cross_section/main/docs/cross_section.gif)](https://github.com/Ladvien/bevy_cross_section) | [![fracture modes](https://raw.githubusercontent.com/Ladvien/bevy_fracture_modes/main/docs/fracture_modes.gif)](https://github.com/Ladvien/bevy_fracture_modes) | [![flaymap](https://raw.githubusercontent.com/Ladvien/bevy_flaymap/main/docs/flaymap.gif)](https://github.com/Ladvien/bevy_flaymap) |
-| [![laceration](https://raw.githubusercontent.com/Ladvien/bevy_laceration/main/docs/laceration.gif)](https://github.com/Ladvien/bevy_laceration) | [![spectral blood](https://raw.githubusercontent.com/Ladvien/bloodstain/main/docs/spectral.gif)](https://github.com/Ladvien/bloodstain) | [![wetmap](https://raw.githubusercontent.com/Ladvien/bevy_wetmap/main/docs/wetmap.gif)](https://github.com/Ladvien/bevy_wetmap) |
-| [![viscera](https://raw.githubusercontent.com/Ladvien/bevy_viscera/main/docs/viscera.gif)](https://github.com/Ladvien/bevy_viscera) | | |
+| [![cross-section](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/cross_section.gif)](docs/cross_section.md) | [![fracture modes](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/fracture_modes.gif)](docs/fracture_modes.md) | [![flaymap](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/flaymap.gif)](docs/flaymap.md) |
+| [![laceration](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/laceration.gif)](docs/laceration.md) | [![spectral blood](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/spectral.gif)](docs/bloodstain.md) | [![wetmap](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/wetmap.gif)](docs/wetmap.md) |
+| [![viscera](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/viscera.gif)](docs/viscera.md) | | |
 
 ![A blue blocked-out humanoid standing; a projectile takes off its arm, another its head, a slash takes the other arm, a blade through the waist takes both legs and a blast finishes the torso](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/sever.gif)
 
@@ -340,11 +340,15 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.2.0`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.0`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.0` changed: the seven crates are modules
+
+`bloodstain`, `bevy_wetmap`, `bevy_viscera`, `bevy_cross_section`, `bevy_flaymap`, `bevy_laceration` and `bevy_fracture_modes` are no longer crates. Each is a module of this one under the name it was always re-exported by (`bevy_carnage::wetmap`, …), so a consumer that reached them through this crate — which is how the README always told you to — changes nothing. A consumer that depended on a leaf directly replaces that line with this crate and prefixes the path. The seven registry entries are yanked and the repositories archived; nothing there will move again.
 
 ### What `0.2.0` broke, and why it was a de-duplication rather than a rename
 
-**The whole blood model moved out to [`bloodstain`](https://github.com/Ladvien/bloodstain)** — the Comiskey percolation spatter, the pools, the bleed schedule, `hash_f32` and `WoundKind`. None of it needed Bevy and all of it was reusable, so it is now an engine-free `no_std` crate with **no math library in its public API** (`[f32; 3]` everywhere), which is the property that lets anything depend on it.
+**The whole blood model moved out to `bloodstain`** (a crate then; the module of that name now) — the Comiskey percolation spatter, the pools, the bleed schedule, `hash_f32` and `WoundKind`. None of it needed Bevy and all of it was reusable, so it is now an engine-free `no_std` crate with **no math library in its public API** (`[f32; 3]` everywhere), which is the property that lets anything depend on it.
 
 This crate **re-exports every moved name**, so `use bevy_carnage::{Droplet, Stain, Pool, Bleed, hash_f32}` resolves exactly as it did at `0.1.1`, and `bevy_carnage::blood` reaches the rest. Four things do break:
 

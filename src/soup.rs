@@ -112,7 +112,7 @@ pub(crate) const EPS: f32 = 1.0e-5;
 /// Endpoint-weld lattice step for boundary-loop assembly (quantize positions to this grid so cut
 /// segments from adjacent triangles share canonical vertex ids even on non-watertight input).
 ///
-/// **`bloodstain::WELD` is the one home, and this is a re-export of it.** The blood model quantises
+/// **`crate::bloodstain::WELD` is the one home, and this is a re-export of it.** The blood model quantises
 /// every wound seed onto the same lattice, and two copies of a quantisation step is how a wound seeds
 /// one way in the blood and another way in the geometry that opened it.
 ///
@@ -120,7 +120,7 @@ pub(crate) const EPS: f32 = 1.0e-5;
 /// second one. An audit that welded on a different lattice than the cap assembly used would be asking
 /// about a different mesh: finer, and the cap↔skin seam reads as open purely from the mismatch;
 /// coarser, and it closes seams the slicer left open.
-pub(crate) const WELD: f32 = bloodstain::WELD;
+pub(crate) const WELD: f32 = crate::bloodstain::WELD;
 /// Squared length of the cross product below which a triangle is not worth emitting — the
 /// zero-area filter, in one place so the three sites that apply it cannot drift apart.
 ///
@@ -148,7 +148,7 @@ fn face_normal(a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
 
 /// The crate's only random source: a 32-bit integer hash mapped into `[0, 1)`.
 ///
-/// **`bloodstain::hash_f32` is the one home, and this is a re-export of it.** The function was
+/// **`crate::bloodstain::hash_f32` is the one home, and this is a re-export of it.** The function was
 /// written here and moved out with the blood model on 2026-09-02, because both halves draw from it
 /// and a generator with two homes is two streams waiting to diverge. Its bits are frozen by a golden
 /// in that crate under the same name, `hash_f32_is_frozen`, and the consuming game's
@@ -157,7 +157,7 @@ fn face_normal(a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
 /// **Still no RNG crate.** The fracture's whole reproducibility argument rests on this returning the
 /// same bits on every machine and every toolchain, and a dependency that reserves the right to change
 /// its stream between minor versions cannot promise that.
-pub use bloodstain::hash_f32;
+pub use crate::bloodstain::hash_f32;
 
 /// A vertex sample carried through clipping (interpolated at edge–plane crossings).
 #[derive(Clone, Copy)]
@@ -301,13 +301,13 @@ fn clip_half(v: [Vtx; 3], s: [f32; 3], keep_above: bool, interior: bool, out: &m
 
 /// Two orthonormal in-plane axes for a given plane normal (for cross-section UVs).
 ///
-/// **Delegates to `bloodstain::plane_basis`, which is the one home.** Every direction in both crates
+/// **Delegates to `crate::bloodstain::plane_basis`, which is the one home.** Every direction in both crates
 /// is derived against this basis — a spray cone and a cut face have to agree about what "sideways"
 /// means, and a second copy of these four lines is exactly how they would stop agreeing. The leaf's
 /// version is the same operations in the same order over `[f32; 3]`, mirroring `glam` deliberately,
 /// so the conversion here cannot move a bit: `bloodstain`'s frozen spatter golden is what proves it.
 pub(crate) fn plane_basis(n: Vec3) -> (Vec3, Vec3) {
-    let (u, v) = bloodstain::plane_basis(crate::v3::to_v3(n));
+    let (u, v) = crate::bloodstain::plane_basis(crate::v3::to_v3(n));
     (crate::v3::from_v3(u), crate::v3::from_v3(v))
 }
 

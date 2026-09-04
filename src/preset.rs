@@ -17,9 +17,9 @@
 //! # What a hit does, in order
 //!
 //! 1. **Peels the skin** where it landed — `bevy_flaymap`, to the depth the hit asked for.
-//! 2. **Throws blood** — the wound's `bloodstain::stain::stains` in closed form, painted onto every
+//! 2. **Throws blood** — the wound's `crate::bloodstain::stain::stains` in closed form, painted onto every
 //!    [`Gore::floor`] they land on, and a stain at the wound on the body's own wetmap.
-//! 3. **Opens a bleed** — `bloodstain::bleed`, pulsing more blood onto the wetmap each systole until
+//! 3. **Opens a bleed** — `crate::bloodstain::bleed`, pulsing more blood onto the wetmap each systole until
 //!    the clot, which the wetmap then runs under gravity and dries.
 //! 4. **A slash gapes** — [`GoreHit::slash`] lays a `bevy_laceration` along the cut instead of a
 //!    crater, and its bed is banded by `bevy_cross_section`.
@@ -43,12 +43,12 @@
 
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
-use bevy_cross_section::{CrossSectionPlugin, CrossSectionSettings, Layers, Region};
-use bevy_flaymap::{BoneExposed, FlayCanvas, FlaySettings, FlaymapPlugin, Layer};
-use bevy_laceration::{Gape, Laceration, LacerationClock, LacerationPlugin, Tension};
-use bevy_viscera::{Mesentery, Strand, ViscSettings, VisceraPlugin, VisceraSystems, spill, tube_mesh};
-use bevy_wetmap::{StainShape, WetCanvas, WetSettings, WetmapPlugin};
-use bloodstain::{BloodSettings, Wound as BloodWound, WoundKind, wound_seed};
+use crate::cross_section::{CrossSectionPlugin, CrossSectionSettings, Layers, Region};
+use crate::flaymap::{BoneExposed, FlayCanvas, FlaySettings, FlaymapPlugin, Layer};
+use crate::laceration::{Gape, Laceration, LacerationClock, LacerationPlugin, Tension};
+use crate::viscera::{Mesentery, Strand, ViscSettings, VisceraPlugin, VisceraSystems, spill, tube_mesh};
+use crate::wetmap::{StainShape, WetCanvas, WetSettings, WetmapPlugin};
+use crate::bloodstain::{BloodSettings, Wound as BloodWound, WoundKind, wound_seed};
 
 use crate::flesh::{FleshMaterial, FleshMode, FleshParams, FleshPlugin, FleshTables};
 use crate::{CarnagePlugin, FractureCache, FractureSubject, Wounded};
@@ -191,7 +191,7 @@ pub struct WoundSite {
     /// The wound in world space, for the pulse schedule and the stains it throws.
     pub wound: BloodWound,
     /// The schedule.
-    pub bleed: bloodstain::Bleed,
+    pub bleed: crate::bloodstain::Bleed,
 }
 
 /// **A body built at runtime that the preset may break.** For a body that is a loaded scene, put
@@ -217,12 +217,12 @@ pub struct GoreBreakable {
 impl GoreBreakable {
     /// Take a bake, annotate every cap for `region` at `scale` so the flesh material can band it,
     /// and bake the fracture modes over its bonds.
-    pub fn from_fracture(fracture: crate::Fracture, region: Region, scale: &bevy_cross_section::Scale) -> Self {
+    pub fn from_fracture(fracture: crate::Fracture, region: Region, scale: &crate::cross_section::Scale) -> Self {
         let layers = Layers::for_region(region);
         let modes = crate::modal::bake_modes(
             &fracture.bonds,
             |id| fracture.solids().get(id.index()).map(|s| &s.cell),
-            &bevy_fracture_modes::ModeSettings::default(),
+            &crate::fracture_modes::ModeSettings::default(),
         )
         .ok();
         let bonds = fracture.bonds.clone();
@@ -366,19 +366,19 @@ impl DermisCanvas {
     }
 }
 
-/// **A bruise ageing under this entity's skin**, at one spot. The kernel is `bloodstain::bruise`; the
+/// **A bruise ageing under this entity's skin**, at one spot. The kernel is `crate::bloodstain::bruise`; the
 /// preset steps it on the fixed tick and repaints the dermis canvas when its colour moves.
 #[derive(Component, Debug)]
 pub struct Bruising {
     /// Where on the canvas.
     pub uv: Vec2,
     /// The kernel.
-    pub bruise: bloodstain::Bruise,
+    pub bruise: crate::bloodstain::Bruise,
     /// Fractional model steps carried between ticks.
     pub carry: f32,
 }
 
-/// **Blood soaking into this cloth** from one landing: the Lucas–Washburn front (`bloodstain::wick`)
+/// **Blood soaking into this cloth** from one landing: the Lucas–Washburn front (`crate::bloodstain::wick`)
 /// widens the stain over the seconds after it lands.
 #[derive(Component, Debug, Default)]
 pub struct Soaking {
@@ -426,11 +426,11 @@ pub struct GoreDials {
     /// Canvas edge for a [`Gore::floor`], texels. Floors are metres across where a limb is
     /// centimetres, so they get the ceiling by default.
     pub floor_canvas: u32,
-    /// **How fast a bruise ages**: hours of `bloodstain::bruise` time per fixed tick. The model's
+    /// **How fast a bruise ages**: hours of `crate::bloodstain::bruise` time per fixed tick. The model's
     /// own step is 0.1 h; at the shipped `0.02` a bruise runs its ten-day course in about four
     /// minutes of play, which is time-lapse and says so. `0` freezes every bruise.
     pub bruise_hours_per_tick: f32,
-    /// **How long a burn's heat keeps working after contact**, seconds of `bloodstain::burn` time
+    /// **How long a burn's heat keeps working after contact**, seconds of `crate::bloodstain::burn` time
     /// integrated at hit time under still air — damage accrues after the heat is removed, and this
     /// is how much of that the hit accounts for at once.
     pub burn_cooling_s: f32,
@@ -469,11 +469,11 @@ pub enum HitKind {
     /// Something was drawn across: a `bevy_laceration` along the blade's travel that gapes onto a
     /// bed `depth_mm` deep.
     Slash { along: Vec3, depth_mm: f32 },
-    /// Something hit without opening the skin: a `bloodstain::bruise` that pools, spreads and turns
+    /// Something hit without opening the skin: a `crate::bloodstain::bruise` that pools, spreads and turns
     /// from red through to yellow under intact skin, over the hours [`GoreDials::bruise_hours_per_tick`]
     /// sets.
     Blunt,
-    /// Something hot touched the skin for `seconds` at `temp_c`: a `bloodstain::burn` whose damage
+    /// Something hot touched the skin for `seconds` at `temp_c`: a `crate::bloodstain::burn` whose damage
     /// integral decides the degree — reddened, blistered, or charred. Nothing is removed: an eschar
     /// is dead tissue that stays where it is.
     Burn { temp_c: f32, seconds: f32 },
@@ -499,23 +499,23 @@ pub struct GoreHit {
 impl GoreHit {
     /// An impact: a crater `radius_m` wide, `depth_mm` deep.
     pub fn impact(entity: Entity, from: Vec3, dir: Vec3, radius_m: f32, depth_mm: f32) -> Self {
-        Self { entity, from, dir, radius_m, kind: HitKind::Impact { depth_mm }, so2: bloodstain::spectral::SO2_VENOUS }
+        Self { entity, from, dir, radius_m, kind: HitKind::Impact { depth_mm }, so2: crate::bloodstain::spectral::SO2_VENOUS }
     }
     /// A slash `along` the blade's travel, `radius_m` half its length.
     pub fn slash(entity: Entity, from: Vec3, dir: Vec3, along: Vec3, radius_m: f32, depth_mm: f32) -> Self {
-        Self { entity, from, dir, radius_m, kind: HitKind::Slash { along, depth_mm }, so2: bloodstain::spectral::SO2_VENOUS }
+        Self { entity, from, dir, radius_m, kind: HitKind::Slash { along, depth_mm }, so2: crate::bloodstain::spectral::SO2_VENOUS }
     }
     /// A blunt blow: a bruise `radius_m` across under intact skin.
     pub fn blunt(entity: Entity, from: Vec3, dir: Vec3, radius_m: f32) -> Self {
-        Self { entity, from, dir, radius_m, kind: HitKind::Blunt, so2: bloodstain::spectral::SO2_VENOUS }
+        Self { entity, from, dir, radius_m, kind: HitKind::Blunt, so2: crate::bloodstain::spectral::SO2_VENOUS }
     }
     /// A contact burn `radius_m` across: `temp_c` for `seconds`.
     pub fn burn(entity: Entity, from: Vec3, dir: Vec3, radius_m: f32, temp_c: f32, seconds: f32) -> Self {
-        Self { entity, from, dir, radius_m, kind: HitKind::Burn { temp_c, seconds }, so2: bloodstain::spectral::SO2_VENOUS }
+        Self { entity, from, dir, radius_m, kind: HitKind::Burn { temp_c, seconds }, so2: crate::bloodstain::spectral::SO2_VENOUS }
     }
     /// The same hit, bleeding arterial blood.
     pub fn arterial(mut self) -> Self {
-        self.so2 = bloodstain::spectral::SO2_ARTERIAL;
+        self.so2 = crate::bloodstain::spectral::SO2_ARTERIAL;
         self
     }
     /// How much tissue this hit removes, millimetres; zero for a blow or a burn (a burn's depth is
@@ -686,7 +686,7 @@ struct HitContext<'w> {
     visc: Option<Res<'w, ViscSettings>>,
     cache: Res<'w, FractureCache>,
     tables: Res<'w, FleshTables>,
-    atlas: Option<Res<'w, bevy_cross_section::CrossSectionAtlas>>,
+    atlas: Option<Res<'w, crate::cross_section::CrossSectionAtlas>>,
     meshes: ResMut<'w, Assets<Mesh>>,
     standard: ResMut<'w, Assets<StandardMaterial>>,
     flesh: ResMut<'w, Assets<FleshMaterial>>,
@@ -751,7 +751,7 @@ fn take_hits(
         let xf = *xf;
         let xf = &xf;
         let Some(mesh) = meshes.get(&mesh3d.0).cloned() else { continue };
-        let radius_uv = (hit.radius_m * gore.uv_per_metre / bevy_flaymap::UV_SPAN_M).max(0.0);
+        let radius_uv = (hit.radius_m * gore.uv_per_metre / crate::flaymap::UV_SPAN_M).max(0.0);
         let region = match gore.kind {
             GoreKind::Skin(r) => r,
             _ => Region::Torso,
@@ -760,14 +760,14 @@ fn take_hits(
         // 1. Peel. A slash opens geometry instead; a blow and a burn go through the dermis below.
         let mut handoff = None;
         let mut deepest = Layer::Skin;
-        let mut burn_degree = bloodstain::burn::Degree::None;
+        let mut burn_degree = crate::bloodstain::burn::Degree::None;
         if let HitKind::Burn { temp_c, seconds } = hit.kind {
             // The whole exposure, then the cooling the dial allows, integrated at once: what the
             // model says the contact did. A burn removes nothing — an eschar is dead tissue that
             // stays on the surface — so it never peels; the degree decides what the dermis shows.
-            let mut burn = bloodstain::Burn::new();
+            let mut burn = crate::bloodstain::Burn::new();
             burn.expose(temp_c, seconds);
-            burn.expose(bloodstain::burn::SURFACE_REST_C, dials.burn_cooling_s);
+            burn.expose(crate::bloodstain::burn::SURFACE_REST_C, dials.burn_cooling_s);
             burn_degree = burn.degree();
         }
         if let Some(mut flay) = flay
@@ -790,11 +790,11 @@ fn take_hits(
         if let HitKind::Blunt = hit.kind
             && let Some(uv) = site_uv
         {
-            let params = bloodstain::bruise::Params {
+            let params = crate::bloodstain::bruise::Params {
                 pool_diameter_mm: (hit.radius_m * 2.0 * 1000.0).clamp(2.0, 100.0),
-                ..bloodstain::bruise::Params::default()
+                ..crate::bloodstain::bruise::Params::default()
             };
-            commands.entity(hit.entity).try_insert(Bruising { uv, bruise: bloodstain::Bruise::new(params), carry: 0.0 });
+            commands.entity(hit.entity).try_insert(Bruising { uv, bruise: crate::bloodstain::Bruise::new(params), carry: 0.0 });
         }
 
         // A burn: the degree colours the dermis — reddened, blistered, charred. **These three colours
@@ -804,13 +804,13 @@ fn take_hits(
             && let Ok(mut entity_ref) = commands.get_entity(hit.entity)
         {
             let (tint, alpha): ([f32; 3], f32) = match burn_degree {
-                bloodstain::burn::Degree::None => ([1.0; 3], 0.0),
+                crate::bloodstain::burn::Degree::None => ([1.0; 3], 0.0),
                 // Erythema: the dermis flushes, so red is kept and green and blue are taken.
-                bloodstain::burn::Degree::First => ([1.0, 0.45, 0.40], 0.7),
+                crate::bloodstain::burn::Degree::First => ([1.0, 0.45, 0.40], 0.7),
                 // A blister: the epidermis lifts white over a pale bed.
-                bloodstain::burn::Degree::Second => ([1.0, 0.92, 0.80], 0.6),
+                crate::bloodstain::burn::Degree::Second => ([1.0, 0.92, 0.80], 0.6),
                 // Eschar: charred, near black.
-                bloodstain::burn::Degree::Third => ([0.10, 0.06, 0.04], 1.0),
+                crate::bloodstain::burn::Degree::Third => ([0.10, 0.06, 0.04], 1.0),
             };
             let radius_uv_burn = radius_uv;
             let mm_per_uv = 1000.0 / gore.uv_per_metre.max(1.0e-6);
@@ -860,7 +860,7 @@ fn take_hits(
         // the spray's own droplets cast straight at every other dressed surface for what a floor's
         // plane cannot catch — a sheet, a wall, the next body part. Straight rather than ballistic
         // for those: a droplet at 8–40 m/s falls under a centimetre in the metre it travels.
-        let droplets = bloodstain::patterns::impact_spatter(&wound, &dials.blood);
+        let droplets = crate::bloodstain::patterns::impact_spatter(&wound, &dials.blood);
         for (other, other_mesh, other_xf, other_gore) in &surfaces {
             if *other == hit.entity {
                 continue;
@@ -870,7 +870,7 @@ fn take_hits(
             match other_gore.kind {
                 GoreKind::Floor => {
                     let plane_y = other_xf.translation().y;
-                    for stain in bloodstain::stain::stains(&wound, &dials.blood, plane_y) {
+                    for stain in crate::bloodstain::stain::stains(&wound, &dials.blood, plane_y) {
                         let at = Vec3::new(stain.at[0], stain.at[1] + 0.5, stain.at[2]);
                         let shape = StainShape {
                             major: stain.radius * 2.2,
@@ -888,7 +888,7 @@ fn take_hits(
                     let mut landed = Vec::new();
                     for (i, d) in droplets.iter().enumerate().take(SPRAY_CAST) {
                         let dir = Vec3::new(d.dir[0], d.dir[1], d.dir[2]);
-                        let radius = bloodstain::stain::stain_radius(d, d.speed, &dials.blood);
+                        let radius = crate::bloodstain::stain::stain_radius(d, d.speed, &dials.blood);
                         let shape = StainShape {
                             major: radius * 2.4,
                             minor: radius * 1.6,
@@ -920,7 +920,7 @@ fn take_hits(
             from: hit.from,
             dir: hit.dir,
             wound,
-            bleed: bloodstain::Bleed::new(tick, &wound),
+            bleed: crate::bloodstain::Bleed::new(tick, &wound),
         });
         wounded.write(Wounded {
             at: at_world,
@@ -928,10 +928,10 @@ fn take_hits(
             area: wound.area,
             severity: 1.0,
             kind: wound.kind,
-            class: if hit.so2 >= bloodstain::spectral::SO2_ARTERIAL {
-                bloodstain::PatternClass::ArterialSpurt
+            class: if hit.so2 >= crate::bloodstain::spectral::SO2_ARTERIAL {
+                crate::bloodstain::PatternClass::ArterialSpurt
             } else {
-                bloodstain::PatternClass::Impact
+                crate::bloodstain::PatternClass::Impact
             },
         });
 
@@ -1072,7 +1072,7 @@ struct ThrowNow {
 /// material in [`FleshMode::Cap`] so `UV_1` picks the tissue. Without an atlas, a plain red.
 fn cap_material(
     region: Region,
-    atlas: Option<&bevy_cross_section::CrossSectionAtlas>,
+    atlas: Option<&crate::cross_section::CrossSectionAtlas>,
     standard: &Assets<StandardMaterial>,
     tables: &FleshTables,
     flesh: &mut Assets<FleshMaterial>,
@@ -1160,7 +1160,7 @@ fn bleed(
     let edges = edge_settings(&dials, wet_settings.as_deref());
     for (gore, site, mesh3d, xf, mut wet) in &mut sites {
         let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
-        let Some(pulse) = bloodstain::bleed::pulse_wound(&site.bleed, &site.wound, tick, dials.hz, &dials.blood) else {
+        let Some(pulse) = crate::bloodstain::bleed::pulse_wound(&site.bleed, &site.wound, tick, dials.hz, &dials.blood) else {
             continue;
         };
         let r = (site.wound.area / core::f32::consts::PI).sqrt().max(0.002) * (0.6 + pulse.severity);
@@ -1175,15 +1175,15 @@ fn bleed(
         let texels = wet.size();
         let _ = wet.paint_world_with(mesh, xf, site.from, site.dir, &shape_on(gore, &shape, texels), tick, &edges);
         // What runs off falls straight down: one drip per systole under the wound, sized the way
-        // `bloodstain::patterns::drip_trail` sizes a drip, onto every floor — so a pool grows under a
+        // `crate::bloodstain::patterns::drip_trail` sizes a drip, onto every floor — so a pool grows under a
         // wound that keeps bleeding, and the wetmap's own spread does the pooling.
-        let drop = bloodstain::Droplet {
+        let drop = crate::bloodstain::Droplet {
             dir: [0.0, -1.0, 0.0],
-            speed: bloodstain::patterns::DRIP_FALL_SPEED,
-            diameter: bloodstain::patterns::DRIP_DIAMETER_M,
+            speed: crate::bloodstain::patterns::DRIP_FALL_SPEED,
+            diameter: crate::bloodstain::patterns::DRIP_DIAMETER_M,
         };
-        let radius = bloodstain::stain::stain_radius(&drop, bloodstain::patterns::DRIP_FALL_SPEED, &dials.blood);
-        let wobble = |k: u32| (bloodstain::hash_f32(site.bleed.seed ^ tick.wrapping_mul(0x9E37_79B9) ^ k) - 0.5) * 0.04;
+        let radius = crate::bloodstain::stain::stain_radius(&drop, crate::bloodstain::patterns::DRIP_FALL_SPEED, &dials.blood);
+        let wobble = |k: u32| (crate::bloodstain::hash_f32(site.bleed.seed ^ tick.wrapping_mul(0x9E37_79B9) ^ k) - 0.5) * 0.04;
         let at = Vec3::new(site.wound.at[0] + wobble(1), site.wound.at[1], site.wound.at[2] + wobble(2));
         for (floor_gore, floor_mesh, floor_xf, mut floor_wet) in &mut floors {
             let Some(floor_mesh) = meshes.get(&floor_mesh.0) else { continue };
@@ -1206,7 +1206,7 @@ fn age_bruises(
     dials: Res<GoreDials>,
     mut bruised: Query<(&Gore, &mut Bruising, &mut DermisCanvas)>,
 ) {
-    let per_tick = dials.bruise_hours_per_tick.max(0.0) / bloodstain::bruise::STEP_H;
+    let per_tick = dials.bruise_hours_per_tick.max(0.0) / crate::bloodstain::bruise::STEP_H;
     for (gore, mut bruising, mut dermis) in &mut bruised {
         bruising.carry += per_tick;
         let steps = bruising.carry.floor() as u32;
@@ -1216,13 +1216,13 @@ fn age_bruises(
         bruising.carry -= steps as f32;
         bruising.bruise.advance(steps);
         let mm_per_uv = 1000.0 / gore.uv_per_metre.max(1.0e-6);
-        let radius_uv = bloodstain::bruise::RADIUS_MM / mm_per_uv;
+        let radius_uv = crate::bloodstain::bruise::RADIUS_MM / mm_per_uv;
         let uv = bruising.uv;
         let bruise = &bruising.bruise;
         // The ratio of the bruised skin to the same skin with nothing in it, in linear light, so the
         // caller's skin tone is what the chromophores modulate. Far out, where the model holds no
         // chromophore, the ratio is one and the alpha is zero.
-        let blank = linear(bruise.srgb_through_at(bloodstain::bruise::RADIUS_MM));
+        let blank = linear(bruise.srgb_through_at(crate::bloodstain::bruise::RADIUS_MM));
         dermis.paint_radial(uv, radius_uv, mm_per_uv, |r_mm| {
             let here = linear(bruise.srgb_through_at(r_mm));
             let ratio = [
@@ -1251,7 +1251,7 @@ fn soak_cloth(
     mut cloth: Query<(&Gore, &Mesh3d, &GlobalTransform, &mut Soaking, &mut WetCanvas)>,
 ) {
     let tick = clock.0;
-    let sheet = bloodstain::wick::Sheet::default();
+    let sheet = crate::bloodstain::wick::Sheet::default();
     let edges = edge_settings(&dials, wet_settings.as_deref());
     for (gore, mesh3d, xf, mut soaking, mut wet) in &mut cloth {
         if soaking.landings.is_empty() {

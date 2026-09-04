@@ -23,7 +23,7 @@
 //! written from tabulates no adipose or muscle coefficients. Fat is skin's scattering scaled up and
 //! its absorption scaled down with the blue held — a translucent yellow. Muscle's absorption is
 //! **derived, not authored**: whole-blood absorption from Bosschaart et al. 2014
-//! (`doi:10.1007/s10103-013-1446-7`, the table in `bloodstain::spectral`) at venous saturation,
+//! (`doi:10.1007/s10103-013-1446-7`, the table in `crate::bloodstain::spectral`) at venous saturation,
 //! band-averaged over the R, G and B thirds of the visible range, times a blood volume fraction of
 //! 5 % (own), plus a small non-haem baseline (own). Cortical bone gets no wrap at all — the table
 //! row is Lambert — and marrow is fat.
@@ -36,10 +36,10 @@
 //!
 //! **Blood on cloth.** Where the surface under the blood is a fabric rather than skin, the film
 //! colour is composited on the GPU instead: [`blood_lut`] tabulates the Kubelka–Munk film
-//! reflectance from `bloodstain::spectral` over a black and over a white substrate, and the shader
+//! reflectance from `crate::bloodstain::spectral` over a black and over a white substrate, and the shader
 //! interpolates by the fabric's own albedo per channel. That keeps the fabric's hue, which the CPU
 //! composite (grey substrate) cannot. The *spread* of blood into cloth is not here either: it is
-//! `bloodstain::wick`'s Lucas–Washburn front driving the wetmap's spread rate, on the CPU.
+//! `crate::bloodstain::wick`'s Lucas–Washburn front driving the wetmap's spread rate, on the CPU.
 //!
 //! # Determinism
 //!
@@ -71,8 +71,8 @@ use bevy::prelude::*;
 use bevy::reflect::Reflect;
 use bevy::render::render_resource::{AsBindGroup, Extent3d, ShaderType, TextureDimension, TextureFormat};
 use bevy::shader::ShaderRef;
-use bevy_cross_section::{Layer, Layers};
-use bloodstain::spectral::{Film, SO2_ARTERIAL, SO2_VENOUS, TABLE, srgb};
+use crate::cross_section::{Layer, Layers};
+use crate::bloodstain::spectral::{Film, SO2_ARTERIAL, SO2_VENOUS, TABLE, srgb};
 
 /// **The material a canvas or a cap wears.** `StandardMaterial` underneath, [`FleshExtension`] on top.
 pub type FleshMaterial = ExtendedMaterial<StandardMaterial, FleshExtension>;
@@ -88,7 +88,7 @@ pub const SSS_MAX_RADIUS_MM: f32 = 64.0;
 /// Columns in the blood table: film depth from `0` to [`BLOOD_LUT_MAX_MM`].
 pub const BLOOD_COLS: u32 = 256;
 /// The film depth the last blood column stands for, mm. Whole blood is opaque to the byte by
-/// roughly 0.6 mm (`bloodstain::spectral`'s Kubelka–Munk saturates there), so a longer axis would
+/// roughly 0.6 mm (`crate::bloodstain::spectral`'s Kubelka–Munk saturates there), so a longer axis would
 /// spend its columns on identical bytes; the shader clamps deeper films to the last column.
 pub const BLOOD_LUT_MAX_MM: f32 = 1.0;
 
@@ -139,7 +139,7 @@ pub const FLAG_DERMIS: u32 = 4;
 
 impl Default for FleshParams {
     fn default() -> Self {
-        Self::for_layers(&Layers::for_region(bevy_cross_section::Region::Limb), FleshMode::Canvas, 1000.0)
+        Self::for_layers(&Layers::for_region(crate::cross_section::Region::Limb), FleshMode::Canvas, 1000.0)
     }
 }
 

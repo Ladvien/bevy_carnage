@@ -11,7 +11,7 @@
 //!
 //! Every cell is a *different impact* and nothing else changes: one 4 mm droplet, swept across the
 //! impact angle left to right and across the impact speed top to bottom. Each cell rasterises its own
-//! silhouette through [`bloodstain::stain::rasterise`](bevy_carnage::rasterise) into its own texture,
+//! silhouette through [`bevy_carnage::bloodstain::stain::rasterise`](bevy_carnage::rasterise) into its own texture,
 //! so what is on screen is the model's output rather than an artist's guess at it. Three published
 //! rules are visible at once:
 //!

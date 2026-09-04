@@ -63,7 +63,7 @@ pub struct DetachedPart;
 /// the depths measured for that region. Absent, caps carry no `UV_1` and draw whatever material
 /// the caller gives them — exactly what they did before this component existed.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FractureRegion(pub bevy_cross_section::Region);
+pub struct FractureRegion(pub crate::cross_section::Region);
 
 /// One baked body fragment, in subject-**local** units (render scale is applied at spawn). Both
 /// meshes are recentered to `center_local` (their shared bounding-box center), so a physics body
@@ -148,7 +148,7 @@ pub struct FractureCache {
     ejecta: HashMap<AssetId<WorldAsset>, Vec<EjectaChunk>>,
     baked: HashSet<AssetId<WorldAsset>>,
     /// The region a subject declared, for annotating its caps.
-    regions: HashMap<AssetId<WorldAsset>, bevy_cross_section::Region>,
+    regions: HashMap<AssetId<WorldAsset>, crate::cross_section::Region>,
     /// The fracture modes of the finest frontier — see [`crate::modal`].
     modes: HashMap<AssetId<WorldAsset>, crate::modal::ModalSet>,
 }
@@ -265,7 +265,7 @@ impl FractureCache {
     }
 
     /// The body region the subject declared with [`FractureRegion`], if it declared one.
-    pub fn region(&self, source: AssetId<WorldAsset>) -> Option<bevy_cross_section::Region> {
+    pub fn region(&self, source: AssetId<WorldAsset>) -> Option<crate::cross_section::Region> {
         self.regions.get(&source).copied()
     }
 
@@ -363,7 +363,7 @@ pub fn bake_fractures(
     mut cache: ResMut<FractureCache>,
     mut meshes: ResMut<Assets<Mesh>>,
     settings: Res<FractureSettings>,
-    mode_settings: Option<Res<bevy_fracture_modes::ModeSettings>>,
+    mode_settings: Option<Res<crate::fracture_modes::ModeSettings>>,
     subjects: Query<(
         &FractureSubject,
         &FractureProxy,
@@ -618,7 +618,7 @@ pub fn bake_fractures(
 pub fn materialise_fragments(
     mut cache: ResMut<FractureCache>,
     mut meshes: ResMut<Assets<Mesh>>,
-    cross_section: Option<Res<bevy_cross_section::CrossSectionSettings>>,
+    cross_section: Option<Res<crate::cross_section::CrossSectionSettings>>,
 ) {
     let sources: Vec<AssetId<WorldAsset>> =
         cache.wanted.iter().filter(|(_, ids)| !ids.is_empty()).map(|(s, _)| *s).collect();
@@ -655,11 +655,11 @@ pub fn materialise_fragments(
 /// the crate's measured rows otherwise — so a subject that declared a region gets banded caps whether
 /// or not the caller added `CrossSectionPlugin`.
 fn layers_for(
-    region: bevy_cross_section::Region,
-    settings: Option<&bevy_cross_section::CrossSectionSettings>,
-) -> (bevy_cross_section::Layers, bevy_cross_section::Scale) {
+    region: crate::cross_section::Region,
+    settings: Option<&crate::cross_section::CrossSectionSettings>,
+) -> (crate::cross_section::Layers, crate::cross_section::Scale) {
     match settings {
         Some(s) => (*s.layers(region), s.scale),
-        None => (bevy_cross_section::Layers::for_region(region), bevy_cross_section::Scale::default()),
+        None => (crate::cross_section::Layers::for_region(region), crate::cross_section::Scale::default()),
     }
 }

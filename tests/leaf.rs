@@ -25,62 +25,22 @@
 
 use std::path::{Path, PathBuf};
 
-/// Everything `bevy_carnage` is allowed to depend on. An engine, a serializer, a mesh validator, and
-/// a particle system.
+/// **The gore family came home on 2026-09-04.** `bloodstain`, `bevy_wetmap`, `bevy_viscera`,
+/// `bevy_cross_section`, `bevy_flaymap`, `bevy_laceration` and `bevy_fracture_modes` were seven
+/// published crates this one composed; they are now the modules of the same names under `src/`
+/// (`bevy_carnage::bloodstain`, `::wetmap`, …), because this is the one crate a game is meant to
+/// depend on and seven leaves were seven version pins to keep aligned. Their own ratchets — engine-free
+/// `bloodstain`, `[f32; 3]` in its public API, the conversion with one home in `src/v3.rs` — are
+/// now module conventions rather than crate boundaries, and `bloodstain_is_still_engine_free` below
+/// holds the one that matters most.
 ///
-/// **`isomesh` was added deliberately, and this comment is the review the assertion below asks for.**
-/// It buys the one thing this crate could never do for itself — say whether a fragment is closed,
-/// manifold and consistently wound — and it is admitted on terms that keep the boundary meaningful: it
-/// is `no_std`, it has exactly one dependency of its own (`libm`), and **its public API is `[f32; 3]`
-/// rather than any math library's vector type**, so it cannot drag a second `glam` into a consumer's
-/// tree. A crate that pinned `glam` would have been refused on that ground alone, however good it was.
-///
-/// Note what it is *not*: a geometry backend this crate cannot work without. The fracture is still
-/// `soup.rs` and owes `isomesh` nothing — it is a second opinion about the output, not a source of it.
-///
-/// **`bevy_hanabi` was added in AG-030, and it is admitted on two terms rather than one.**
-///
-/// First, **it is optional and behind the `vfx` feature**, so the deterministic half of this crate
-/// never sees it. `cargo build --release --no-default-features --features serde` resolves no
-/// `bevy_hanabi` and no `bevy_render` at all — that is the property the CI's plain `cargo build` step
-/// exists to defend, and a mandatory particle dependency would have destroyed it.
-///
-/// Second — and this is the sharper reason — **it renders and it cannot report.** Hanabi 0.19 has no
-/// public GPU→CPU readback path whatsoever: its only `map_async` is behind
-/// `#[cfg(all(test, feature = "gpu_tests"))]`, and its `copy_buffer_to_buffer` calls are internal
-/// buffer reallocation. So a particle's position is *physically unable* to reach a golden, a hash, or
-/// a simulation, and the crate's "cosmetic output never re-enters the deterministic half" rule ends up
-/// enforced by the library rather than by anyone remembering it. A particle system that offered
-/// readback would have needed a different answer here, however good its visuals were.
-///
-/// Note what it is *not*, again: a source of truth about anything. Where blood *lands* is
-/// `bloodstain`, on the CPU, from `hash_f32`, and it is available with `vfx` off entirely.
-///
-/// **`bloodstain` was added on 2026-09-02, and it is the easiest admission of the four** — because it
-/// is not an addition at all. It is *this crate's own blood model*, carved out: the Comiskey spatter,
-/// the pools, the bleed schedule, `hash_f32` and `WoundKind` all used to live in `src/`. Nothing new
-/// entered the tree; a boundary was drawn inside it.
-///
-/// It passes `isomesh`'s terms and for the same reasons: `no_std`, two dependencies of its own
-/// (`libm` and an optional `serde`), and **no math library in its public API** — every signature is
-/// `[f32; 3]`. That last property is the load-bearing one, and it is why the conversion has exactly
-/// one home, `src/v3.rs`.
-///
-/// **`libm` was added in 0.4.0 for the flesh tables**, on the narrowest terms of all: it is the same
-/// `libm` that `bloodstain` and `isomesh` already bring, optional behind `flesh`, and it exists so a
-/// golden over two baked textures means the same bytes on every machine.
+/// **`libm`** is the one math library, unconditional: `bloodstain` and the flesh tables both bake
+/// with it so a golden means the same bytes on every machine.
 const ALLOWED_DEPS: &[&str] = &[
     "bevy",
     "serde",
     "isomesh",
     "bevy_hanabi",
-    "bloodstain",
-    "bevy_cross_section",
-    "bevy_fracture_modes",
-    "bevy_flaymap",
-    "bevy_laceration",
-    "bevy_wetmap",
-    "bevy_viscera",
     "libm",
 ];
 
@@ -248,6 +208,42 @@ fn the_dependency_list_stays_closed() {
                 !name.contains(marker),
                 "bevy_carnage declares `{name}` — the crate exists precisely so it does not depend on \
                  a game or a solver."
+            );
+        }
+    }
+}
+
+/// **`bloodstain` stays engine-free, as a module.** It was a `no_std` crate with `libm` as its only
+/// dependency and `[f32; 3]` in every public signature, and that is the property that let anything
+/// depend on it — including the two `glam` versions this workspace resolves, which a leaf naming
+/// either would have collided with. Folding it into this crate must not let `bevy` seep in: the
+/// module never names `bevy`, `glam` or `std`, and the conversion to `Vec3` keeps its one home in
+/// `src/v3.rs`.
+#[test]
+fn bloodstain_is_still_engine_free() {
+    let mut files = Vec::new();
+    rust_sources(&crate_root().join("src/bloodstain"), &mut files);
+    assert!(!files.is_empty(), "src/bloodstain must exist");
+    for path in files {
+        let src = std::fs::read_to_string(&path).unwrap_or_default();
+        // The unit tests at the tail of each file are `std` by design (`println!`, `format!`); the
+        // module convention is that `#[cfg(test)]` is the last item, so the scan stops there.
+        let src = src.split("#[cfg(test)]").next().unwrap_or("");
+        let stripped = strip_comments(src);
+        for marker in ["bevy::", "bevy_", "glam::", "Vec3", "Vec2"] {
+            assert!(
+                !stripped.contains(marker),
+                "{} names `{marker}` — the blood model is engine-free and stays so",
+                path.display()
+            );
+        }
+        for (i, line) in stripped.lines().enumerate() {
+            assert!(
+                !line.contains("std::"),
+                "{}:{}: `{}` — the blood model reaches for std",
+                path.display(),
+                i + 1,
+                line.trim()
             );
         }
     }

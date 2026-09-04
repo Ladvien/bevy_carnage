@@ -106,7 +106,7 @@ pub struct GorePolicy {
     /// horror game from an action game at identical volumes.
     pub ejection_profile: f32,
     /// How wet blood reads, `[0, 1]`, scaling the specular channel of
-    /// [`bloodstain::dry::Appearance`]. **Wetness is the strongest disgust cue and it is not a
+    /// [`crate::bloodstain::dry::Appearance`]. **Wetness is the strongest disgust cue and it is not a
     /// colour** (Oum et al., `doi:10.1080/02699931.2010.496997`), so it gets a dial of its own rather
     /// than riding on `intensity`.
     pub wetness: f32,

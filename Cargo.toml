@@ -1,5 +1,11 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.0` folds the seven kernel crates in as modules.** `bevy_carnage::wetmap` and the rest are the
+# same paths they were as re-exports, so a consumer that followed the README changes nothing; the
+# manifest loses seven dependencies and gains none. The minor bump is for the one thing that does
+# move: a consumer that named a leaf crate directly now names this one. `libm` is unconditional,
+# because the blood model bakes with it whether or not `flesh` is on.
+#
 # **`0.4.0` adds the pixel half and the preset, and is additive on every type that existed.** `flesh`
 # (default on) is `FleshMaterial` — an `ExtendedMaterial<StandardMaterial, _>` with an embedded WGSL,
 # two CPU-baked tables frozen by a golden, and `libm` to bake them — and `preset` is `GorePlugin`,
@@ -22,7 +28,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
@@ -45,6 +51,8 @@ bevy = { version = "0.19.0", default-features = false, features = [
     "bevy_asset",   # Assets<Mesh>, Handle<T>, AssetId<T>, AssetPath, RenderAssetUsages
     "bevy_mesh",    # Mesh, Mesh3d, Indices, PrimitiveTopology, VertexAttributeValues
     "bevy_pbr",     # StandardMaterial / MeshMaterial3d — the detached part keeps its own material
+    "bevy_image",   # Image — the wetmap, flaymap and cross-section strip are CPU-authored images
+    "bevy_render",  # render_resource::{Extent3d, TextureDimension, TextureFormat} for those images
     # `WorldAsset` — the scene handle a subject is keyed by. It lives in
     # `bevy_world_serialization`, NOT `bevy_scene`, and naming the wrong one here still built for a
     # long time: `cargo test` pulls the dev-dependency full umbrella, which enables everything, so the
@@ -58,42 +66,15 @@ bevy = { version = "0.19.0", default-features = false, features = [
 # fragment counts. Optional because a caller that builds `FractureSettings` in code needs none of it.
 serde = { version = "1.0", features = ["derive"], optional = true }
 
-# **The blood model, carved out on 2026-09-02.** Everything about blood as a *material* — the
-# Carreau-Yasuda rheology and its Casson yield stress, the Comiskey percolation spatter, the stain
-# morphology, the six forensic pattern classes, the drying timeline, the pools, the bleed schedule,
-# `hash_f32` and `WoundKind` — lives there, because none of it needs Bevy and all of it is reusable.
-# This crate re-exports every moved name, so a caller's `use bevy_carnage::{Droplet, Stain, Pool}`
-# still resolves.
-#
-# **Admitted on exactly `isomesh`'s terms, which is why the boundary stays meaningful:** `no_std`, two
-# dependencies of its own (`libm` and an optional `serde`), and **no math library in its public API** —
-# every signature is `[f32; 3]`. The workspace resolves two `glam` versions, so a leaf naming either
-# could collide with a consumer naming the other; naming neither cannot. Conversion has one home,
-# `src/v3.rs`, and it is per wound rather than per vertex.
-#
-# Path *and* version, because `cargo publish` refuses a path-only dependency.
-bloodstain = { version = "0.3", path = "../bloodstain", default-features = false }
+# **The seven kernels are modules, not dependencies, since 0.5.0.** `bloodstain`, `bevy_wetmap`,
+# `bevy_viscera`, `bevy_cross_section`, `bevy_flaymap`, `bevy_laceration` and `bevy_fracture_modes`
+# were path-and-version dependencies here from 2026-09-02 to 2026-09-04; each is now `src/<name>/`
+# under the module name it was always re-exported by. Seven registry entries were seven version
+# pins to keep aligned for a family only ever meant to be reached through this crate. What the
+# boundary bought is kept as a convention: `tests/leaf.rs::bloodstain_is_still_engine_free` holds
+# the blood model to no `bevy`, no `glam`, no `std`, `[f32; 3]` in every signature, and the one
+# conversion in `src/v3.rs`.
 
-# **The 2026-09-04 four.** Each is a kernel this crate composes and none depends on it back; each
-# is path *and* version because `cargo publish` refuses a path-only dependency.
-#
-# `bevy_cross_section` bands a cap by depth below the skin — `ProxyCell::skin_planes` is the
-# measurement and `FragmentGeometry::annotate_cap` the write. `bevy_fracture_modes` is Sellán's
-# modes over the bond graph; `src/modal.rs` is the two conversions. `bevy_flaymap` peels a body in
-# texture space and hands the bone to a `radial` reach; `bevy_laceration` opens a cut over time.
-# All four are re-exported whole, so a consumer needs one dependency line.
-bevy_cross_section = { version = "0.1.2", path = "../bevy_cross_section", default-features = false }
-bevy_fracture_modes = { version = "0.1", path = "../bevy_fracture_modes", default-features = false }
-bevy_flaymap = { version = "0.1.2", path = "../bevy_flaymap", default-features = false }
-bevy_laceration = { version = "0.1.2", path = "../bevy_laceration", default-features = false }
-# **The two blood-and-guts siblings, promoted in 0.3.1.** Until then they were dev-dependencies —
-# reachable by this crate's demos, invisible to a consumer — which made "one dependency line" true
-# of four kernels and false of two. A game that wanted the wetmap had to name it beside this crate
-# and could end up with two versions of `bloodstain`. Both are `no_std`-light, depend only on
-# `bevy` and `bloodstain`, neither declares a feature (so there is nothing to turn off), and neither
-# depends on this crate back (their `tests/leaf.rs` forbid it).
-bevy_wetmap = { version = "0.2.3", path = "../bevy_wetmap" }
-bevy_viscera = { version = "0.1", path = "../bevy_viscera" }
 # **The mesh validator.** This crate could always cut a mesh; it could never say whether what came out
 # was closed, manifold or consistently wound — `examples/fracture_cube.rs` says so in as many words.
 # `isomesh` is what answers that, and it is an unusually cheap thing to admit: `no_std`, exactly one
@@ -155,7 +136,7 @@ isomesh = { version = "0.0.10", default-features = false }
 # freezes their bytes. `std`'s `exp`/`sin`/`acos` are whatever the platform's libm is, which is not
 # promised bit-identical across machines; `libm` is one implementation everywhere, and it is already in
 # the lockfile as `bloodstain`'s and `isomesh`'s one dependency. Only the `flesh` feature reads it.
-libm = { version = "0.2", optional = true }
+libm = { version = "0.2" }
 
 # **GPU blood, and it is optional for a reason the CI enforces.** `bevy_hanabi` compiles particle
 # effects to compute shaders, which means it drags in `bevy_render` and the whole GPU stack — exactly
@@ -206,20 +187,13 @@ default = ["serde", "vfx", "flesh"]
 # is forward-path WGSL over the same canvases the CPU owns, so `scripts/build_web.sh` turns it on where
 # it turns `vfx` off. `bevy/bevy_image` is the umbrella feature that exposes `bevy::image` for the
 # table images; `bevy_pbr` already pulls the render crates underneath.
-flesh = ["dep:libm", "bevy/bevy_image"]
+flesh = []
 
 # **Forwarded, not duplicated.** The blood dials live in `bloodstain::BloodSettings` and are reached
 # through `CarnageSettings::blood`, so a caller that authors this crate's settings in RON needs the
 # leaf's derives too. One feature, one answer: there is no way to get a serialisable `CarnageSettings`
 # with a non-serialisable blood block.
-serde = [
-    "dep:serde",
-    "bloodstain/serde",
-    "bevy_cross_section/serde",
-    "bevy_fracture_modes/serde",
-    "bevy_flaymap/serde",
-    "bevy_laceration/serde",
-]
+serde = ["dep:serde"]
 
 # **The GPU half.** Particle effects and stain decals: everything that renders and nothing that
 # decides. Gated so a headless harness can take the deterministic half alone — which is also what

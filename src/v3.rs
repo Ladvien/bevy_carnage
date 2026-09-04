@@ -19,13 +19,13 @@ use bevy::math::Vec3;
 
 /// `glam::Vec3` → `bloodstain`'s `[f32; 3]`.
 #[inline]
-pub(crate) fn to_v3(v: Vec3) -> bloodstain::V3 {
+pub(crate) fn to_v3(v: Vec3) -> crate::bloodstain::V3 {
     [v.x, v.y, v.z]
 }
 
 /// `bloodstain`'s `[f32; 3]` → `glam::Vec3`.
 #[inline]
-pub(crate) fn from_v3(v: bloodstain::V3) -> Vec3 {
+pub(crate) fn from_v3(v: crate::bloodstain::V3) -> Vec3 {
     Vec3::new(v[0], v[1], v[2])
 }
 
@@ -33,7 +33,7 @@ pub(crate) fn from_v3(v: bloodstain::V3) -> Vec3 {
 ///
 /// **Two structs for one idea, and the duplication is the boundary rather than an oversight.** This
 /// crate's `Wound` is the type its fracture, bond graph and ECS already speak, in `glam`;
-/// `bloodstain::Wound` is the one a leaf with no math library can speak. The conversion is five field
+/// `crate::bloodstain::Wound` is the one a leaf with no math library can speak. The conversion is five field
 /// copies and it happens once per wound.
 /// **Allowed to be unused with `vfx` off, and that is a fact about the readers rather than about the
 /// boundary.** The only caller today is the particle reader, which is cosmetic; the conversion still
@@ -41,8 +41,8 @@ pub(crate) fn from_v3(v: bloodstain::V3) -> Vec3 {
 /// feature would mean the boundary appeared and disappeared with a renderer.
 #[cfg_attr(not(feature = "vfx"), allow(dead_code))]
 #[inline]
-pub(crate) fn wound(w: &crate::Wound) -> bloodstain::Wound {
-    bloodstain::Wound {
+pub(crate) fn wound(w: &crate::Wound) -> crate::bloodstain::Wound {
+    crate::bloodstain::Wound {
         at: to_v3(w.at),
         normal: to_v3(w.normal),
         area: w.area,
@@ -91,8 +91,8 @@ mod tests {
         assert_eq!(m.severity, w.severity);
         assert_eq!(m.kind, crate::WoundKind::Channel);
         assert_eq!(
-            bloodstain::wound_seed(&m),
-            bloodstain::wound_seed(&wound(&w)),
+            crate::bloodstain::wound_seed(&m),
+            crate::bloodstain::wound_seed(&wound(&w)),
             "the mirror must be a pure function of the wound"
         );
     }

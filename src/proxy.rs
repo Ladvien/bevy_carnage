@@ -447,11 +447,11 @@ impl ProxyCell {
     /// plane is exactly its distance to the subject's surface. A cell with no supplied face (an
     /// interior fragment) returns none, and reads as skin-depth zero there, deliberately: the
     /// alternative is guessing at a surface the cell never touched.
-    pub fn skin_planes(&self) -> Vec<bevy_cross_section::SkinPlane> {
+    pub fn skin_planes(&self) -> Vec<crate::cross_section::SkinPlane> {
         (0..self.faces.len())
             .filter(|&fi| self.face_kind[fi] == FaceKind::Supplied)
             .filter_map(|fi| self.face_plane(fi))
-            .map(|(point, normal)| bevy_cross_section::SkinPlane { point, normal })
+            .map(|(point, normal)| crate::cross_section::SkinPlane { point, normal })
             .collect()
     }
 

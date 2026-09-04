@@ -13,7 +13,7 @@
 //! | 150–389 | `bevy_wetmap` | six shots on a pale sphere, running under gravity, spreading, drying |
 //!
 //! The first clip is the spectral model with nothing else in the frame: each swatch's colour is
-//! `bloodstain::spectral::srgb` for that film, and the ageing is `dry::appearance_of`, so a
+//! `bevy_carnage::bloodstain::spectral::srgb` for that film, and the ageing is `dry::appearance_of`, so a
 //! thin arterial smear reads pink-scarlet and a thick venous pool near-black before either dries
 //! (Bosschaart et al., `doi:10.1007/s10103-013-1446-7`). The second is the wetmap consuming it: the
 //! canvas's coverage byte is a depth, and the drip is what makes a run stop where it stopped.

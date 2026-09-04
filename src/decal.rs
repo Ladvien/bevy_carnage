@@ -1,7 +1,7 @@
 //! **Stains, as entities.** The cosmetic half of blood on the floor.
 //!
 //! Entirely behind the `vfx` feature, and it is the *only* half that is optional: **where blood lands
-//! is core.** `bloodstain::stain::stains` is deterministic and available headless, because on the
+//! is core.** `crate::bloodstain::stain::stains` is deterministic and available headless, because on the
 //! consuming side a blood pool's position feeds simulation — a mycelium colony reads pools as
 //! chemoattractant sources. So this module turns a [`Stain`] into something visible and does nothing
 //! else. It never decides where one is.
@@ -31,7 +31,7 @@
 //! reads as tiled almost immediately. Authoring more textures moves the number without changing the
 //! shape of the problem.
 //!
-//! A mask is now rasterised from the stain's own [`StainShape`] (`bloodstain::stain::rasterise`):
+//! A mask is now rasterised from the stain's own [`StainShape`] (`crate::bloodstain::stain::rasterise`):
 //! aspect from the impact angle, spines from the Weber number, satellites past the splash threshold.
 //! Two stains look the same only when two impacts *were* the same. The crate still ships **no asset
 //! files** — a consumer should not have to copy a texture out of a dependency to get blood.
@@ -41,7 +41,7 @@
 //! A distinct material per stain specialises a render pipeline per stain, which is the cost the old
 //! four-variant scheme existed to avoid. So masks are cached by a **quantised shape key**: stains
 //! whose silhouettes are indistinguishable share one material, and the cache is capped. At the cap,
-//! `bloodstain::bag::pick` chooses among the masks already built — a shuffle bag whose minimum gap
+//! `crate::bloodstain::bag::pick` chooses among the masks already built — a shuffle bag whose minimum gap
 //! between repeats is `n − 1` draws, rather than the fresh uniform draw that made `seed % 4` tile.
 
 use std::sync::LazyLock;
@@ -52,29 +52,29 @@ use bevy::pbr::decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialE
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use bloodstain::spectral::Film;
-use bloodstain::stain::{StainShape, rasterise};
-use bloodstain::{Pool, Stain};
+use crate::bloodstain::spectral::Film;
+use crate::bloodstain::stain::{StainShape, rasterise};
+use crate::bloodstain::{Pool, Stain};
 
 /// **The film a stain on a floor is**, and therefore its colour.
 ///
 /// 1.5 mm of venous blood over a mid-grey substrate. **No blood colour is authored here**: the
-/// thickness and the oxygen saturation go into `bloodstain::spectral`, which puts Bosschaart's
+/// thickness and the oxygen saturation go into `crate::bloodstain::spectral`, which puts Bosschaart's
 /// whole-blood absorption and scattering tables (`doi:10.1007/s10103-013-1446-7`) through
 /// Kubelka–Munk at 81 wavelengths and the CIE observer — the same optics that colour a wetmap texel
 /// and a cross-section's muscle band, so blood on a floor and blood on a body cannot drift apart.
 ///
 /// **Venous and 1.5 mm because that is what a floor stain is.** A pooled stain has stopped being a
-/// droplet: it is deoxygenated by the time it settles, and `bloodstain::stain` describes a stain's
+/// droplet: it is deoxygenated by the time it settles, and `crate::bloodstain::stain` describes a stain's
 /// *silhouette* rather than its depth — there is no thickness in the morphology to read, so the
 /// number is stated here. At 1.5 mm the film is close enough to blood's own semi-infinite
 /// reflectance that the substrate barely reaches the answer, which is why an unknown floor is
 /// mid-grey rather than a dial.
-const FLOOR_FILM: Film = Film { thickness_mm: 1.5, so2: bloodstain::SO2_VENOUS, substrate: 0.5 };
+const FLOOR_FILM: Film = Film { thickness_mm: 1.5, so2: crate::bloodstain::SO2_VENOUS, substrate: 0.5 };
 
 /// The stain colour, computed once — 81 wavelengths of Kubelka–Munk per material would be paid per
 /// silhouette, and the answer is a function of a constant.
-static FLOOR_SRGB: LazyLock<[f32; 3]> = LazyLock::new(|| bloodstain::spectral::srgb(&FLOOR_FILM));
+static FLOOR_SRGB: LazyLock<[f32; 3]> = LazyLock::new(|| crate::bloodstain::spectral::srgb(&FLOOR_FILM));
 
 /// The colour every stain and pool material carries. See [`FLOOR_FILM`].
 fn floor_colour() -> Color {
@@ -113,7 +113,7 @@ pub struct StainMask {
 #[derive(Resource, Debug, Default)]
 pub struct StainMasks {
     masks: Vec<StainMask>,
-    /// Draw ordinal for [`bloodstain::pick`], advanced once per reuse.
+    /// Draw ordinal for [`crate::bloodstain::pick`], advanced once per reuse.
     ///
     /// **The one piece of mutable state here, and it is a counter rather than a cursor into a
     /// shuffled list** — `pick` derives its whole permutation from the ordinal, so a replay
@@ -160,7 +160,7 @@ impl StainMasks {
     /// if it does not.
     ///
     /// Deterministic in both branches: a hit is keyed by the shape, and a miss at the cap is chosen by
-    /// [`bloodstain::pick`] from the draw ordinal. Two runs that stain the same floor wear the same
+    /// [`crate::bloodstain::pick`] from the draw ordinal. Two runs that stain the same floor wear the same
     /// masks in the same order — which is what makes a recorded demo frame-identical.
     ///
     /// **This is not a fallback path.** There is one function that answers "which material", and the
@@ -182,10 +182,10 @@ impl StainMasks {
                     base_color_texture: Some(image.clone()),
                     // Fresh blood, coloured by [`FLOOR_FILM`] rather than authored. A consumer
                     // walking the drying timeline sets `base_color` and `perceptual_roughness` from
-                    // `bloodstain::dry::appearance` instead — the mask carries shape only, so one
+                    // `crate::bloodstain::dry::appearance` instead — the mask carries shape only, so one
                     // texture serves every age.
                     base_color: floor_colour(),
-                    perceptual_roughness: bloodstain::BloodSettings::default().wet_roughness,
+                    perceptual_roughness: crate::bloodstain::BloodSettings::default().wet_roughness,
                     // The extension forces `AlphaMode::Blend` for the decal pass; setting it here as
                     // well keeps the base material honest about what it is if a consumer reuses it.
                     alpha_mode: AlphaMode::Blend,
@@ -198,7 +198,7 @@ impl StainMasks {
         }
         // At the cap: reuse, chosen by the shuffle bag rather than by a modulo of the seed.
         let n = self.masks.len() as u32;
-        let index = bloodstain::pick(self.epoch, key, n, 2) as usize;
+        let index = crate::bloodstain::pick(self.epoch, key, n, 2) as usize;
         self.epoch = self.epoch.wrapping_add(1);
         match self.masks.get(index) {
             Some(m) => m.material.clone(),
@@ -217,7 +217,7 @@ impl StainMasks {
 ///
 /// # Why the satellites are dropped here, and why they were the "donut"
 ///
-/// **Measured, on the mask this function used to build.** `bloodstain::stain::rasterise` draws the
+/// **Measured, on the mask this function used to build.** `crate::bloodstain::stain::rasterise` draws the
 /// whole forensic silhouette — the elliptical deposit, its rim spines, *and* the ring of detached
 /// satellite droplets — and to fit the furthest satellite inside the texture it shrinks the deposit
 /// by `1 + max_spine_reach + 0.47`, which is about `2.15×`. At the impact energies a wound's droplets
@@ -231,7 +231,7 @@ impl StainMasks {
 /// `capture_carnage` showed on its floor.
 ///
 /// The deposit is what a decal is *for* — [`spawn_stain`] scales the quad to `Stain::radius`, which
-/// is the deposit's own radius from `bloodstain::stain::stain_radius`, so a mask whose body filled
+/// is the deposit's own radius from `crate::bloodstain::stain::stain_radius`, so a mask whose body filled
 /// less than half its width drew the stain at less than half the size it was placed at and then put
 /// a ring of specks where the rim should have been. So the mask is rasterised from the silhouette
 /// with `satellites: 0`: the body then fills the texture (`extent = (1 + max_spine) · 1.04`), the
@@ -287,7 +287,7 @@ pub fn mask_image(shape: &StainShape) -> Image {
 ///
 /// **Takes the silhouette as well as the stain**, and that is the `0.2.0` signature change: a stain
 /// says *where* and *how wide*, a [`StainShape`] says *what shape*. The two come from one droplet —
-/// `bloodstain::stain::impact_at_plane` then `stain_shape` — and keeping them separate is what let the
+/// `crate::bloodstain::stain::impact_at_plane` then `stain_shape` — and keeping them separate is what let the
 /// placement stay frozen while the morphology became derived.
 pub fn spawn_stain(
     commands: &mut Commands,
@@ -367,8 +367,8 @@ pub fn update_pool_decals<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bloodstain::stain::{Impact, stain_shape};
-    use bloodstain::BloodSettings;
+    use crate::bloodstain::stain::{Impact, stain_shape};
+    use crate::bloodstain::BloodSettings;
 
     fn shape_at(deg: f32, speed: f32, seed: u32) -> StainShape {
         let s = BloodSettings::default();

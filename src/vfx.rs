@@ -46,8 +46,8 @@ use bevy_hanabi::{
 
 use std::sync::LazyLock;
 
-use bloodstain::spectral::Film;
-use bloodstain::{BACK_SPATTER_SPEED, FORWARD_SPATTER_SPEED, PatternClass, wound_seed};
+use crate::bloodstain::spectral::Film;
+use crate::bloodstain::{BACK_SPATTER_SPEED, FORWARD_SPATTER_SPEED, PatternClass, wound_seed};
 use crate::wound::{Wound, WoundKind};
 use crate::{CarnageSettings, Wounded};
 
@@ -79,24 +79,24 @@ pub struct EffectTtl(pub u32);
 /// **The film a spatter droplet in flight is**, and therefore its colour.
 ///
 /// 0.4 mm of arterial blood over a dark substrate: a droplet is a thin lens of blood that mostly
-/// sees itself, and `bloodstain::spectral` turns a thickness and an oxygen saturation into a colour
+/// sees itself, and `crate::bloodstain::spectral` turns a thickness and an oxygen saturation into a colour
 /// through 81 wavelengths of Kubelka–Munk over Bosschaart's whole-blood tables
 /// (`doi:10.1007/s10103-013-1446-7`). **No blood colour is authored in this crate.** A droplet is
 /// arterial rather than venous because spatter is thrown from a fresh opening — the same reason
 /// `bloodstain`'s spray model uses the arterial saturation.
-const DROPLET_FILM: Film = Film { thickness_mm: 0.4, so2: bloodstain::SO2_ARTERIAL, substrate: 0.2 };
+const DROPLET_FILM: Film = Film { thickness_mm: 0.4, so2: crate::bloodstain::SO2_ARTERIAL, substrate: 0.2 };
 
 /// The droplet colour, computed once. 81 wavelengths of Kubelka–Munk is not something to pay per
 /// effect asset, and the answer is a function of a constant.
 static DROPLET_SRGB: LazyLock<[f32; 3]> =
-    LazyLock::new(|| bloodstain::spectral::srgb(&DROPLET_FILM));
+    LazyLock::new(|| crate::bloodstain::spectral::srgb(&DROPLET_FILM));
 
 /// **The film a ribbon strand is.** A strand dragged off a flying gib is a running film rather than
 /// a lens, so it is thicker and venous — the same two dials, one model.
-const RIBBON_FILM: Film = Film { thickness_mm: 1.0, so2: bloodstain::SO2_VENOUS, substrate: 0.2 };
+const RIBBON_FILM: Film = Film { thickness_mm: 1.0, so2: crate::bloodstain::SO2_VENOUS, substrate: 0.2 };
 
 /// The strand colour, computed once. See [`DROPLET_SRGB`].
-static RIBBON_SRGB: LazyLock<[f32; 3]> = LazyLock::new(|| bloodstain::spectral::srgb(&RIBBON_FILM));
+static RIBBON_SRGB: LazyLock<[f32; 3]> = LazyLock::new(|| crate::bloodstain::spectral::srgb(&RIBBON_FILM));
 
 /// Blood, as a colour ramp: the droplet's own colour, fading to a darker, transparent clot.
 ///
@@ -591,7 +591,7 @@ fn spawn_wound_effects(
         // One conversion, at the boundary, per wound — `src/v3.rs` says why it lives there and
         // nowhere else.
         let mirror = crate::v3::wound(&wound);
-        let count = bloodstain::droplet_count(&mirror, &settings.blood);
+        let count = crate::bloodstain::droplet_count(&mirror, &settings.blood);
         if count == 0 {
             continue;
         }
@@ -619,7 +619,7 @@ fn spawn_wound_effects(
             // Air-driven and fine: mist is the whole of it.
             PatternClass::Expirated => &[(&effects.mist, count)],
             // Gravity-fed. Both are seeps at different rates, and the marks they leave are decals
-            // rather than particles — `bloodstain::patterns::{drip_trail, transfer}` return stains.
+            // rather than particles — `crate::bloodstain::patterns::{drip_trail, transfer}` return stains.
             PatternClass::DripTrail | PatternClass::Transfer => &[(&effects.seep, count / 4)],
         };
         for (handle, n) in handles.iter().copied() {
@@ -847,7 +847,7 @@ mod tests {
     fn the_spurt_period_matches_the_bleed_schedule() {
         let s = CarnageSettings::default();
         let asset_period = 60.0 / s.blood.spurt_bpm;
-        let schedule_period = bloodstain::pulse_period(60, &s.blood) as f32 / 60.0;
+        let schedule_period = crate::bloodstain::pulse_period(60, &s.blood) as f32 / 60.0;
         assert!(
             (asset_period - schedule_period).abs() < 0.02,
             "the spurt asset pulses every {asset_period:.4}s but the schedule every \
