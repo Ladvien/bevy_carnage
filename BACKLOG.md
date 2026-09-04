@@ -778,6 +778,21 @@ Recording the swatches falsified the ageing chain: an additive Bremmer shift on 
 pool dried it grey-teal. `bloodstain 0.2.1` scales the MET and HEMI stops to the film's own red
 instead, so every film dries brown and the authored walk is the `k = 1` case exactly.
 
+**`0.3.2`, from the review of the whole release.** Five defects and a handful of nits, each with a
+test that failed before its fix: the laceration bed's two end caps were wound against their normals
+(back-face-culled from inside the trough, where a wound is looked at — `every_bed_face_is_wound_to_its_normal`);
+the cross-section strip baked its along axis at the depth axis' 5.1 mm while `annotate_cap` mapped one
+repeat onto the scale's 50 mm, stretching every lobule tenfold, and its noise was periodic in rounded
+cells rather than in the tile, so it seamed (`the_along_axis_tiles_without_a_seam` now measures the
+claim it is named for; the strips are re-frozen and the plugin's default height is 512 rows);
+`bake_strips` took a bare `Assets<Image>` in the headless configuration its own doc advertised, which
+Bevy 0.19 panics on (`tests/plugin.rs`); a black fresh colour fell back to the authored walk and made
+red rise (`k` is now `max(0, r / r_oxy)`); the wetmap rebuilt its sixteen-entry spectral table on every
+tick of every canvas. Also: the flaymap ray test now rejects NaN by negation, an off-atlas UV returns
+`None` through the per-mesh memo, the four kernels joined `tests/determinism_lint.rs` (three sorts
+annotated), the leaf ratchets read target-gated tables, and `bevy_carnage::{wetmap, viscera}` lost a
+`default-features = false` that turned nothing off.
+
 ---
 
 ## The rest of the backlog is clear

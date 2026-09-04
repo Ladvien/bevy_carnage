@@ -306,8 +306,11 @@ fn peel(world: &mut World, tick: u32, depth_mm: f32) {
     let mut results = Vec::new();
     // Two borrows of the world cannot overlap, so the mesh is cloned out first.
     let handles: Vec<(Handle<Mesh>, GlobalTransform)> = q.iter(world).map(|(_, m, xf)| (m.0.clone(), *xf)).collect();
-    let meshes_cloned: Vec<(Mesh, GlobalTransform)> = handles.iter().filter_map(|(h, xf)| meshes.get(h).cloned().map(|m| (m, *xf))).collect();
-    for ((mut canvas, _, _), (mesh, xf)) in q.iter_mut(world).zip(meshes_cloned.iter()) {
+    // One slot per canvas, `None` where the handle does not resolve — never filtered, or the zip
+    // below would pair every later canvas with the next entity's mesh.
+    let meshes_cloned: Vec<Option<(Mesh, GlobalTransform)>> = handles.iter().map(|(h, xf)| meshes.get(h).cloned().map(|m| (m, *xf))).collect();
+    for ((mut canvas, _, _), slot) in q.iter_mut(world).zip(meshes_cloned.iter()) {
+        let Some((mesh, xf)) = slot else { continue };
         if let Some(handoff) = canvas.paint_world(mesh, xf, entry + Vec3::Z * 0.5, -Vec3::Z, 0.16, depth_mm, tick) {
             results.push(handoff.bone_reached);
         }
