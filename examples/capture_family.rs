@@ -49,7 +49,11 @@ fn main() {
     let out = common::arg("--out").unwrap_or_else(|| "frames-family".to_string());
     let camera = Transform::from_xyz(0.0, 0.0, 3.2).looking_at(Vec3::ZERO, Vec3::Y);
     let Some(mut rec) = Recorder::new_with(640, 480, camera, &out, |app| {
-        app.add_plugins(WetmapPlugin).insert_resource(WetSettings { dry_ticks: 150, ..default() });
+        // `edge_samples: 4` — four subsamples per texel axis on a stain's edge. The crate ships `1`
+        // so its frozen digests stay frozen; a recorder has no golden to protect and every reason to
+        // show the smoother rim.
+        app.add_plugins(WetmapPlugin)
+            .insert_resource(WetSettings { dry_ticks: 150, edge_samples: 4, ..default() });
     }) else {
         return;
     };
@@ -175,7 +179,15 @@ fn main() {
                     seed: (tick ^ (i as u32 * 977)).wrapping_mul(0x9E37_79B9) ^ 0x5EED,
                 };
                 if let (Some(mesh), Some(xf)) = (mesh.as_ref(), xf.as_ref()) {
-                    canvas.paint_world(mesh, xf, Vec3::new(x, y, 1.5), -Vec3::Z, &shape, tick);
+                    canvas.paint_world_with(
+                        mesh,
+                        xf,
+                        Vec3::new(x, y, 1.5),
+                        -Vec3::Z,
+                        &shape,
+                        tick,
+                        &settings,
+                    );
                 }
             }
             canvas.tick(tick, gravity, &settings);

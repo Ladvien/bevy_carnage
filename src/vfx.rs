@@ -44,6 +44,9 @@ use bevy_hanabi::{
     SizeOverLifetimeModifier, SpawnerSettings,
 };
 
+use std::sync::LazyLock;
+
+use bloodstain::spectral::Film;
 use bloodstain::{BACK_SPATTER_SPEED, FORWARD_SPATTER_SPEED, PatternClass, wound_seed};
 use crate::wound::{Wound, WoundKind};
 use crate::{CarnageSettings, Wounded};
@@ -73,16 +76,45 @@ pub struct CarnageEffects {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EffectTtl(pub u32);
 
-/// Blood, as a colour ramp: arterial red fading to a darker, transparent clot.
+/// **The film a spatter droplet in flight is**, and therefore its colour.
+///
+/// 0.4 mm of arterial blood over a dark substrate: a droplet is a thin lens of blood that mostly
+/// sees itself, and `bloodstain::spectral` turns a thickness and an oxygen saturation into a colour
+/// through 81 wavelengths of Kubelka–Munk over Bosschaart's whole-blood tables
+/// (`doi:10.1007/s10103-013-1446-7`). **No blood colour is authored in this crate.** A droplet is
+/// arterial rather than venous because spatter is thrown from a fresh opening — the same reason
+/// `bloodstain`'s spray model uses the arterial saturation.
+const DROPLET_FILM: Film = Film { thickness_mm: 0.4, so2: bloodstain::SO2_ARTERIAL, substrate: 0.2 };
+
+/// The droplet colour, computed once. 81 wavelengths of Kubelka–Munk is not something to pay per
+/// effect asset, and the answer is a function of a constant.
+static DROPLET_SRGB: LazyLock<[f32; 3]> =
+    LazyLock::new(|| bloodstain::spectral::srgb(&DROPLET_FILM));
+
+/// **The film a ribbon strand is.** A strand dragged off a flying gib is a running film rather than
+/// a lens, so it is thicker and venous — the same two dials, one model.
+const RIBBON_FILM: Film = Film { thickness_mm: 1.0, so2: bloodstain::SO2_VENOUS, substrate: 0.2 };
+
+/// The strand colour, computed once. See [`DROPLET_SRGB`].
+static RIBBON_SRGB: LazyLock<[f32; 3]> = LazyLock::new(|| bloodstain::spectral::srgb(&RIBBON_FILM));
+
+/// Blood, as a colour ramp: the droplet's own colour, fading to a darker, transparent clot.
 ///
 /// One gradient shared by four of the five effects, because blood is blood — the difference between a
 /// spurt and a seep is its rate and its speed, not its colour, and two nearly-identical gradients
 /// would drift apart the first time one was tweaked.
+///
+/// **The colour is [`DROPLET_FILM`]'s; only the *fade* is authored.** The two later keys scale that
+/// one colour down and take the alpha out, which is a lifetime curve rather than a claim about what
+/// blood looks like: a droplet thins and dries as it flies, and the crate has no spectral model of a
+/// droplet mid-flight to ask instead. The factors are the ratios the hand-authored ramp had.
 fn blood_gradient() -> Gradient<Vec4> {
+    let [r, g_, b] = *DROPLET_SRGB;
+    let key = |scale: f32, alpha: f32| Vec4::new(r * scale, g_ * scale, b * scale, alpha);
     let mut g = Gradient::new();
-    g.add_key(0.0, Vec4::new(0.62, 0.05, 0.05, 1.0));
-    g.add_key(0.55, Vec4::new(0.40, 0.02, 0.02, 0.95));
-    g.add_key(1.0, Vec4::new(0.18, 0.01, 0.01, 0.0));
+    g.add_key(0.0, key(1.0, 1.0));
+    g.add_key(0.55, key(0.645, 0.95));
+    g.add_key(1.0, key(0.29, 0.0));
     g
 }
 
@@ -416,11 +448,19 @@ pub fn gib_ribbon() -> EffectAsset {
             gradient: Gradient::linear(Vec3::splat(RIBBON_WIDTH), Vec3::ZERO),
             ..default()
         })
-        // Darkens and fades rather than turning blue like the upstream demo — this is blood, and the
-        // shared `blood_gradient` is not reusable here because a strand wants two keys, not three.
+        // Darkens and fades rather than turning blue like the upstream demo — this is blood. The
+        // colour is [`DROPLET_FILM`]'s, thickened: a strand dragged off a gib is a running film
+        // rather than a droplet, so it is the same optics at 1.0 mm and venous, and only the fade is
+        // authored. `blood_gradient` is not reusable here because a strand wants two keys, not three.
         .render(ColorOverLifetimeModifier::new(Gradient::linear(
-            Vec4::new(0.42, 0.02, 0.02, 1.0),
-            Vec4::new(0.12, 0.01, 0.01, 0.0),
+            {
+                let [r, g, b] = *RIBBON_SRGB;
+                Vec4::new(r, g, b, 1.0)
+            },
+            {
+                let [r, g, b] = *RIBBON_SRGB;
+                Vec4::new(r * 0.29, g * 0.29, b * 0.29, 0.0)
+            },
         )))
 }
 

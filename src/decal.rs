@@ -44,14 +44,43 @@
 //! `bloodstain::bag::pick` chooses among the masks already built — a shuffle bag whose minimum gap
 //! between repeats is `n − 1` draws, rather than the fresh uniform draw that made `seed % 4` tile.
 
+use std::sync::LazyLock;
+
 use bevy::asset::RenderAssetUsages;
 use bevy::image::Image;
 use bevy::pbr::decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
+use bloodstain::spectral::Film;
 use bloodstain::stain::{StainShape, rasterise};
 use bloodstain::{Pool, Stain};
+
+/// **The film a stain on a floor is**, and therefore its colour.
+///
+/// 1.5 mm of venous blood over a mid-grey substrate. **No blood colour is authored here**: the
+/// thickness and the oxygen saturation go into `bloodstain::spectral`, which puts Bosschaart's
+/// whole-blood absorption and scattering tables (`doi:10.1007/s10103-013-1446-7`) through
+/// Kubelka–Munk at 81 wavelengths and the CIE observer — the same optics that colour a wetmap texel
+/// and a cross-section's muscle band, so blood on a floor and blood on a body cannot drift apart.
+///
+/// **Venous and 1.5 mm because that is what a floor stain is.** A pooled stain has stopped being a
+/// droplet: it is deoxygenated by the time it settles, and `bloodstain::stain` describes a stain's
+/// *silhouette* rather than its depth — there is no thickness in the morphology to read, so the
+/// number is stated here. At 1.5 mm the film is close enough to blood's own semi-infinite
+/// reflectance that the substrate barely reaches the answer, which is why an unknown floor is
+/// mid-grey rather than a dial.
+const FLOOR_FILM: Film = Film { thickness_mm: 1.5, so2: bloodstain::SO2_VENOUS, substrate: 0.5 };
+
+/// The stain colour, computed once — 81 wavelengths of Kubelka–Munk per material would be paid per
+/// silhouette, and the answer is a function of a constant.
+static FLOOR_SRGB: LazyLock<[f32; 3]> = LazyLock::new(|| bloodstain::spectral::srgb(&FLOOR_FILM));
+
+/// The colour every stain and pool material carries. See [`FLOOR_FILM`].
+fn floor_colour() -> Color {
+    let [r, g, b] = *FLOOR_SRGB;
+    Color::srgb(r, g, b)
+}
 
 /// Edge length of a generated mask, in pixels.
 ///
@@ -95,10 +124,15 @@ pub struct StainMasks {
 
 /// Quantise a silhouette into a cache key.
 ///
-/// Aspect ratio to 32 steps, spine count exactly, satellites exactly, direction to 16 sectors. Two
-/// stains that agree on all four are indistinguishable at 64 pixels, so they share a mask; anything
-/// coarser starts merging shapes a player can tell apart, and anything finer builds pipelines for
-/// differences nobody can see.
+/// Aspect ratio to 32 steps, spine count exactly, direction to 16 sectors. Two stains that agree on
+/// all three are indistinguishable at 64 pixels, so they share a mask; anything coarser starts
+/// merging shapes a player can tell apart, and anything finer builds pipelines for differences
+/// nobody can see.
+///
+/// **Satellites are deliberately not in the key**, because they are not in the mask — see
+/// [`mask_image`] for why a decal draws the deposit rather than the whole spray. Keying on a field
+/// the image is not a function of would fill the cache's 32 slots with identical textures and make a
+/// floor start repeating for no visible reason.
 pub fn mask_key(shape: &StainShape) -> u32 {
     let aspect = if shape.major > 0.0 { (shape.minor / shape.major).clamp(0.0, 1.0) } else { 1.0 };
     let a = (aspect * 31.0).round() as u32;
@@ -108,7 +142,7 @@ pub fn mask_key(shape: &StainShape) -> u32 {
         let t = (ang + std::f32::consts::PI) / std::f32::consts::TAU;
         (t.clamp(0.0, 0.999) * 16.0) as u32
     };
-    a | ((shape.spines as u32) << 5) | ((shape.satellites as u32) << 10) | (sector << 15)
+    a | ((shape.spines as u32) << 5) | (sector << 10)
 }
 
 impl StainMasks {
@@ -146,10 +180,11 @@ impl StainMasks {
             let material = materials.add(ForwardDecalMaterial {
                 base: StandardMaterial {
                     base_color_texture: Some(image.clone()),
-                    // Fresh blood. A consumer walking the drying timeline sets `base_color` and
-                    // `perceptual_roughness` from `bloodstain::dry::appearance` instead — the mask
-                    // carries shape only, so one texture serves every age.
-                    base_color: Color::srgb(0.30, 0.02, 0.02),
+                    // Fresh blood, coloured by [`FLOOR_FILM`] rather than authored. A consumer
+                    // walking the drying timeline sets `base_color` and `perceptual_roughness` from
+                    // `bloodstain::dry::appearance` instead — the mask carries shape only, so one
+                    // texture serves every age.
+                    base_color: floor_colour(),
                     perceptual_roughness: bloodstain::BloodSettings::default().wet_roughness,
                     // The extension forces `AlphaMode::Blend` for the decal pass; setting it here as
                     // well keeps the base material honest about what it is if a consumer reuses it.
@@ -174,27 +209,57 @@ impl StainMasks {
     }
 }
 
-/// **A blood mask, rasterised from a silhouette.**
+/// **A blood mask, rasterised from a silhouette — the deposit, filled, with a soft edge.**
 ///
 /// The alpha channel carries the shape and the colour channels are left white, because the stain's
 /// colour comes from the material's `base_color` — one texture then serves any blood colour a consumer
 /// wants, and a paler, darker or older blood needs no new asset.
 ///
+/// # Why the satellites are dropped here, and why they were the "donut"
+///
+/// **Measured, on the mask this function used to build.** `bloodstain::stain::rasterise` draws the
+/// whole forensic silhouette — the elliptical deposit, its rim spines, *and* the ring of detached
+/// satellite droplets — and to fit the furthest satellite inside the texture it shrinks the deposit
+/// by `1 + max_spine_reach + 0.47`, which is about `2.15×`. At the impact energies a wound's droplets
+/// actually arrive with, `stain_shape` saturates **both** `spines` and `satellites` at
+/// `SPINE_MAX = 24` (a 4 mm droplet at 6 m/s is `We ≈ 2500`, `K ≈ 290` against a splash threshold of
+/// 57.7), so *every* floor decal came out as a small central deposit inside a detached ring of
+/// satellites with a near-transparent moat between them. Measured on the 90°/6 m/s fixture, as the
+/// mean alpha over sixteen radial bins:
+/// `[255, 255, 255, 254, 229, 167, 105, 57, 38, 62, 115, 181, 174, 95, 28, 2]` — a trough of **38**
+/// at half the radius and a bright ring of **181** at 0.69 of it. That is a donut, and it is what
+/// `capture_carnage` showed on its floor.
+///
+/// The deposit is what a decal is *for* — [`spawn_stain`] scales the quad to `Stain::radius`, which
+/// is the deposit's own radius from `bloodstain::stain::stain_radius`, so a mask whose body filled
+/// less than half its width drew the stain at less than half the size it was placed at and then put
+/// a ring of specks where the rim should have been. So the mask is rasterised from the silhouette
+/// with `satellites: 0`: the body then fills the texture (`extent = (1 + max_spine) · 1.04`), the
+/// spines still break the circle, and the coverage falls monotonically from an opaque centre to zero
+/// at the rim — a filled disc with a soft edge.
+///
+/// **The silhouette is not authored away.** Aspect still comes from the impact angle and the spines
+/// from the Weber number, so two stains still look the same only when two impacts were the same; and
+/// the satellites are still in the model for anything that draws the *spray* — a caller wanting them
+/// on the floor spawns them as their own stains, at their own radii, which is what they are.
+///
 /// Pure: the same silhouette is the same bytes every run.
 pub fn mask_image(shape: &StainShape) -> Image {
     let n = MASK_SIZE as usize;
     let mut coverage = vec![0u8; n * n];
+    let deposit = StainShape { satellites: 0, ..*shape };
     // `rasterise` refuses a wrong-sized buffer rather than half-filling it; the buffer above is built
     // from the same constant, so the refusal is unreachable — and if it ever fires, an all-clear mask
     // is the honest result of "no coverage was computed" rather than garbage uploaded to the GPU.
-    let _ = rasterise(shape, MASK_SIZE, &mut coverage);
+    let _ = rasterise(&deposit, MASK_SIZE, &mut coverage);
 
     let mut data = vec![0u8; n * n * 4];
     for (i, &c) in coverage.iter().enumerate() {
-        data[i * 4] = 255;
-        data[i * 4 + 1] = 255;
-        data[i * 4 + 2] = 255;
-        data[i * 4 + 3] = c;
+        // `get_mut` rather than an index: `data` is four times `coverage` by construction, and a
+        // panicking index in library code is this crate's one standing prohibition.
+        if let Some(px) = data.get_mut(i * 4..i * 4 + 4) {
+            px.copy_from_slice(&[255, 255, 255, c]);
+        }
     }
 
     Image::new(
@@ -341,6 +406,58 @@ mod tests {
         let clear = data.chunks(4).filter(|p| p[3] == 0).count();
         assert!(opaque > n * n / 16, "only {opaque} solid pixels — the stain is barely there");
         assert!(clear > n * n / 8, "only {clear} clear pixels — the stain fills the whole texture");
+    }
+
+    /// **A floor decal is a filled disc, not a donut — and this is the test that would have caught
+    /// it.**
+    ///
+    /// The mask used to be the whole forensic silhouette, satellites included, and `rasterise`
+    /// shrinks the deposit to make room for the furthest one. At the impact energies a wound's
+    /// droplets arrive with, `stain_shape` saturates both `spines` and `satellites` at 24, so every
+    /// decal came out as a small deposit inside a detached ring. Checked against the pre-fix mask,
+    /// this fixture's mean alpha per bin was
+    /// `[255, 255, 255, 254, 229, 167, 105, 57, 38, 62, 115, 181, 174, 95, 28, 2]`: a trough of 38
+    /// at half the radius, then a ring of 181, rising by **66** in one step. A profile that rises
+    /// outward *is* a ring, so the claim is that it never rises.
+    #[test]
+    fn a_mask_is_a_filled_disc_and_not_a_ring() {
+        let shape = shape_at(90.0, 6.0, 5);
+        assert!(shape.satellites > 0, "the fixture must be an impact that throws satellites");
+        let img = mask_image(&shape);
+        let n = MASK_SIZE as usize;
+        let data = img.data.as_ref().expect("pixels");
+        let half = MASK_SIZE as f32 * 0.5;
+
+        // Mean alpha per radial bin, sixteen bins over the texture's half-width.
+        const BINS: usize = 16;
+        let mut sum = [0u32; BINS];
+        let mut count = [0u32; BINS];
+        for y in 0..n {
+            for x in 0..n {
+                let (dx, dy) = (x as f32 + 0.5 - half, y as f32 + 0.5 - half);
+                let r = (dx * dx + dy * dy).sqrt() / half;
+                let bin = ((r * BINS as f32) as usize).min(BINS - 1);
+                let a = data.get((y * n + x) * 4 + 3).copied().unwrap_or(0);
+                sum[bin] += a as u32;
+                count[bin] += 1;
+            }
+        }
+        let mean: Vec<u32> = (0..BINS).map(|i| sum[i] / count[i].max(1)).collect();
+
+        assert_eq!(mean.first().copied(), Some(255), "the middle of a stain is not opaque: {mean:?}");
+        // Non-increasing outward, with four code values of slack for the spines' own bumps. The old
+        // mask broke this by 66 at bin 11.
+        for i in 1..BINS {
+            assert!(
+                mean[i] <= mean[i - 1] + 4,
+                "the alpha rose outward at bin {i} ({} -> {}) — that is a ring: {mean:?}",
+                mean[i - 1],
+                mean[i]
+            );
+        }
+        // And it is a *disc*: the deposit fills the texture rather than sitting in the middle of it,
+        // because the quad is scaled to the stain's own radius.
+        assert!(mean[7] > 32, "the disc covers less than half its own radius: {mean:?}");
     }
 
     /// **The spines must actually break the circle.** A mask that was radially symmetric would be an
