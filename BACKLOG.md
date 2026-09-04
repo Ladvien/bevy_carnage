@@ -748,6 +748,29 @@ its own camera. Nothing writes `Time<Virtual>`. Nothing reads a particle back.
 
 ---
 
+## Phase 5 — the four kernels, as landed on 2026-09-04
+
+`0.3.0`. Five features, one release, each a crate this one composes and none depending on it back;
+`bloodstain` went to `0.2` under them. The predictions were pre-registered in each crate's tests
+before the numbers were known, which is the only way a golden can be frozen honestly.
+
+| feature | where | prediction | outcome |
+|---|---|---|---|
+| spectral blood | `bloodstain::spectral` | L* falls strictly with film thickness; arterial reads redder than venous at every thickness | **held** — 60 thicknesses and 30 pairs, plus six colours frozen to the bit |
+| cross-section caps | `bevy_cross_section`, `FragmentGeometry::annotate_cap` | every band's drawn width is within 10 % of the sourced table | **held at every region** — and the head's split of a 6.8 mm total into three layers is the crate's own, said so |
+| flaymap | `bevy_flaymap` | the bone handoff fires exactly once, on the paint that crosses the cortex start | **held**; on the flagship's torso the cortex shows on the third scripted hit |
+| laceration | `bevy_laceration` | gape zero at `t = 0`, monotone in time and tension; a cut across the Langer lines gapes more | **held** — and the blockout's cuboid could not open at all, because the kernel works with the vertices a mesh has; both demos lay a 24×24 skin patch on the thigh |
+| fracture modes | `bevy_fracture_modes`, `modal.rs` | the first mode's only jump is the neck; the neck is the first face to give under a growing blow | **held only after a stated departure** — with every mode weighted equally an impulse at a bar's end excited the end modes and the neck never opened first; dividing each mode by its discontinuity energy is what makes a weak fault a weak fault |
+
+What was falsified along the way: the first ADMM formulation converged to the zero vector (the
+sphere constraint has to be *in* the sub-problem, which is exactly Sellán's linearised `cᵀMφ = 1`);
+the one-luminance test of "a thin film is lighter than a pool" was wrong at a 0.19 mm film, because
+blood at 540 nm is opaque past 50 µm — the test now compares the thinnest level, and the physics was
+right. Cortical bone thickness is the one number in the release with no source; four DOIs were tried
+and none had an open copy.
+
+---
+
 ## The rest of the backlog is clear
 
 All fifteen tickets are in `BACKLOG_ARCHIVE.md`, each with what it cost and what it falsified. Six
