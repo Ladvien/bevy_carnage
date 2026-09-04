@@ -317,9 +317,11 @@ impl DermisCanvas {
             return;
         }
         let n = self.size as i64;
-        let r_px = (radius_uv * self.size as f32).ceil() as i64;
-        let cx = (uv.x * self.size as f32) as i64;
-        let cy = (uv.y * self.size as f32) as i64;
+        // Saturated casts, then clamped: a huge radius or an off-atlas UV from a caller's mesh must
+        // not overflow the bounds arithmetic below.
+        let r_px = ((radius_uv * self.size as f32).ceil() as i64).clamp(0, n);
+        let cx = ((uv.x * self.size as f32) as i64).clamp(-n, 2 * n);
+        let cy = ((uv.y * self.size as f32) as i64).clamp(-n, 2 * n);
         for y in (cy - r_px).max(0)..(cy + r_px + 1).min(n) {
             for x in (cx - r_px).max(0)..(cx + r_px + 1).min(n) {
                 let du = (x as f32 + 0.5) / self.size as f32 - uv.x;
@@ -387,6 +389,11 @@ pub struct Soaking {
 /// A thrown fragment the preset integrates.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Flying(pub Vec3);
+
+/// A piece of a broken body that stayed where it stood — the island the modes did not part. Marked
+/// so a caller resetting a scene can find it; the body it came from is gone.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct Standing;
 
 /// A rendered gut tube the preset keeps in step with its strand.
 #[derive(Component, Clone, Copy, Debug)]
@@ -724,6 +731,9 @@ fn take_hits(
     } = &mut cx;
     let SubjectLookup { parents, subjects, breakables, dressed } = &lookup;
     let tick = clock.0;
+    // Every hit of the tick, in one pass. A hit that reaches bone queues the subject's despawn, and a
+    // later hit in the same batch on a sibling part still passes the query — so every insert below
+    // is a `try_insert`, which tolerates a despawn queued ahead of it where `insert` panics.
     let hits: Vec<GoreHit> = hits.read().copied().collect();
     if hits.is_empty() {
         return;
@@ -784,7 +794,7 @@ fn take_hits(
                 pool_diameter_mm: (hit.radius_m * 2.0 * 1000.0).clamp(2.0, 100.0),
                 ..bloodstain::bruise::Params::default()
             };
-            commands.entity(hit.entity).insert(Bruising { uv, bruise: bloodstain::Bruise::new(params), carry: 0.0 });
+            commands.entity(hit.entity).try_insert(Bruising { uv, bruise: bloodstain::Bruise::new(params), carry: 0.0 });
         }
 
         // A burn: the degree colours the dermis — reddened, blistered, charred. **These three colours
@@ -906,7 +916,7 @@ fn take_hits(
                 }
             }
         }
-        commands.entity(hit.entity).insert(WoundSite {
+        commands.entity(hit.entity).try_insert(WoundSite {
             from: hit.from,
             dir: hit.dir,
             wound,
@@ -934,7 +944,7 @@ fn take_hits(
             let n_local = normal_local.unwrap_or(Vec3::Y);
             let half = hit.radius_m / xf.scale().max_element().max(1.0e-6);
             let source = meshes.add(mesh.clone());
-            commands.entity(hit.entity).insert(Laceration {
+            commands.entity(hit.entity).try_insert(Laceration {
                 path: vec![p - along_local * half, p, p + along_local * half],
                 normal: n_local,
                 gape: Gape::default(),
@@ -955,7 +965,11 @@ fn take_hits(
         {
             let strands = spill(at_world, normal_world + Vec3::new(0.0, -0.4, 0.0), dials.strands, seed, visc);
             let mut muscle_params = FleshParams::for_layers(&Layers::for_region(region), FleshMode::Cap, dials.mm_per_unit);
-            muscle_params.bands = Vec4::ZERO; // every texel is muscle
+            // Every texel is muscle: the strands carry no `UV_1`, so the shader's depth is `0`, and
+            // `layer_of` walks past every band start it is not below. Muscle is index 2, so fat and
+            // muscle start at `0` and cortex and marrow start past any depth. (`Vec4::ZERO` selected
+            // marrow, whose profile is fat's — caught in review.)
+            muscle_params.bands = Vec4::new(0.0, 0.0, 2.0, 2.0);
             let gut_material = flesh.add(tables.material(
                 StandardMaterial { base_color: Color::srgb(0.55, 0.20, 0.22), perceptual_roughness: 0.25, ..default() },
                 muscle_params,
@@ -1121,10 +1135,10 @@ fn throw_bodies(
                 let centre = xf.transform_point(piece.center_local);
                 let at_tf = Transform::from_translation(centre).with_rotation(xf.rotation()).with_scale(xf.scale());
                 if let Some(outer) = piece.outer {
-                    commands.spawn((Mesh3d(outer), MeshMaterial3d(skin.clone()), at_tf));
+                    commands.spawn((Mesh3d(outer), MeshMaterial3d(skin.clone()), at_tf, Standing));
                 }
                 if let Some(cap_mesh) = piece.cap {
-                    commands.spawn((Mesh3d(cap_mesh), MeshMaterial3d(cap.clone()), at_tf));
+                    commands.spawn((Mesh3d(cap_mesh), MeshMaterial3d(cap.clone()), at_tf, Standing));
                 }
             }
         }
@@ -1259,7 +1273,9 @@ fn soak_cloth(
                     ..shape
                 };
                 let texels = wet.size();
-                let _ = wet.paint_world_with(mesh, xf, from, dir, &shape_on(gore, &grown, texels), landed, &edges);
+                // Stamped with the current tick: the tick is the upload budget's sort key, and a
+                // landing-tick stamp would let a sheet jump the queue by up to `SOAK_SECONDS`.
+                let _ = wet.paint_world_with(mesh, xf, from, dir, &shape_on(gore, &grown, texels), tick, &edges);
             }
             if t_s < SOAK_SECONDS {
                 keep.push((from, dir, shape, landed));

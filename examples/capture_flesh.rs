@@ -36,7 +36,7 @@ fn main() {
     let camera = Transform::from_xyz(0.0, 0.9, 2.6).looking_at(Vec3::new(0.0, 0.15, 0.0), Vec3::Y);
     let Some(mut rec) = Recorder::new_with(800, 500, camera, &out, |app| {
         app.add_plugins((CrossSectionPlugin, FlaymapPlugin, WetmapPlugin, FleshPlugin))
-            .insert_resource(WetSettings { dry_ticks: 120, ..default() })
+            .insert_resource(WetSettings { dry_ticks: 120, edge_samples: 4, ..default() })
             .add_systems(Startup, flesh_scene::setup.after(CrossSectionSystems).after(bevy_carnage::flesh::FleshSystems));
     }) else {
         return;
@@ -49,6 +49,11 @@ fn main() {
         }
     }
 
+    // Frame 0 is captured on the update that first populates the scene, so it comes back blank —
+    // and a GIF's still preview is its first frame. The flesh material's pipeline is specialised on
+    // its first draw and the cache compiles it off-thread, so this needs more frames than the
+    // family clip's two: measured, frame 0 was still blank at two and stable at six.
+    rec.warm_up(6);
     let mut tick: u32 = 0;
     for frame in 0..FRAMES {
         {
@@ -74,14 +79,15 @@ fn main() {
     }
     let world = rec.world();
     let mut digest: u64 = 0xcbf2_9ce4_8422_2325;
+    // Sorted before folding: XOR-then-multiply is order-dependent and ECS query order is not a
+    // total order across two `App`s, which is exactly the comparison this line exists for.
     let mut wets = world.query::<&WetCanvas>();
-    for w in wets.iter(world) {
-        digest ^= w.digest();
-        digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
-    }
+    let mut values: Vec<u64> = wets.iter(world).map(|w| w.digest()).collect();
     let mut flays = world.query::<&FlayCanvas>();
-    for f in flays.iter(world) {
-        digest ^= f.digest();
+    values.extend(flays.iter(world).map(|f| f.digest()));
+    values.sort_unstable();
+    for value in values {
+        digest ^= value;
         digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
     }
     let frames = rec.finish();

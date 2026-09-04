@@ -23,6 +23,9 @@ pub struct Sheet;
 /// The slab.
 #[derive(Component)]
 pub struct Slab;
+/// The scene's light, so a reset does not stack another on top of it.
+#[derive(Component)]
+pub struct Sun;
 
 /// Which thickness row a part's cut faces and canvases use.
 pub fn region_of(part: usize) -> Region {
@@ -99,6 +102,7 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut
     commands.spawn((
         DirectionalLight { illuminance: 11_000.0, shadow_maps_enabled: true, ..default() },
         Transform::from_xyz(-1.5, 4.0, 3.0).looking_at(Vec3::new(0.0, 0.8, 0.0), Vec3::Y),
+        Sun,
     ));
 }
 
@@ -109,10 +113,12 @@ pub fn ray_at(part: usize, offset: Vec3) -> (Vec3, Vec3) {
     (world + Vec3::new(0.0, 0.0, half.z + 1.0), Vec3::NEG_Z)
 }
 
-/// The scripted shot `n` on the torso: the same spot, a hair of jitter, so the crater deepens to bone.
-pub fn shot(torso: Entity, n: u32) -> GoreHit {
-    let jitter = Vec3::new(((n * 7) % 5) as f32 * 0.008 - 0.016, ((n * 11) % 5) as f32 * 0.01 - 0.02 + 0.06, 0.0);
-    let (from, dir) = ray_at(0, jitter);
+/// The scripted shot on the torso: **the same spot every time**, so the crater deepens to bone. Each
+/// shot removes 9 mm; the torso row's cortex starts at 25.5 mm (2.2 skin + 16.0 fat + 7.3 muscle), so
+/// the third shot is the one that shows bone and hands off. A hair of jitter looked more natural and
+/// meant the third shot never did — caught in review.
+pub fn shot(torso: Entity, _n: u32) -> GoreHit {
+    let (from, dir) = ray_at(0, Vec3::new(0.0, 0.06, 0.0));
     GoreHit::impact(torso, from, dir, 0.035, 9.0)
 }
 

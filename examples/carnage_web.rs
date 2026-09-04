@@ -33,7 +33,7 @@ use bevy_carnage::preset::{GoreClock, GorePlugin, GoreSystems};
 use bevy_carnage::wetmap::WetCanvas;
 
 mod common;
-use common::preset_scene::{self, Body, Part, Sheet, Slab};
+use common::preset_scene::{self, Body, Part, Sheet, Slab, Sun};
 
 fn main() {
     App::new()
@@ -93,8 +93,11 @@ fn keys(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     parts: Query<(Entity, &Part)>,
-    scene: Query<Entity, Or<(With<Body>, With<Sheet>, With<Slab>)>>,
-    pieces: Query<Entity, Or<(With<bevy_carnage::preset::Flying>, With<bevy_carnage::preset::Gut>)>>,
+    scene: Query<Entity, Or<(With<Body>, With<Sheet>, With<Slab>, With<Sun>)>>,
+    pieces: Query<
+        Entity,
+        Or<(With<bevy_carnage::preset::Flying>, With<bevy_carnage::preset::Gut>, With<bevy_carnage::preset::Standing>)>,
+    >,
 ) {
     let part = |i: usize| parts.iter().find(|(_, p)| p.0 == i).map(|(e, _)| e);
     if (input.just_pressed(KeyCode::Digit1) || mouse.just_pressed(MouseButton::Left))

@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use bevy_carnage::cross_section::{CrossSectionAtlas, Layers, Region, Scale};
 use bevy_carnage::flaymap::{FlayCanvas, FlaySettings};
 use bevy_carnage::flesh::{FleshMaterial, FleshMode, FleshParams, FleshTables};
-use bevy_carnage::wetmap::{StainShape, WetCanvas};
+use bevy_carnage::wetmap::{StainShape, WetCanvas, WetSettings};
 
 /// Canvas edge for the three subjects.
 pub const CANVAS: u32 = 256;
@@ -114,6 +114,8 @@ pub fn setup(
 /// One hit: peel the sphere where the shot lands, and throw a stain on all three subjects.
 pub fn hit(world: &mut World, n: u32, tick: u32) {
     let flay_settings = world.resource::<FlaySettings>().clone();
+    // The wet settings carry `edge_samples`; only `paint_world_with` reads it.
+    let wet_settings = world.resource::<WetSettings>().clone();
     let seed = 0x9E37_79B9u32.wrapping_mul(n + 1);
     let shape = StainShape {
         major: 0.09 + 0.01 * (n % 3) as f32,
@@ -138,7 +140,7 @@ pub fn hit(world: &mut World, n: u32, tick: u32) {
             flay.shade(&flay_settings);
         }
         if let Some(mut wet) = world.get_mut::<WetCanvas>(entity) {
-            let _ = wet.paint_world(&mesh, &xf, from, dir, &shape, tick);
+            let _ = wet.paint_world_with(&mesh, &xf, from, dir, &shape, tick, &wet_settings);
         }
     }
 
@@ -153,7 +155,7 @@ pub fn hit(world: &mut World, n: u32, tick: u32) {
         let from = centre + jitter + Vec3::new(0.0, 0.0, 2.0);
         let dir = Vec3::new(0.0, 0.0, -1.0);
         if let Some(mut wet) = world.get_mut::<WetCanvas>(entity) {
-            let _ = wet.paint_world(&mesh, &xf, from, dir, &shape, tick);
+            let _ = wet.paint_world_with(&mesh, &xf, from, dir, &shape, tick, &wet_settings);
         }
     }
 }

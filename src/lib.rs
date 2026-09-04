@@ -1115,6 +1115,21 @@ mod tests {
     ///
     /// The second half is the pairing that makes the default safe rather than a weakening: a
     /// **misspelled** field is still refused. Missing takes the shipped value; unknown is an error.
+    /// **A layer table authored before `bone_mm` existed still loads, and bands as it did.** The
+    /// field arrived in `bevy_cross_section` 0.1.2 as a cargo-compatible patch, so a game that wrote
+    /// its thickness table to RON against 0.1.1 meets it on the next `cargo update`. Absent, it must
+    /// read as `∞` — the depth-only model those files were authored against — not `0`, which is the
+    /// trunk's statement, and not a refusal.
+    #[test]
+    #[cfg(feature = "serde")]
+    fn a_layer_table_written_before_bone_mm_still_loads() {
+        let authored = "(skin_mm: 2.0, fat_mm: 6.0, muscle_mm: 20.0, cortex_mm: 5.0, marrow_mm: 10.0)";
+        let layers: bevy_cross_section::Layers =
+            ron::from_str(authored).expect("a 0.1.1 layer table must deserialize in 0.1.2");
+        assert!(layers.bone_mm.is_infinite(), "an absent bone is the depth-only model");
+        assert_eq!(layers.muscle_mm, 20.0, "the authored fields must survive");
+    }
+
     #[test]
     #[cfg(feature = "serde")]
     fn a_config_written_before_ejecta_soften_still_loads() {
