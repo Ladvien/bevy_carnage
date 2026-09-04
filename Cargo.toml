@@ -10,7 +10,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
@@ -61,6 +61,19 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 #
 # Path *and* version, because `cargo publish` refuses a path-only dependency.
 bloodstain = { version = "0.2", path = "../bloodstain", default-features = false }
+
+# **The 2026-09-04 four.** Each is a kernel this crate composes and none depends on it back; each
+# is path *and* version because `cargo publish` refuses a path-only dependency.
+#
+# `bevy_cross_section` bands a cap by depth below the skin — `ProxyCell::skin_planes` is the
+# measurement and `FragmentGeometry::annotate_cap` the write. `bevy_fracture_modes` is Sellán's
+# modes over the bond graph; `src/modal.rs` is the two conversions. `bevy_flaymap` peels a body in
+# texture space and hands the bone to a `radial` reach; `bevy_laceration` opens a cut over time.
+# All four are re-exported whole, so a consumer needs one dependency line.
+bevy_cross_section = { version = "0.1", path = "../bevy_cross_section", default-features = false }
+bevy_fracture_modes = { version = "0.1", path = "../bevy_fracture_modes", default-features = false }
+bevy_flaymap = { version = "0.1", path = "../bevy_flaymap", default-features = false }
+bevy_laceration = { version = "0.1", path = "../bevy_laceration", default-features = false }
 # **The mesh validator.** This crate could always cut a mesh; it could never say whether what came out
 # was closed, manifold or consistently wound — `examples/fracture_cube.rs` says so in as many words.
 # `isomesh` is what answers that, and it is an unusually cheap thing to admit: `no_std`, exactly one
@@ -179,7 +192,14 @@ default = ["serde", "vfx"]
 # through `CarnageSettings::blood`, so a caller that authors this crate's settings in RON needs the
 # leaf's derives too. One feature, one answer: there is no way to get a serialisable `CarnageSettings`
 # with a non-serialisable blood block.
-serde = ["dep:serde", "bloodstain/serde"]
+serde = [
+    "dep:serde",
+    "bloodstain/serde",
+    "bevy_cross_section/serde",
+    "bevy_fracture_modes/serde",
+    "bevy_flaymap/serde",
+    "bevy_laceration/serde",
+]
 
 # **The GPU half.** Particle effects and stain decals: everything that renders and nothing that
 # decides. Gated so a headless harness can take the deterministic half alone — which is also what

@@ -442,6 +442,19 @@ impl ProxyCell {
         (above.build(), below.build())
     }
 
+    /// **The supplied faces as outward planes — the skin.** What `bevy_cross_section` measures
+    /// depth against: for a point inside this convex cell, the distance to the nearest supplied face's
+    /// plane is exactly its distance to the subject's surface. A cell with no supplied face (an
+    /// interior fragment) returns none, and reads as skin-depth zero there, deliberately: the
+    /// alternative is guessing at a surface the cell never touched.
+    pub fn skin_planes(&self) -> Vec<bevy_cross_section::SkinPlane> {
+        (0..self.faces.len())
+            .filter(|&fi| self.face_kind[fi] == FaceKind::Supplied)
+            .filter_map(|fi| self.face_plane(fi))
+            .map(|(point, normal)| bevy_cross_section::SkinPlane { point, normal })
+            .collect()
+    }
+
     /// Append this cell's **cut faces only** to a soup, fan-triangulated, tagged as interior.
     ///
     /// Supplied faces are deliberately not emitted: they are the caller's hull, and the render mesh

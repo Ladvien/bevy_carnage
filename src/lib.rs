@@ -9,6 +9,7 @@ mod bore;
 mod decal;
 mod feel;
 mod mesh;
+pub mod modal;
 mod order;
 mod policy;
 mod proxy;
@@ -23,7 +24,7 @@ mod wound;
 pub use audit::{SolidAudit, SurfaceReport, audit_cell, audit_proxies, audit_proxy, audit_render};
 pub use bake::{
     DetachedChunk, DetachedPart, EjectaChunk, Fragment, FractureBores, FractureCache, FractureProxy,
-    FractureSubject, bake_fractures, materialise_fragments,
+    FractureRegion, FractureSubject, bake_fractures, materialise_fragments,
 };
 pub use bond::{Bond, BondGraph, BondId, BondSet};
 pub use bore::{Bore, MAX_SAG, MAX_SIDES, MIN_ROUND_SIDES, sides_for};
@@ -75,6 +76,17 @@ pub use bloodstain::stain::{impact_at_plane, rasterise, stain_radius, stain_shap
 /// single-name entry point — `bevy_carnage::blood::patterns::cast_off`, `blood::rheo::flows`,
 /// `blood::dry::dry_ticks`. One path to each function, spelled the way the leaf spells it.
 pub use bloodstain as blood;
+
+/// **The four kernels this crate composes**, re-exported whole so a consumer needs one dependency
+/// line and cannot end up with two versions of a leaf. Each is reached by its own name — a cap's
+/// bands from `bevy_carnage::cross_section`, a body's peel from `bevy_carnage::flaymap`, a cut that
+/// gapes from `bevy_carnage::laceration`, and the modes a blow is projected onto from
+/// `bevy_carnage::fracture_modes` — and this crate's own bridges are [`modal`],
+/// [`FractureRegion`] and [`FragmentGeometry::annotate_cap`].
+pub use bevy_cross_section as cross_section;
+pub use bevy_flaymap as flaymap;
+pub use bevy_fracture_modes as fracture_modes;
+pub use bevy_laceration as laceration;
 
 use bevy::prelude::*;
 
@@ -1039,6 +1051,11 @@ impl Plugin for CarnagePlugin {
             .init_resource::<GorePolicy>()
             .init_resource::<FlashGate>()
             .init_resource::<DecalBudget>()
+            // **The mode dials, so a bake reads authored ones.** `bake_fractures` takes them as an
+            // `Option` and falls back to the leaf's defaults, so this is a courtesy rather than a
+            // requirement — and it is `init_resource`d for the same reason the four above are: a
+            // caller who inserted its own before this plugin keeps it.
+            .init_resource::<bevy_fracture_modes::ModeSettings>()
             .add_message::<Wounded>()
             // **Chained, not merely grouped.** `bake_fractures` requests the finest frontier as its
             // last act, and `materialise_fragments` is what turns a request into a mesh — a bake and

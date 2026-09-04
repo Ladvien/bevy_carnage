@@ -65,7 +65,17 @@ use std::path::{Path, PathBuf};
 /// (`libm` and an optional `serde`), and **no math library in its public API** — every signature is
 /// `[f32; 3]`. That last property is the load-bearing one, and it is why the conversion has exactly
 /// one home, `src/v3.rs`.
-const ALLOWED_DEPS: &[&str] = &["bevy", "serde", "isomesh", "bevy_hanabi", "bloodstain"];
+const ALLOWED_DEPS: &[&str] = &[
+    "bevy",
+    "serde",
+    "isomesh",
+    "bevy_hanabi",
+    "bloodstain",
+    "bevy_cross_section",
+    "bevy_fracture_modes",
+    "bevy_flaymap",
+    "bevy_laceration",
+];
 
 /// Names that would mean the boundary has been crossed. The first three are crates; the rest are
 /// identifiers from the game this was extracted from, checked as substrings because re-introducing one

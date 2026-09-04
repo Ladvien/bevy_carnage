@@ -18,6 +18,14 @@
 //!    membrane, which tears if you pull.
 //! 5. **The drying it leaves walks the colour and the gloss** — `bloodstain::dry`, over the next half
 //!    minute of game time.
+//! 6. **The pieces come off where the body is weak** — `bevy_fracture_modes` over the bake's bond
+//!    graph: the blow is projected onto the precomputed modes and the islands that part are thrown.
+//! 7. **Every cut face is anatomy** — `bevy_cross_section` bands each thrown piece's cap with skin,
+//!    fat, muscle, cortex and marrow at that region's measured depths.
+//! 8. **Repeated hits peel the torso** — `bevy_flaymap` craters the entry wound deeper each shot,
+//!    and when the cortex shows the next blow is handed to fracture at three times the impulse.
+//! 9. **A slash opens over time** — `[5]` lays a `bevy_laceration` across the thigh that gapes on the
+//!    skin's own tension curve onto a banded wound bed.
 //!
 //! # Why this demo can only be built from the monorepo
 //!
@@ -33,9 +41,13 @@
 //! drawn from the CPU-side model — which is what all the new work in this framework is anyway.
 
 use bevy::prelude::*;
+use bevy_carnage::cross_section::{CrossSectionAtlas, CrossSectionPlugin, CrossSectionSettings, Layers, Region};
+use bevy_carnage::flaymap::{FlayCanvas, FlaySettings, FlaymapPlugin};
+use bevy_carnage::fracture_modes::ModeSettings;
+use bevy_carnage::laceration::{Gape, Laceration, LacerationClock, LacerationPlugin, Tension};
 use bevy_carnage::{
-    BloodSettings, CarnageSettings, CutSettings, FaultPolicy, GorePolicy, GoreTier,
-    LoadingMode, ProxyCell, TissueClass, blood, fracture_mesh,
+    BloodSettings, BondSet, CarnageSettings, CutSettings, FaultPolicy, FragmentGeometry, GorePolicy,
+    GoreTier, LoadingMode, ProxyCell, TissueClass, blood, fracture_mesh, modal,
 };
 use bevy_viscera::{Mesentery, Strand, ViscSettings, step, tube_mesh};
 use bevy_wetmap::{WetCanvas, WetSettings};
@@ -183,6 +195,46 @@ struct Flagship {
     visc: ViscSettings,
     wet: WetSettings,
     show_numbers: bool,
+    /// Pieces the modes parted, waiting for `spawn_pending` to give them meshes and a body.
+    pending: Vec<PendingChunk>,
+    /// How many pieces the last blow left the body in, by the modes.
+    modal_pieces: usize,
+    /// Bonds the last blow broke.
+    modal_broken: usize,
+    /// Crater depth the last shot peeled, mm, and whether the torso's cortex is showing.
+    flay_depth_mm: f32,
+    bone_exposed: bool,
+    /// The laceration is on, opened at this tick.
+    lacerated: Option<u32>,
+}
+
+/// A piece the modes parted: its geometry, which region bands its cap, and how it leaves.
+struct PendingChunk {
+    geometry: FragmentGeometry,
+    region: Region,
+    velocity: Vec3,
+}
+
+/// A thrown piece in flight, integrated on the fixed tick.
+#[derive(Component)]
+struct Flying(Vec3);
+
+/// One part of the blockout.
+#[derive(Component)]
+struct BodyPart;
+
+/// The dense skin patch on the left thigh, and its intact source — the surface `[5]` slashes.
+#[derive(Component)]
+struct ThighSkin(Handle<Mesh>);
+
+/// Which region a part's cut faces belong to. Anatomy rather than a dial: the trunk is the torso row,
+/// the head the head row, and every limb the limb row.
+fn region_of(part: usize) -> Region {
+    match part {
+        0 => Region::Torso,
+        1 => Region::Head,
+        _ => Region::Limb,
+    }
 }
 
 /// The floor's wetmap canvas, and the mesh the ray is cast against.
@@ -227,9 +279,13 @@ fn main() {
                 .set(ImagePlugin::default_nearest()),
         )
         .insert_resource(Time::<Fixed>::from_hz(HZ as f64))
-        .add_systems(Startup, setup)
-        .add_systems(Update, (keys, draw_hud_text, orbit).chain())
-        .add_systems(FixedUpdate, (advance, paint_and_flush, retube).chain())
+        // The three of the four that register anything: the strips are baked on `Startup`, the
+        // flaymap uploads what changed, the laceration retears as its clock advances. The modes
+        // register nothing — the bake below calls them.
+        .add_plugins((CrossSectionPlugin, FlaymapPlugin, LacerationPlugin))
+        .add_systems(Startup, setup.after(bevy_carnage::cross_section::CrossSectionSystems))
+        .add_systems(Update, (keys, spawn_pending, draw_hud_text, orbit).chain())
+        .add_systems(FixedUpdate, (advance, fly, paint_and_flush, peel, retube).chain())
         .run();
 }
 
@@ -273,12 +329,42 @@ fn setup(
         perceptual_roughness: 0.7,
         ..default()
     });
-    for (mesh, xf) in common::body::subject() {
-        commands.spawn((
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(flesh.clone()),
-            Transform::from_matrix(Mat4::from_translation(ORIGIN) * xf),
-        ));
+    // **The torso wears a flaymap.** Its material reads the canvas's two images, so every crater the
+    // shots peel is drawn from the same buffer the HUD hashes; the other parts share the flesh.
+    for (i, (mesh, xf)) in common::body::subject().into_iter().enumerate() {
+        let drawn = meshes.add(mesh);
+        let at = Transform::from_matrix(Mat4::from_translation(ORIGIN) * xf);
+        if i == 0 {
+            let canvas = FlayCanvas::new(
+                &mut images,
+                CANVAS,
+                Region::Torso,
+                Layers::for_region(Region::Torso),
+                [0.62, 0.52, 0.48],
+                0.7,
+            );
+            let torso_material = materials.add(StandardMaterial {
+                base_color_texture: Some(canvas.albedo()),
+                metallic_roughness_texture: Some(canvas.roughness()),
+                perceptual_roughness: 1.0,
+                ..default()
+            });
+            commands.spawn((Mesh3d(drawn), MeshMaterial3d(torso_material), at, BodyPart, canvas));
+        } else {
+            commands.spawn((Mesh3d(drawn), MeshMaterial3d(flesh.clone()), at, BodyPart));
+        }
+    }
+    // **The skin the slash cuts is a dense patch on the left thigh's front.** The blockout's cuboid
+    // has four vertices per face and the tear kernel works with the vertices a mesh has, so a coarse
+    // face cannot open; a 24×24 patch can. `[5]` puts the `Laceration` on this entity.
+    if let Some((_, c, h)) = common::body::parts().get(4).copied() {
+        let patch = bevy_carnage::laceration::skin_patch(24, 1.0);
+        let source = meshes.add(patch.clone());
+        let drawn = meshes.add(patch);
+        let xf = Transform::from_translation(ORIGIN + c + Vec3::Z * (h.z + 0.012))
+            .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
+            .with_scale(Vec3::new(h.x * 2.0, 1.0, h.y * 2.0));
+        commands.spawn((Mesh3d(drawn), MeshMaterial3d(flesh.clone()), xf, ThighSkin(source)));
     }
 
     commands.insert_resource(Flagship {
@@ -305,6 +391,12 @@ fn setup(
         visc: ViscSettings::default(),
         wet: WetSettings::default(),
         show_numbers: true,
+        pending: Vec::new(),
+        modal_pieces: 1,
+        modal_broken: 0,
+        flay_depth_mm: 0.0,
+        bone_exposed: false,
+        lacerated: None,
     });
 
     commands.spawn((
@@ -330,8 +422,45 @@ fn keys(
     mut state: ResMut<Flagship>,
     mut commands: Commands,
     ephemeral: Query<Entity, With<Ephemeral>>,
+    thigh: Query<(Entity, &ThighSkin, &Mesh3d, Option<&Laceration>)>,
+    clock: Option<Res<LacerationClock>>,
+    mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let mut fire = false;
+    // ---- 9. A slash across the thigh, opening on the skin's own curve. ------
+    if input.just_pressed(KeyCode::Digit5) {
+        let now = clock.as_ref().map_or(0, |c| c.0);
+        for (entity, skin, drawn, lac) in &thigh {
+            if lac.is_some() {
+                // Off: the intact patch goes back into the drawn handle; the plugin despawns the
+                // bed of an entity that lost its `Laceration`.
+                if let Some(mesh) = meshes.get(&skin.0).cloned()
+                    && let Err(e) = meshes.insert(drawn.id(), mesh)
+                {
+                    warn!("could not restore the thigh: {e:?}");
+                }
+                commands.entity(entity).remove::<Laceration>();
+                state.lacerated = None;
+            } else {
+                // The patch's own space: a unit square in XZ facing +Y, scaled onto the thigh by its
+                // transform. A thigh's Langer lines run along the limb (the patch's Z after the
+                // rotation); this slash crosses them, which is the orientation that gapes most.
+                commands.entity(entity).insert(Laceration {
+                    path: vec![Vec3::new(-0.35, 0.0, 0.2), Vec3::new(0.35, 0.0, -0.2)],
+                    normal: Vec3::Y,
+                    gape: Gape { width_max: 0.16, open_ticks: 150 },
+                    tension: Tension { skin: 0.9, langer: Some([0.0, 0.0, 1.0]) },
+                    influence: 0.25,
+                    bed_depth_mm: 14.0,
+                    region: Region::Limb,
+                    opened_at: now,
+                    source: skin.0.clone(),
+                    ..default()
+                });
+                state.lacerated = Some(now);
+            }
+        }
+    }
     for (key, shot) in [
         (KeyCode::Digit1, Shot::Shoulder),
         (KeyCode::Digit2, Shot::Thigh),
@@ -422,7 +551,68 @@ fn shoot(state: &mut Flagship) {
     };
     let bake = fracture_mesh(&parts, &proxy, &cut);
     state.bent = bake.bent;
-    state.fragments = bake.into_leaves().len();
+
+    // ---- 6. The pieces that come off are the ones the modes part. ----------
+    //
+    // The blow lands in the leaf whose cell holds the entry point; its magnitude is the impulse
+    // over the body's own scale, tripled once the flaymap has shown cortex — that is the handoff.
+    // The islands that are not the trunk's own are thrown.
+    let leaf_ids = bake.tree.leaves();
+    let struck = bake
+        .solids()
+        .iter()
+        .filter(|s| leaf_ids.contains(&s.id))
+        .min_by(|a, b| {
+            let da = a.cell.center().distance_squared(shot.at());
+            let db = b.cell.center().distance_squared(shot.at());
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal).then(a.id.cmp(&b.id))
+        })
+        .map(|s| s.id);
+    let mut thrown: Vec<(bevy_carnage::FragmentId, Vec3)> = Vec::new();
+    if let Some(struck) = struck {
+        match modal::bake_modes(&bake.bonds, |id| bake.solids().get(id.index()).map(|s| &s.cell), &ModeSettings { k: 6, ..Default::default() }) {
+            Ok(modal) => {
+                // Two pieces at least for any shot, scaled by the shot's own impulse against the
+                // pistol's, and tripled once the flaymap has shown cortex — the handoff.
+                let handoff = if state.bone_exposed { 3.0 } else { 1.0 };
+                let base = modal.impulse_for(struck, 2).unwrap_or(0.1);
+                let magnitude = base * (impulse / 40.0).clamp(1.0, 4.0) * handoff;
+                let broken = modal.break_at(struck, magnitude);
+                let mut severed = BondSet::new(&bake.bonds);
+                state.modal_broken = severed.sever_all(&broken);
+                let islands = bake.bonds.islands(bake.bonds.members(), &severed);
+                state.modal_pieces = islands.len();
+                // The island holding the most cells stays standing; the rest fly, away from the
+                // blow and up a little, faster the smaller they are.
+                let keep = islands
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(i, island)| (island.len(), std::cmp::Reverse(*i)))
+                    .map(|(i, _)| i);
+                for (i, island) in islands.iter().enumerate() {
+                    if Some(i) == keep {
+                        continue;
+                    }
+                    let scale = (3.0 / island.len() as f32).clamp(0.4, 2.5);
+                    for id in island {
+                        let centre = bake.solids().get(id.index()).map(|s| s.cell.center()).unwrap_or(Vec3::ZERO);
+                        let away = (centre - shot.at()).normalize_or_zero();
+                        thrown.push((*id, (away + Vec3::new(0.0, 0.6, 0.8)) * scale));
+                    }
+                }
+            }
+            Err(e) => warn!("no fracture modes this shot: {e:?}"),
+        }
+    }
+    let tree = bake.tree.clone();
+    let leaves = bake.into_leaves();
+    state.fragments = leaves.len();
+    state.pending.clear();
+    for geometry in leaves {
+        let Some((_, velocity)) = thrown.iter().find(|(id, _)| *id == geometry.id) else { continue };
+        let part = tree.root_of(geometry.id).unwrap_or(geometry.id).index();
+        state.pending.push(PendingChunk { geometry, region: region_of(part), velocity: *velocity });
+    }
 
     // ---- 2. The blood pattern that fits the wound. -------------------------
     let wound = blood::Wound {
@@ -582,6 +772,85 @@ fn paint_and_flush(
     let _ = &mut state;
 }
 
+/// **Give the parted pieces meshes and a body.** Each cap is banded by its region before it is
+/// uploaded — `FragmentGeometry::annotate_cap` writes the depth-below-skin into `UV_1` from the
+/// cell's own skin planes — and takes the region's strip material from the atlas; the skin keeps
+/// the flesh. Ephemeral, so the next shot clears them.
+fn spawn_pending(
+    mut commands: Commands,
+    mut state: ResMut<Flagship>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    atlas: Res<CrossSectionAtlas>,
+    settings: Res<CrossSectionSettings>,
+    flesh: Query<&MeshMaterial3d<StandardMaterial>, (With<BodyPart>, Without<FlayCanvas>)>,
+) {
+    if state.pending.is_empty() {
+        return;
+    }
+    let skin = flesh.iter().next().map(|m| m.0.clone()).unwrap_or_else(|| {
+        materials.add(StandardMaterial { base_color: Color::srgb(0.62, 0.52, 0.48), ..default() })
+    });
+    let fallback = materials.add(StandardMaterial { base_color: Color::srgb(0.55, 0.18, 0.18), ..default() });
+    for mut chunk in state.pending.drain(..) {
+        chunk.geometry.annotate_cap(settings.layers(chunk.region), &settings.scale);
+        let at = Transform::from_translation(ORIGIN + chunk.geometry.center_local);
+        let cap_material = atlas.material(chunk.region).unwrap_or_else(|| fallback.clone());
+        if let Some(outer) = chunk.geometry.outer.take() {
+            commands.spawn((Mesh3d(meshes.add(outer)), MeshMaterial3d(skin.clone()), at, Flying(chunk.velocity), Ephemeral));
+        }
+        if let Some(cap) = chunk.geometry.cap.take() {
+            commands.spawn((Mesh3d(meshes.add(cap)), MeshMaterial3d(cap_material), at, Flying(chunk.velocity), Ephemeral));
+        }
+    }
+}
+
+/// Thrown pieces fall under the blood's own gravity and stop on the slab.
+fn fly(state: Res<Flagship>, mut pieces: Query<(&mut Flying, &mut Transform)>) {
+    let dt = 1.0 / HZ as f32;
+    let gravity = state.settings.blood.gravity;
+    for (mut v, mut tf) in &mut pieces {
+        if tf.translation.y <= 0.05 && v.0.y <= 0.0 {
+            v.0 = Vec3::ZERO;
+            continue;
+        }
+        v.0.y -= gravity * dt;
+        tf.translation += v.0 * dt;
+        tf.rotate_local_y(dt * v.0.length() * 0.5);
+    }
+}
+
+/// **The shot peels the torso.** On the tick a shot lands, a crater is painted at its entry — deeper
+/// for a harder blow — and the canvas is reshaded from the cross-section palette. The first time
+/// any texel reaches the cortex the handoff fires, and from then on `shoot` triples the modal
+/// impulse: bone that shows is bone that breaks.
+fn peel(
+    mut state: ResMut<Flagship>,
+    settings: Option<Res<FlaySettings>>,
+    meshes: Res<Assets<Mesh>>,
+    mut torso: Query<(&mut FlayCanvas, &Mesh3d, &GlobalTransform), With<BodyPart>>,
+) {
+    let tick = state.tick;
+    if state.fired_at != tick {
+        return;
+    }
+    let Some(settings) = settings else { return };
+    let (_, impulse, energy, _) = state.shot.load();
+    let depth_mm = 3.0 + energy / 400.0 + impulse * 0.02;
+    let entry = state.shot.at() + ORIGIN;
+    for (mut canvas, mesh3d, xf) in &mut torso {
+        let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
+        let Some(handoff) = canvas.paint_world(mesh, xf, entry + Vec3::Z * 0.5, -Vec3::Z, 0.09, depth_mm, tick) else {
+            continue;
+        };
+        state.flay_depth_mm = depth_mm;
+        if handoff.bone_reached {
+            state.bone_exposed = true;
+        }
+        canvas.shade(&settings);
+    }
+}
+
 /// **Regenerate every gut's tube mesh from its strand.** One asset write per strand per tick.
 ///
 /// Spawns an entity for a strand that does not have one yet and despawns the ones whose strand is
@@ -700,6 +969,8 @@ fn orbit(
 fn draw_hud_text(
     state: Res<Flagship>,
     floor: Query<&WetCanvas, With<WetFloor>>,
+    torso: Query<&FlayCanvas, With<BodyPart>>,
+    clock: Option<Res<LacerationClock>>,
     mut hud: Query<&mut Text, With<Hud>>,
 ) {
     let Ok(mut text) = hud.single_mut() else { return };
@@ -716,9 +987,9 @@ fn draw_hud_text(
     let (_, impulse, energy, rate) = state.shot.load();
 
     **text = format!(
-        "carnage_web — one body, one shot, four crates\n\
+        "carnage_web — one body, one shot, eight crates\n\
          \n\
-         [1-4] shot   [Q W E R] gore tier   [T] tissue   [Space] replay   [H] numbers\n\
+         [1-4] shot   [5] slash   [Q W E R] gore tier   [T] tissue   [Space] replay   [H] numbers\n\
          \n\
          1 bone     {shot}  ->  {mode:?} / {tissue:?}\n\
          \x20          {energy:.0} J at {rate:.0} 1/s, impulse {impulse:.0} N.s  ->  {frag} fragments{bent}\n\
@@ -727,6 +998,10 @@ fn draw_hud_text(
          4 viscera  {strands} strands, {torn}/{links} mesentery links torn\n\
          5 drying   age {age} ticks  rgb {r:.2} {g:.2} {b:.2}  rough {rough:.2}  rim {rim:.2}  \
          halo {halo:.2}  cracks {crack:.2}\n\
+         6 modes    {modal_broken} bonds gave  ->  {modal_pieces} pieces{handoff}\n\
+         7 section  caps banded by region: torso / head / limb rows\n\
+         8 flaymap  crater {flay:.1} mm  digest 0x{flay_digest:016x}{bone}\n\
+         9 slash    {slash}\n\
          \n\
          tier {tier:?}  intensity {intensity:.2}  {palette}",
         shot = state.shot.name(),
@@ -753,6 +1028,16 @@ fn draw_hud_text(
         rim = look.rim,
         halo = look.halo,
         crack = look.craquelure,
+        modal_broken = state.modal_broken,
+        modal_pieces = state.modal_pieces,
+        handoff = if state.bone_exposed { "  (cortex showing: impulse x3)" } else { "" },
+        flay = state.flay_depth_mm,
+        flay_digest = torso.iter().next().map(|c| c.digest()).unwrap_or(0),
+        bone = if state.bone_exposed { "  BONE" } else { "" },
+        slash = match state.lacerated {
+            Some(opened) => format!("[5] thigh laceration open {} ticks", clock.as_ref().map_or(0, |c| c.0.saturating_sub(opened))),
+            None => "[5] lay a laceration across the thigh".to_string(),
+        },
         tier = state.policy.tier,
         intensity = state.policy.intensity,
         palette = if state.policy.draws_blood() {

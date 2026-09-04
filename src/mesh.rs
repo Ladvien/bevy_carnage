@@ -438,6 +438,23 @@ pub(crate) fn geometry_from_piece(id: FragmentId, piece: crate::soup::Piece) -> 
     FragmentGeometry { id, outer, cap, cell, center_local: center, half_extents }
 }
 
+impl FragmentGeometry {
+    /// **Band the cap by depth below the skin.** Writes `UV_1` on [`Self::cap`] from this cell's
+    /// supplied faces through `bevy_cross_section::annotate_cap`; `UV_0` and every other attribute
+    /// are untouched. A fragment with no cap, or a cell with no supplied face, is left as it was.
+    /// Returns the number of cap vertices annotated.
+    pub fn annotate_cap(&mut self, layers: &bevy_cross_section::Layers, scale: &bevy_cross_section::Scale) -> usize {
+        let planes = self.cell.skin_planes();
+        if planes.is_empty() {
+            return 0;
+        }
+        match self.cap.as_mut() {
+            Some(cap) => bevy_cross_section::annotate_cap(cap, &planes, self.center_local, layers, scale),
+            None => 0,
+        }
+    }
+}
+
 /// What emitting one piece produces, before anything decides whether it is a fragment or ejecta.
 pub(crate) struct Drawn {
     pub(crate) outer: Option<Mesh>,

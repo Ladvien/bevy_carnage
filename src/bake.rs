@@ -55,6 +55,16 @@ pub struct FractureBores(pub Vec<Bore>);
 #[derive(Component)]
 pub struct DetachedPart;
 
+/// **Which body region this subject's cut faces belong to** — a limb, a torso or a head.
+///
+/// Optional beside [`FractureSubject`]. When present, every cap this crate materialises for the
+/// subject is annotated by `bevy_cross_section` with depth-below-skin in `UV_1`, so a
+/// `CrossSectionAtlas::material(region)` on the cap draws skin, fat, muscle, cortex and marrow at
+/// the depths measured for that region. Absent, caps carry no `UV_1` and draw whatever material
+/// the caller gives them — exactly what they did before this component existed.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FractureRegion(pub bevy_cross_section::Region);
+
 /// One baked body fragment, in subject-**local** units (render scale is applied at spawn). Both
 /// meshes are recentered to `center_local` (their shared bounding-box center), so a physics body
 /// placed at `origin + center_local*scale` with a `half_extents*scale` box collider lines up exactly
@@ -137,6 +147,10 @@ pub struct FractureCache {
     detached: HashMap<AssetId<WorldAsset>, DetachedChunk>,
     ejecta: HashMap<AssetId<WorldAsset>, Vec<EjectaChunk>>,
     baked: HashSet<AssetId<WorldAsset>>,
+    /// The region a subject declared, for annotating its caps.
+    regions: HashMap<AssetId<WorldAsset>, bevy_cross_section::Region>,
+    /// The fracture modes of the finest frontier — see [`crate::modal`].
+    modes: HashMap<AssetId<WorldAsset>, crate::modal::ModalSet>,
 }
 
 impl FractureCache {
@@ -249,6 +263,18 @@ impl FractureCache {
     pub fn is_baked(&self, source: AssetId<WorldAsset>) -> bool {
         self.baked.contains(&source)
     }
+
+    /// The body region the subject declared with [`FractureRegion`], if it declared one.
+    pub fn region(&self, source: AssetId<WorldAsset>) -> Option<bevy_cross_section::Region> {
+        self.regions.get(&source).copied()
+    }
+
+    /// **The fracture modes of this source's finest frontier**, baked beside the bonds. Ask it which
+    /// bonds a blow breaks with [`crate::modal::ModalSet::break_at`], sever them in a
+    /// [`BondSet`](crate::BondSet), and take the islands — the same path a blade sweep follows.
+    pub fn modes(&self, source: AssetId<WorldAsset>) -> Option<&crate::modal::ModalSet> {
+        self.modes.get(&source)
+    }
 }
 
 /// Derive the per-source fracture seed from the asset's **path**.
@@ -290,8 +316,7 @@ fn seed_from_path(path: &AssetPath) -> u32 {
 /// Turn one finished piece into cached mesh handles. Total, like [`geometry_from_piece`]: the
 /// fragment array is index-parallel with the hierarchy, so a piece that draws nothing still occupies
 /// its slot — with no meshes, and still a usable convex collider.
-fn build_fragment(id: FragmentId, piece: crate::soup::Piece, meshes: &mut Assets<Mesh>) -> Fragment {
-    let g = geometry_from_piece(id, piece);
+fn build_fragment(g: crate::mesh::FragmentGeometry, meshes: &mut Assets<Mesh>) -> Fragment {
     Fragment {
         id: g.id,
         outer_mesh: g.outer.map(|m| meshes.add(m)),
@@ -338,14 +363,21 @@ pub fn bake_fractures(
     mut cache: ResMut<FractureCache>,
     mut meshes: ResMut<Assets<Mesh>>,
     settings: Res<FractureSettings>,
-    subjects: Query<(&FractureSubject, &FractureProxy, &Children, Option<&FractureBores>)>,
+    mode_settings: Option<Res<bevy_fracture_modes::ModeSettings>>,
+    subjects: Query<(
+        &FractureSubject,
+        &FractureProxy,
+        &Children,
+        Option<&FractureBores>,
+        Option<&FractureRegion>,
+    )>,
     children_q: Query<&Children>,
     transforms: Query<&Transform>,
     mesh_q: Query<&Mesh3d>,
     mat_q: Query<&MeshMaterial3d<StandardMaterial>>,
     is_detached: Query<(), With<DetachedPart>>,
 ) {
-    for (subject, proxy, children, bores) in &subjects {
+    for (subject, proxy, children, bores, region) in &subjects {
         let source = subject.0.id();
         if cache.baked.contains(&source) {
             continue;
@@ -542,6 +574,19 @@ pub fn bake_fractures(
             plugs.len()
         );
         let leaves = tree.leaves();
+        // **The fracture modes, baked beside the bonds.** Pure over the leaf graph and the solids,
+        // so it lives here rather than in a system of its own that would have to notice the bake.
+        // A refused bake is logged and the source simply has no modes: a blade sweep still works.
+        let mode_settings = mode_settings.as_deref().copied().unwrap_or_default();
+        match crate::modal::bake_modes(&graph, |id| solids.get(id.index()).map(|s| &s.cell), &mode_settings) {
+            Ok(modal) => {
+                cache.modes.insert(source, modal);
+            }
+            Err(e) => warn!("carnage: no fracture modes for {asset_path}: {e:?}"),
+        }
+        if let Some(region) = region {
+            cache.regions.insert(source, region.0);
+        }
         cache.body.insert(source, (0..node_count).map(|_| None).collect());
         cache.solids.insert(source, solids);
         cache.pending.insert(source, pieces.into_iter().map(Some).collect());
@@ -570,7 +615,11 @@ pub fn bake_fractures(
 /// `Assets<Mesh>` is only reachable through `ResMut`, so a fragment reached from a `&FractureCache`
 /// could not add a mesh asset at all. `OnceCell` is out for the same family of reasons — the cache is
 /// a `Resource` and therefore `Send + Sync`, and a `Mutex` would put a lock in the bake's hot path.
-pub fn materialise_fragments(mut cache: ResMut<FractureCache>, mut meshes: ResMut<Assets<Mesh>>) {
+pub fn materialise_fragments(
+    mut cache: ResMut<FractureCache>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    cross_section: Option<Res<bevy_cross_section::CrossSectionSettings>>,
+) {
     let sources: Vec<AssetId<WorldAsset>> =
         cache.wanted.iter().filter(|(_, ids)| !ids.is_empty()).map(|(s, _)| *s).collect();
     for source in sources {
@@ -583,15 +632,34 @@ pub fn materialise_fragments(mut cache: ResMut<FractureCache>, mut meshes: ResMu
         // breaks it if that ever stops being so.
         let mut pending = cache.pending.remove(&source).unwrap_or_default();
         let mut body = cache.body.remove(&source).unwrap_or_default();
+        let region = cache.regions.get(&source).copied();
         for id in ids {
             let i = id.index();
             if body.get(i).is_none_or(Option::is_some) {
                 continue; // out of range, or drawn since the request
             }
             let Some(piece) = pending.get_mut(i).and_then(Option::take) else { continue };
-            body[i] = Some(build_fragment(id, piece, &mut meshes));
+            let mut g = geometry_from_piece(id, piece);
+            if let Some(region) = region {
+                let (layers, scale) = layers_for(region, cross_section.as_deref());
+                g.annotate_cap(&layers, &scale);
+            }
+            body[i] = Some(build_fragment(g, &mut meshes));
         }
         cache.pending.insert(source, pending);
         cache.body.insert(source, body);
+    }
+}
+
+/// The layer table and scale for a region: from `CrossSectionSettings` when the app has one, from
+/// the crate's measured rows otherwise — so a subject that declared a region gets banded caps whether
+/// or not the caller added `CrossSectionPlugin`.
+fn layers_for(
+    region: bevy_cross_section::Region,
+    settings: Option<&bevy_cross_section::CrossSectionSettings>,
+) -> (bevy_cross_section::Layers, bevy_cross_section::Scale) {
+    match settings {
+        Some(s) => (*s.layers(region), s.scale),
+        None => (bevy_cross_section::Layers::for_region(region), bevy_cross_section::Scale::default()),
     }
 }
