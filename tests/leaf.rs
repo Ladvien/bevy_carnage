@@ -65,6 +65,10 @@ use std::path::{Path, PathBuf};
 /// (`libm` and an optional `serde`), and **no math library in its public API** — every signature is
 /// `[f32; 3]`. That last property is the load-bearing one, and it is why the conversion has exactly
 /// one home, `src/v3.rs`.
+///
+/// **`libm` was added in 0.4.0 for the flesh tables**, on the narrowest terms of all: it is the same
+/// `libm` that `bloodstain` and `isomesh` already bring, optional behind `flesh`, and it exists so a
+/// golden over two baked textures means the same bytes on every machine.
 const ALLOWED_DEPS: &[&str] = &[
     "bevy",
     "serde",
@@ -77,6 +81,7 @@ const ALLOWED_DEPS: &[&str] = &[
     "bevy_laceration",
     "bevy_wetmap",
     "bevy_viscera",
+    "libm",
 ];
 
 /// Names that would mean the boundary has been crossed. The first three are crates; the rest are

@@ -23,6 +23,14 @@
 #![allow(dead_code)]
 
 pub mod body;
+/// **The preset's scene** — the two-line inclusion, as a scene both the windowed demo and the
+/// headless clip build. Behind `flesh`, like the preset it stands on, so the `serde`-only check of
+/// every other example still compiles this module tree.
+#[cfg(feature = "flesh")]
+pub mod preset_scene;
+/// **The flesh material's scene**, shared the same way by the windowed `flesh` demo and its clip.
+#[cfg(feature = "flesh")]
+pub mod flesh_scene;
 /// **The headless PNG recorder — native only.**
 ///
 /// A recorder writes PNGs to a filesystem and a browser has no filesystem, so "absent in a browser"

@@ -60,7 +60,38 @@ Requires **Bevy 0.19** and a Rust toolchain with **edition 2024**. That one line
 | `strict-order` | — | Turns on the vertex-soup sort's runtime tie check in release. On automatically under `debug_assertions`; this is for a harness that builds in release and still wants it |
 | `vfx` | ✅ | GPU blood (`bevy_hanabi`) and stain decals. Turn it **off** for a headless or server build: the deterministic half — wounds, spatter, stains, bleed schedule, feel — is entirely outside it |
 
-## Quick start
+## Quick start — the two-line inclusion
+
+**0.4.0 adds a preset.** One plugin, a `Gore` on every surface that can be hurt, and a `GoreHit` per injury; everything below in this README is what the preset composes, and every one of its surfaces wears the flesh material.
+
+```rust
+use bevy::prelude::*;
+use bevy_carnage::cross_section::Region;
+use bevy_carnage::preset::{Gore, GoreHit, GorePlugin};
+
+fn wire(app: &mut App) {
+    app.add_plugins(GorePlugin);
+}
+
+fn dress(mut commands: Commands, torso: Entity, shirt: Entity, floor: Entity) {
+    commands.entity(torso).insert(Gore::skin(Region::Torso).with_uv_per_metre(2.5));
+    commands.entity(shirt).insert(Gore::cloth());
+    commands.entity(floor).insert(Gore::floor().with_uv_per_metre(0.3));
+}
+
+fn on_raycast(mut hits: MessageWriter<GoreHit>, torso: Entity, from: Vec3, dir: Vec3) {
+    hits.write(GoreHit::impact(torso, from, dir, 0.03, 12.0));   // a crater 3 cm wide, 12 mm deep
+    hits.write(GoreHit::blunt(torso, from, dir, 0.04));           // a bruise that ages
+    hits.write(GoreHit::burn(torso, from, dir, 0.03, 150.0, 1.0)); // a hot iron, one second
+    hits.write(GoreHit::slash(torso, from, dir, Vec3::X, 0.06, 8.0)); // a cut that gapes
+}
+```
+
+What a hit does, in order: the flaymap peels to the depth asked; the wound's spatter lands on every `Gore::floor` (closed form) and is cast at every other dressed surface; a bleed opens and pulses onto the wetmap until it clots, dripping a pool under the wound; a torso opened to muscle spills `bevy_viscera` strands; the first hit to show cortex forwards `BoneExposed` and — for a body that is a baked `FractureSubject`, or a runtime body carrying `GoreBreakable` — parts it along the fracture modes and throws the islands. A blow starts a `bloodstain::bruise` under intact skin that ages in time-lapse; a burn runs `bloodstain::burn` and reddens, blisters or chars to the necrosis depth; blood on cloth wicks along `bloodstain::wick`'s Lucas–Washburn front. `GoreDials` carries the numbers; `GoreClock` is the fixed tick every leaf is measured against.
+
+**The flesh material** is what makes it read as tissue rather than as painted plastic: `bevy_carnage::flesh::FleshMaterial` is an `ExtendedMaterial<StandardMaterial, _>` with subsurface scattering pre-integrated per tissue from Jensen's dipole (`doi:10.1145/383259.383319`) after Penner's 2011 lookup, a wet clear coat driven by the wetmap's wetness byte, the blood film composited over the base from `bloodstain::spectral` so a fabric keeps its hue under a stain, and a dermis map for what lies under intact skin. Forward path, WebGL2-safe, one sampler; both of its tables are CPU-baked and frozen by a golden. `examples/flesh.rs` shows it alone and `examples/carnage_web.rs` — the flagship, which used to be a thousand lines of hand-wiring — is now the preset and nothing else.
+
+## Quick start — the bake by hand
 
 Mark what should break, then read the bake back when it dies. The launch is yours, and so is the solver.
 
@@ -127,7 +158,12 @@ assert!(pieces.iter().all(|p| p.outer.is_some() || p.cap.is_some()));
 
 ## Demos
 
-**[docs/DEMOS.md](docs/DEMOS.md) — all six examples, with recordings**, what each is for, and how to regenerate the clips.
+**[docs/DEMOS.md](docs/DEMOS.md) — the examples, with recordings**, what each is for, and how to regenerate the clips. The two 0.4.0 clips:
+
+| | |
+|---|---|
+| ![flesh](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/flesh.gif) | ![preset](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/preset.gif) |
+| `capture_flesh` — the material: a banded limb, a skin sphere, a sheet, under a walking light | `capture_preset` — the preset: a blow, a burn, a slash, and shots to the bone |
 
 The seven kernels have a clip each, on their own READMEs, and every one was cut from a headless recorder in this crate's `examples/` — `capture_gore` for the four cut-face kernels, `capture_family` for the blood pair, `capture_entrails` for the strands — so the clip you see is a script two runs must reproduce digest-for-digest:
 

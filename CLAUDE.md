@@ -45,6 +45,14 @@ Two runs of the same build on the same asset must produce bit-identical fragment
 - **One path per feature.** No fallbacks, no legacy shims, no stub placeholders. `seed_from_path` refusing to bake an unpathed handle *is* the rule: falling back to the `AssetId` for one sub-mesh would reintroduce the instability intermittently, which is worse than not baking.
 - **This crate never learns what died.** No health, no factions, no damage, no physics. `tests/leaf.rs` enforces the dependency half of that; the naming half is on you — nothing here should say "gun", "figurine", or "unit".
 
+## The pixel half and the preset (0.4.0)
+
+- **`flesh` is cosmetic and must stay that way.** `FleshMaterial` reads canvases the CPU owns and never writes one; its two tables are baked with `libm` and frozen by `the_flesh_tables_are_frozen`. A change to a profile or the integrator moves that golden and is a deliberate, documented re-bless — never a "fix". Nothing in the shader may be needed by a hash.
+- **WebGL2 is a requirement, not a hope.** Sixteen-byte-aligned uniforms, no storage buffers, one sampler for the extension's five textures, forward path only. It was verified in headless Chromium over SwiftShader with `bevy`'s `webgl2` feature swapped in for the site's `webgpu`; do that again after touching `flesh.wgsl`.
+- **`preset` is the one place in the family that owns a schedule.** `GoreClock` is one `u32` per `FixedUpdate` and nothing in the preset reads `Time` for anything a canvas or a kernel sees. A headless clip drives it with `TimeUpdateStrategy::ManualDuration` so ticks equal frames; `capture_preset` prints a digest two runs must reproduce.
+- **A hit that removes nothing peels nothing.** A blow bruises the dermis map, a burn chars it (an eschar stays on the surface), a slash opens geometry; only an impact writes the flaymap. The dermis map is a *ratio* under the skin the caller authored, so a skin tone stays the caller's.
+- **`Gore::uv_per_metre` is not optional in practice.** The canvases take radii in UV space at one UV per metre; a body atlas is nothing like that, and a wound the preset cannot size is a dot. State it from the asset.
+
 ## Where the boundary falls
 
 Four things belong to the caller, not here, and each has bitten someone who assumed otherwise:

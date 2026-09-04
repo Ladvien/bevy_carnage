@@ -1,5 +1,13 @@
 [package]
 name = "bevy_carnage"
+# **`0.4.0` adds the pixel half and the preset, and is additive on every type that existed.** `flesh`
+# (default on) is `FleshMaterial` — an `ExtendedMaterial<StandardMaterial, _>` with an embedded WGSL,
+# two CPU-baked tables frozen by a golden, and `libm` to bake them — and `preset` is `GorePlugin`,
+# `Gore`, `GoreHit`: the whole family behind one dependency line, which the flagship now stands on.
+# The minor bump is for the manifest: a new default feature, a new optional dependency, and the leaf
+# requirements moving to `bloodstain 0.3` (bruise, burn and wick) and the three patch releases that
+# carry the data channels the shader reads. Nothing that compiled against `0.3` stops compiling.
+#
 # **`0.3.1` is additive: `bevy_wetmap` and `bevy_viscera` become real dependencies and are re-exported**
 # as `bevy_carnage::wetmap` and `bevy_carnage::viscera`, so every kernel this crate composes is behind
 # one dependency line. `0.3.0` composed four of the six and left those two as dev-only.
@@ -14,7 +22,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.3.2"
+version = "0.4.0"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
@@ -64,7 +72,7 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 # `src/v3.rs`, and it is per wound rather than per vertex.
 #
 # Path *and* version, because `cargo publish` refuses a path-only dependency.
-bloodstain = { version = "0.2", path = "../bloodstain", default-features = false }
+bloodstain = { version = "0.3", path = "../bloodstain", default-features = false }
 
 # **The 2026-09-04 four.** Each is a kernel this crate composes and none depends on it back; each
 # is path *and* version because `cargo publish` refuses a path-only dependency.
@@ -74,17 +82,17 @@ bloodstain = { version = "0.2", path = "../bloodstain", default-features = false
 # modes over the bond graph; `src/modal.rs` is the two conversions. `bevy_flaymap` peels a body in
 # texture space and hands the bone to a `radial` reach; `bevy_laceration` opens a cut over time.
 # All four are re-exported whole, so a consumer needs one dependency line.
-bevy_cross_section = { version = "0.1.1", path = "../bevy_cross_section", default-features = false }
+bevy_cross_section = { version = "0.1.2", path = "../bevy_cross_section", default-features = false }
 bevy_fracture_modes = { version = "0.1", path = "../bevy_fracture_modes", default-features = false }
-bevy_flaymap = { version = "0.1.1", path = "../bevy_flaymap", default-features = false }
-bevy_laceration = { version = "0.1.1", path = "../bevy_laceration", default-features = false }
+bevy_flaymap = { version = "0.1.2", path = "../bevy_flaymap", default-features = false }
+bevy_laceration = { version = "0.1.2", path = "../bevy_laceration", default-features = false }
 # **The two blood-and-guts siblings, promoted in 0.3.1.** Until then they were dev-dependencies —
 # reachable by this crate's demos, invisible to a consumer — which made "one dependency line" true
 # of four kernels and false of two. A game that wanted the wetmap had to name it beside this crate
 # and could end up with two versions of `bloodstain`. Both are `no_std`-light, depend only on
 # `bevy` and `bloodstain`, neither declares a feature (so there is nothing to turn off), and neither
 # depends on this crate back (their `tests/leaf.rs` forbid it).
-bevy_wetmap = { version = "0.2", path = "../bevy_wetmap" }
+bevy_wetmap = { version = "0.2.3", path = "../bevy_wetmap" }
 bevy_viscera = { version = "0.1", path = "../bevy_viscera" }
 # **The mesh validator.** This crate could always cut a mesh; it could never say whether what came out
 # was closed, manifold or consistently wound — `examples/fracture_cube.rs` says so in as many words.
@@ -142,6 +150,12 @@ bevy_viscera = { version = "0.1", path = "../bevy_viscera" }
 # and `aa82b0b`. The frozen topology counts in this crate's tests are computed by that validator, so
 # the swap is proven by `cargo test -p bevy_carnage --all-features`, not assumed.
 isomesh = { version = "0.0.10", default-features = false }
+# **Transcendental arithmetic for the flesh tables.** `src/flesh.rs` bakes two lookup textures on the
+# CPU — Jensen's dipole integrated around Penner's ring, and the spectral blood film — and a golden
+# freezes their bytes. `std`'s `exp`/`sin`/`acos` are whatever the platform's libm is, which is not
+# promised bit-identical across machines; `libm` is one implementation everywhere, and it is already in
+# the lockfile as `bloodstain`'s and `isomesh`'s one dependency. Only the `flesh` feature reads it.
+libm = { version = "0.2", optional = true }
 
 # **GPU blood, and it is optional for a reason the CI enforces.** `bevy_hanabi` compiles particle
 # effects to compute shaders, which means it drags in `bevy_render` and the whole GPU stack — exactly
@@ -185,7 +199,14 @@ ron = { version = "0.12" }
 bevy = { version = "0.19", default-features = false, features = ["web", "webgpu"] }
 
 [features]
-default = ["serde", "vfx"]
+default = ["serde", "vfx", "flesh"]
+
+# **The pixel half.** `FleshMaterial`, an `ExtendedMaterial<StandardMaterial, _>` with an embedded
+# WGSL, its two CPU-baked tables and the `libm` that bakes them. On by default and **wasm-safe**: it
+# is forward-path WGSL over the same canvases the CPU owns, so `scripts/build_web.sh` turns it on where
+# it turns `vfx` off. `bevy/bevy_image` is the umbrella feature that exposes `bevy::image` for the
+# table images; `bevy_pbr` already pulls the render crates underneath.
+flesh = ["dep:libm", "bevy/bevy_image"]
 
 # **Forwarded, not duplicated.** The blood dials live in `bloodstain::BloodSettings` and are reached
 # through `CarnageSettings::blood`, so a caller that authors this crate's settings in RON needs the
@@ -257,3 +278,26 @@ required-features = ["vfx"]
 [[example]]
 name = "capture_ribbons"
 required-features = ["vfx"]
+
+# **The four that ARE the `flesh` half.** The flesh material and the preset live behind `flesh`, so
+# these do not resolve without it — `required-features` is the same statement as the six above.
+
+[[example]]
+name = "capture_flesh"
+required-features = ["flesh"]
+
+[[example]]
+name = "capture_preset"
+required-features = ["flesh"]
+
+[[example]]
+name = "preset"
+required-features = ["flesh"]
+
+[[example]]
+name = "carnage_web"
+required-features = ["flesh"]
+
+[[example]]
+name = "flesh"
+required-features = ["flesh"]

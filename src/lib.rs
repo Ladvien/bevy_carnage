@@ -20,6 +20,14 @@ mod v3;
 #[cfg(feature = "vfx")]
 mod vfx;
 mod wound;
+/// **Flesh as a material** — the pixel half. Behind `flesh` (default on) because it embeds a
+/// shader and asks `bevy` for `bevy_image`; the deterministic half never needs either.
+#[cfg(feature = "flesh")]
+pub mod flesh;
+/// **The two-line inclusion**: `GorePlugin`, `Gore`, `GoreHit`. Behind `flesh`, because it dresses
+/// every surface it touches in the flesh material.
+#[cfg(feature = "flesh")]
+pub mod preset;
 
 pub use audit::{SolidAudit, SurfaceReport, audit_cell, audit_proxies, audit_proxy, audit_render};
 pub use bake::{

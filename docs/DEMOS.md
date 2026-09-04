@@ -466,6 +466,18 @@ change.
 
 ---
 
+## `flesh` — the material every dressed surface wears
+
+![A banded limb, a pale sphere and a hanging sheet under a light that walks round them; hits crater the sphere and throw blood on all three](flesh.gif)
+
+`examples/flesh.rs`, recorded by `capture_flesh`. Three subjects, three `FleshMode`s: the cylinder is `Cap` (its tissue is `UV_1`, walking the Limb row from skin to marrow), the sphere is `Canvas` (tissue from a flaymap, wetness from a wetmap, a dermis map for what lies under the skin), the sheet is `Cloth` (the film composited over the weave on the GPU). Watch the terminator on the sphere: it is soft and reddish because the subsurface response is Jensen's dipole (`doi:10.1145/383259.383319`) pre-integrated around Penner's ring per tissue, read with the curvature from screen-space derivatives — no prepass, no screen-space pass, one texture fetch. Where blood lands the clear coat comes up wet and fades as the wetmap dries it. The two tables the shader reads are baked on the CPU with `libm` and frozen by `the_flesh_tables_are_frozen`; the clip's digest is over the canvases.
+
+## `preset` — the two-line inclusion
+
+![The blockout body takes a blow, a burn and a slash, then shots to the torso until the cortex shows and the body comes apart along its fracture modes](preset.gif)
+
+`examples/preset.rs`, recorded by `capture_preset`; `carnage_web.rs`, the flagship, is the same scene with keys. Every visual is `GorePlugin`, a `Gore` per surface, a `GoreHit` per injury: a blow at frame 30 starts a `bloodstain::bruise` under the left arm that ages through Stam's kinetics in time-lapse; a hot iron on the right thigh runs `bloodstain::burn` and chars to the eschar depth; a slash across the left thigh bleeds and drips; from frame 60 a shot every half second craters the torso, throws its spatter at the sheet and the slab, opens a bleed that pools under the wound, and the shot that shows cortex hands off to fracture — the body parts along the modes `bevy_fracture_modes` baked over its bonds, the island that stays standing stays, and the rest fly with banded caps. Run it twice: `preset: frames=360 ticks=359 digest=…` must match, because the clock is one fixed tick per frame rather than the wall.
+
 ## Regenerating these
 
 Any change that moves emitted geometry should regenerate them, or the picture stops describing the
@@ -492,11 +504,17 @@ cargo run --release --example capture_carnage -- --out frames-carnage
 cargo run --release --example capture_ribbons -- --out frames-ribbons
 cargo run --release --example capture_pooling -- --out frames-pooling
 
+# 0.4.0: the material and the preset. Each prints a digest; two runs must agree.
+cargo run --release --example capture_flesh  -- --out frames-flesh
+cargo run --release --example capture_preset -- --out frames-preset
+
 WIDTH=560 LEGEND=none  tools/gif.sh frames-demo  docs/explode.gif ""
 WIDTH=560 LEGEND=audit tools/gif.sh frames-audit docs/fracture-tier-ab.gif "Tier A/B — every fragment audited as a solid"
 WIDTH=560 LEGEND=none  tools/gif.sh frames-sever docs/sever.gif ""
 WIDTH=560 LEGEND=none  tools/gif.sh frames-holes docs/holes.gif "Bullet holes — the channel is geometry, not a decal"
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-carnage docs/carnage.gif ""
+WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-flesh   docs/flesh.gif ""
+WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-preset  docs/preset.gif ""
 ```
 
 **`carnage` is the one clip with `STRIDE`, and the reason is length.** It has to run long enough to
