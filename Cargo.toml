@@ -1,5 +1,9 @@
 [package]
 name = "bevy_carnage"
+# **`0.3.1` is additive: `bevy_wetmap` and `bevy_viscera` become real dependencies and are re-exported**
+# as `bevy_carnage::wetmap` and `bevy_carnage::viscera`, so every kernel this crate composes is behind
+# one dependency line. `0.3.0` composed four of the six and left those two as dev-only.
+#
 # **`0.2.0` breaks the API deliberately, and the break is a de-duplication rather than a rename.** The
 # whole blood model — the Comiskey spatter, the pools, the bleed schedule, `hash_f32` and `WoundKind` —
 # moved out to `bloodstain`, which is engine-free and has no math library in its public API. This crate
@@ -10,7 +14,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
@@ -74,6 +78,13 @@ bevy_cross_section = { version = "0.1", path = "../bevy_cross_section", default-
 bevy_fracture_modes = { version = "0.1", path = "../bevy_fracture_modes", default-features = false }
 bevy_flaymap = { version = "0.1", path = "../bevy_flaymap", default-features = false }
 bevy_laceration = { version = "0.1", path = "../bevy_laceration", default-features = false }
+# **The two blood-and-guts siblings, promoted in 0.3.1.** Until then they were dev-dependencies —
+# reachable by this crate's demos, invisible to a consumer — which made "one dependency line" true
+# of four kernels and false of two. A game that wanted the wetmap had to name it beside this crate
+# and could end up with two versions of `bloodstain`. Both are `no_std`-light, depend only on
+# `bevy` and `bloodstain`, and neither depends on this crate back (their `tests/leaf.rs` forbid it).
+bevy_wetmap = { version = "0.2", path = "../bevy_wetmap", default-features = false }
+bevy_viscera = { version = "0.1", path = "../bevy_viscera", default-features = false }
 # **The mesh validator.** This crate could always cut a mesh; it could never say whether what came out
 # was closed, manifold or consistently wound — `examples/fracture_cube.rs` says so in as many words.
 # `isomesh` is what answers that, and it is an unusually cheap thing to admit: `no_std`, exactly one
@@ -154,19 +165,6 @@ bevy_hanabi = { version = "0.19", default-features = false, features = ["3d"], o
 # `[dependencies]` only, deliberately.
 [dev-dependencies]
 bevy = { version = "0.19.0" }
-# **The flagship web demo's two siblings, and dev-only.**
-#
-# `examples/carnage_web.rs` is the one demo that shows all four crates in one frame — the bone
-# morphology, the blood pattern that fits it, the wetmap it lands on, the guts it opened — and it is
-# the reason the demo site is built from the monorepo rather than from this crate's own mirror: a
-# mirror contains this crate alone.
-#
-# **Dev-dependencies, so nothing here reaches a consumer's graph**, and `tests/leaf.rs` reads
-# `[dependencies]` only, deliberately, for exactly this kind of case. The direction is also the safe
-# one: both depend on `bloodstain`, neither depends on this crate, so there is no cycle.
-bevy_wetmap = { path = "../bevy_wetmap" }
-bevy_viscera = { path = "../bevy_viscera" }
-
 # **A RON parser, for one test and one reason.** `FractureSettings` is `deny_unknown_fields` with every
 # field required, so adding a dial breaks every authored file that enumerated the others — at load time,
 # which no compile catches. `a_config_written_before_ejecta_soften_still_loads` pins that against the

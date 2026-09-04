@@ -49,8 +49,8 @@ use bevy_carnage::{
     BloodSettings, BondSet, CarnageSettings, CutSettings, FaultPolicy, FragmentGeometry, GorePolicy,
     GoreTier, LoadingMode, ProxyCell, TissueClass, blood, fracture_mesh, modal,
 };
-use bevy_viscera::{Mesentery, Strand, ViscSettings, step, tube_mesh};
-use bevy_wetmap::{WetCanvas, WetSettings};
+use bevy_carnage::viscera::{Mesentery, Strand, ViscSettings, step, tube_mesh};
+use bevy_carnage::wetmap::{WetCanvas, WetSettings};
 
 mod common;
 
@@ -650,7 +650,7 @@ fn shoot(state: &mut Flagship) {
     state.mesentery.clear();
     if shot.spills() && state.policy.viscera {
         let from = Vec3::new(shot.at().x, shot.at().y, 0.16) + ORIGIN;
-        state.strands = bevy_viscera::spill(from, Vec3::new(0.0, -0.4, 1.0), 5, SEED, &state.visc);
+        state.strands = bevy_carnage::viscera::spill(from, Vec3::new(0.0, -0.4, 1.0), 5, SEED, &state.visc);
         // Tethered every fourth node to the wound: `bevy_viscera`'s own example measured that as the
         // spacing that holds, against every twelfth, which parts.
         for strand in &state.strands {

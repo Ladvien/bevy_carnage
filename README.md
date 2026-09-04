@@ -10,6 +10,23 @@ That is `examples/explode.rs` at its own 0.4× playback. The subject is intact, 
 
 > **This repository is a mirror; [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop) is the source of truth.** The crate is vendored there as a workspace member at `crates/bevy_carnage/`, developed and verified there against that lockfile, and this repository is re-derived from it by `git subtree split`. The flow is one-way and has exactly three stops: **monorepo → this mirror → crates.io**. An earlier revision of this banner claimed the arrow pointed the other way — it did, between 2026-08-16 and 2026-09-01, and `BACKLOG.md` records why it was reversed: the crate was pinned by rev in the game, so every fix meant a sibling clone, a push and a rev bump, which is not a way to do sustained work. **The stale-read hazard that arrangement named is still real:** a `subtree split` carries only *commits*, so anything sitting uncommitted in the monorepo's working tree cannot arrive here.
 
+## The family
+
+This crate is one of eight that make up one gore stack. **`bevy_carnage` is the umbrella**: depend on it alone and every kernel below is re-exported under its own name, so a game needs one dependency line and can never end up with two versions of a leaf. Depend on a kernel directly only when you want it without the rest — each one stands alone, and none depends on `bevy_carnage` back.
+
+| crate | what it is | reach it as |
+|---|---|---|
+| **`bevy_carnage` — this crate** | the umbrella — plane cuts with watertight caps, bores, energy-driven fracture, wounds, decals, impact feel; **re-exports every crate below** | `bevy_carnage` |
+| [`bloodstain`](https://github.com/Ladvien/bloodstain) · [crates.io](https://crates.io/crates/bloodstain) | blood as a material: Carreau–Yasuda rheology, Comiskey spatter, stain morphology, drying, spectral colour by thickness and oxygenation — engine-free, `no_std` | `bevy_carnage::blood` |
+| [`bevy_wetmap`](https://github.com/Ladvien/bevy_wetmap) · [crates.io](https://crates.io/crates/bevy_wetmap) | texture-space blood that runs, spreads and dries — CPU-authoritative, so a canvas can be hashed | `bevy_carnage::wetmap` |
+| [`bevy_viscera`](https://github.com/Ladvien/bevy_viscera) · [crates.io](https://crates.io/crates/bevy_viscera) | XPBD strands with a tearing mesentery: guts that spill, coil, tether and tear | `bevy_carnage::viscera` |
+| [`bevy_cross_section`](https://github.com/Ladvien/bevy_cross_section) · [crates.io](https://crates.io/crates/bevy_cross_section) | anatomical bands on a cut face from a sourced per-region thickness table, via `UV_1` | `bevy_carnage::cross_section` |
+| [`bevy_flaymap`](https://github.com/Ladvien/bevy_flaymap) · [crates.io](https://crates.io/crates/bevy_flaymap) | texture-space flaying: skin, fat, muscle, cortex peel under hits, with a once-per-canvas bone handoff | `bevy_carnage::flaymap` |
+| [`bevy_laceration`](https://github.com/Ladvien/bevy_laceration) · [crates.io](https://crates.io/crates/bevy_laceration) | a cut that gapes on a time curve, scaled by skin tension and Langer-line orientation | `bevy_carnage::laceration` |
+| [`bevy_fracture_modes`](https://github.com/Ladvien/bevy_fracture_modes) · [crates.io](https://crates.io/crates/bevy_fracture_modes) | Sellán's fracture modes on a cell graph: a fixed-schedule bake, impact projection, gluing partition | `bevy_carnage::fracture_modes` |
+
+Every crate is deterministic where it can be — fixed schedules, no clocks, frozen digests over its CPU state — and every one carries the same *Vibe Coded* warning as this file. The four added on 2026-09-04 (`bevy_cross_section`, `bevy_flaymap`, `bevy_laceration`, `bevy_fracture_modes`) are kernels `bevy_carnage` composes; `bloodstain` is the one with no engine in it at all. Fourteen of the family's examples run in a browser at [ladvien.github.io/foundation_vs_slop](https://ladvien.github.io/foundation_vs_slop/).
+
 ## Features
 
 - **One bake, every granularity.** A bake keeps the whole hierarchy it cut through, so the same cached asset answers "break this into three" and "break this into forty" without cutting twice.
@@ -32,10 +49,10 @@ That is `examples/explode.rs` at its own 0.4× playback. The subject is intact, 
 
 ```toml
 [dependencies]
-bevy_carnage = "0.1"
+bevy_carnage = "0.3"
 ```
 
-Requires **Bevy 0.19** and a Rust toolchain with **edition 2024**.
+Requires **Bevy 0.19** and a Rust toolchain with **edition 2024**. That one line brings the whole family: `bevy_carnage::blood` (the material), `::wetmap`, `::viscera`, `::cross_section`, `::flaymap`, `::laceration` and `::fracture_modes` are the seven sibling crates re-exported whole, so nothing has to be named twice and no two versions of a leaf can meet in one graph.
 
 | feature | default | what it does |
 |---|---|---|
@@ -111,6 +128,14 @@ assert!(pieces.iter().all(|p| p.outer.is_some() || p.cap.is_some()));
 ## Demos
 
 **[docs/DEMOS.md](docs/DEMOS.md) — all six examples, with recordings**, what each is for, and how to regenerate the clips.
+
+The seven kernels have a clip each, on their own READMEs, and every one was cut from a headless recorder in this crate's `examples/` — `capture_gore` for the four cut-face kernels, `capture_family` for the blood pair, `capture_entrails` for the strands — so the clip you see is a script two runs must reproduce digest-for-digest:
+
+| | | |
+|---|---|---|
+| [![cross-section](https://raw.githubusercontent.com/Ladvien/bevy_cross_section/main/docs/cross_section.gif)](https://github.com/Ladvien/bevy_cross_section) | [![fracture modes](https://raw.githubusercontent.com/Ladvien/bevy_fracture_modes/main/docs/fracture_modes.gif)](https://github.com/Ladvien/bevy_fracture_modes) | [![flaymap](https://raw.githubusercontent.com/Ladvien/bevy_flaymap/main/docs/flaymap.gif)](https://github.com/Ladvien/bevy_flaymap) |
+| [![laceration](https://raw.githubusercontent.com/Ladvien/bevy_laceration/main/docs/laceration.gif)](https://github.com/Ladvien/bevy_laceration) | [![spectral blood](https://raw.githubusercontent.com/Ladvien/bloodstain/main/docs/spectral.gif)](https://github.com/Ladvien/bloodstain) | [![wetmap](https://raw.githubusercontent.com/Ladvien/bevy_wetmap/main/docs/wetmap.gif)](https://github.com/Ladvien/bevy_wetmap) |
+| [![viscera](https://raw.githubusercontent.com/Ladvien/bevy_viscera/main/docs/viscera.gif)](https://github.com/Ladvien/bevy_viscera) | | |
 
 ![A blue blocked-out humanoid standing; a projectile takes off its arm, another its head, a slash takes the other arm, a blade through the waist takes both legs and a blast finishes the torso](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/sever.gif)
 

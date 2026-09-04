@@ -75,6 +75,8 @@ const ALLOWED_DEPS: &[&str] = &[
     "bevy_fracture_modes",
     "bevy_flaymap",
     "bevy_laceration",
+    "bevy_wetmap",
+    "bevy_viscera",
 ];
 
 /// Names that would mean the boundary has been crossed. The first three are crates; the rest are

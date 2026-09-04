@@ -77,16 +77,21 @@ pub use bloodstain::stain::{impact_at_plane, rasterise, stain_radius, stain_shap
 /// `blood::dry::dry_ticks`. One path to each function, spelled the way the leaf spells it.
 pub use bloodstain as blood;
 
-/// **The four kernels this crate composes**, re-exported whole so a consumer needs one dependency
+/// **The six kernels this crate composes**, re-exported whole so a consumer needs one dependency
 /// line and cannot end up with two versions of a leaf. Each is reached by its own name — a cap's
 /// bands from `bevy_carnage::cross_section`, a body's peel from `bevy_carnage::flaymap`, a cut that
-/// gapes from `bevy_carnage::laceration`, and the modes a blow is projected onto from
-/// `bevy_carnage::fracture_modes` — and this crate's own bridges are [`modal`],
-/// [`FractureRegion`] and [`FragmentGeometry::annotate_cap`].
+/// gapes from `bevy_carnage::laceration`, the modes a blow is projected onto from
+/// `bevy_carnage::fracture_modes`, the texture-space blood a hit leaves from `bevy_carnage::wetmap`,
+/// and the strands a torso spills from `bevy_carnage::viscera` — and this crate's own bridges are
+/// [`modal`], [`FractureRegion`] and [`FragmentGeometry::annotate_cap`]. `wetmap` and `viscera` were
+/// dependencies without a door until 0.3.1; `examples/entrails.rs` and `carnage_web.rs` had to name
+/// them directly, which is the two-versions hazard this block exists to close.
 pub use bevy_cross_section as cross_section;
 pub use bevy_flaymap as flaymap;
 pub use bevy_fracture_modes as fracture_modes;
 pub use bevy_laceration as laceration;
+pub use bevy_viscera as viscera;
+pub use bevy_wetmap as wetmap;
 
 use bevy::prelude::*;
 

@@ -36,7 +36,7 @@
 
 use bevy::math::Isometry3d;
 use bevy::prelude::*;
-use bevy_viscera::{
+use bevy_carnage::viscera::{
     Mesentery, SPILL_SEGMENTS, Strand, ViscSettings, VisceraPlugin,
     VisceraSystems, spill, tube_mesh,
 };

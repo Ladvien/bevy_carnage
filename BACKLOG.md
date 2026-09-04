@@ -769,6 +769,15 @@ blood at 540 nm is opaque past 50 µm — the test now compares the thinnest lev
 right. Cortical bone thickness is the one number in the release with no source; four DOIs were tried
 and none had an open copy.
 
+**`0.3.1`, the same day, after one question — "is there a single crate that exposes all of this?"** There
+was not, quite: `bevy_wetmap` and `bevy_viscera` were dev-dependencies, so the umbrella composed four
+kernels and left two at the door. Both are now real dependencies and `bevy_carnage::{wetmap, viscera}`,
+every README carries the same eight-row family table with its own row marked, and the three crates
+without a clip got one — `capture_family` records the blood pair, `capture_entrails` the strands.
+Recording the swatches falsified the ageing chain: an additive Bremmer shift on a near-black venous
+pool dried it grey-teal. `bloodstain 0.2.1` scales the MET and HEMI stops to the film's own red
+instead, so every film dries brown and the authored walk is the `k = 1` case exactly.
+
 ---
 
 ## The rest of the backlog is clear
