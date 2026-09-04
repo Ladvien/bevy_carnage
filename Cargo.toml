@@ -60,7 +60,7 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 # `src/v3.rs`, and it is per wound rather than per vertex.
 #
 # Path *and* version, because `cargo publish` refuses a path-only dependency.
-bloodstain = { version = "0.1", path = "../bloodstain", default-features = false }
+bloodstain = { version = "0.2", path = "../bloodstain", default-features = false }
 # **The mesh validator.** This crate could always cut a mesh; it could never say whether what came out
 # was closed, manifold or consistently wound — `examples/fracture_cube.rs` says so in as many words.
 # `isomesh` is what answers that, and it is an unusually cheap thing to admit: `no_std`, exactly one
