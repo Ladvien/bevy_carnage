@@ -344,7 +344,7 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ### What `0.5.0` changed: the seven crates are modules
 
-`bloodstain`, `bevy_wetmap`, `bevy_viscera`, `bevy_cross_section`, `bevy_flaymap`, `bevy_laceration` and `bevy_fracture_modes` are no longer crates. Each is a module of this one under the name it was always re-exported by (`bevy_carnage::wetmap`, …), so a consumer that reached them through this crate — which is how the README always told you to — changes nothing. A consumer that depended on a leaf directly replaces that line with this crate and prefixes the path. The seven registry entries are yanked and the repositories archived; nothing there will move again.
+`bloodstain`, `bevy_wetmap`, `bevy_viscera`, `bevy_cross_section`, `bevy_flaymap`, `bevy_laceration` and `bevy_fracture_modes` are no longer crates. Each is a module of this one under the name it was always re-exported by (`bevy_carnage::wetmap`, …), so a consumer that reached them through this crate — which is how the README always told you to — changes nothing. A consumer that depended on a leaf directly replaces that line with this crate and prefixes the path. The six `bevy_*` registry entries are yanked. `bloodstain` stays on crates.io for anyone who needs the blood model without Bevy, since it is engine-free and `no_std` and this crate is not; it is frozen, and development continues here as `bevy_carnage::bloodstain`. The seven repositories are archived; nothing there will move again. (The README published with 0.5.0 said all seven registry entries were yanked. `bloodstain` never was.)
 
 ### What `0.2.0` broke, and why it was a de-duplication rather than a rename
 
