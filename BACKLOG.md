@@ -830,6 +830,26 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
 - **AG-040, measured.** `sample` on a line-table build of `bench_carnage` put `AttributeWeld::insert` first, at 24 % of self time. The single hottest line was the probe's `HashMap::get` at `mesh.rs:353`, at 16 %. After the change the bench reports `bake_ms` 55.1 → 50.3, `carnage_total_ms` 70.1 → 65.4 and the worst per-body spike 4.14 → 3.78 ms, three runs each on an M4 Pro, best-3 spread under 1 %, digest `0x4366_a8b6_4352_c85a` unchanged. The re-profile puts the weld at about 13 % and `ProxyCell::contains` (via `face_plane`, from `soup.rs:613`) first at about 23 %. That is the next lever.
 - **AG-041, measured and looked at.** The planes are a function of the cell alone, and the test is the same expression, so every answer is unchanged. Three call sites in `soup.rs`: the shell and triangle assignment, and the plug's skin. The cells there do not change between building the planes and using them. `bench_carnage` on an M4 Pro, three runs: `bake_ms` 50.2 → 41.4, `carnage_total_ms` 65.4 → 56.5, worst per-body spike 3.77 → 2.99 ms, digest `0x4366_a8b6_4352_c85a` unchanged. Against `0.5.0` the two tickets together take the bake from 55.1 to 41.4 ms (−25 %) and the worst hitch from 4.14 to 2.99 ms (−28 %). Every recorder was re-rendered and byte-compared with the round-1 frames from before both tickets. Eleven of twelve are identical in all 2,758 of their frames. `capture_carnage` differs from frame 19 on, and so do two runs of one unchanged binary: its GPU particles are not pixel-reproducible, while its CPU digest `0f45a783feb6bb85` is unchanged. Looked at by eye as well: `capture_holes` at its front, profile and back orbit angles, bullet channels and fragment seams cropped to about 4×, `capture_carnage` before and after at frames 40, 100, 200 and 380, and the orbiting windowed `cross_section` and `preset` across their autopilot frames.
 
+### Rounds
+
+| round | examples rendered | new defects | fixed | blocked | open |
+|---|---|---|---|---|---|
+| iter-01 | 12 recorders, 9 terminal, 24 windowed | 83 candidates, not yet re-inspected | 0 | 0 | 83 |
+
+**Round 1 found 83 candidates and fixed none of them, because the work moved to performance**
+(`AG-039` … `AG-041`, released as `0.5.1` and `0.5.2`, neither of which changed a pixel). The
+deduplicated list is `docs/visual-pass-round-1.md`. Five are high severity:
+
+- the torso staying at standing height after the legs go (six examples);
+- viscera and blood strands launched as rigid body-length rods;
+- `carnage`'s GPU spray drawn as pink square confetti;
+- `laceration_open`'s cut opening as a dashed row of pits rather than a trough;
+- `pooling`'s repeat shots never merging, because the autopilot never moves the aim.
+
+The harness has defects of its own, listed in that file. The worst is windows on the laptop
+presenting black for whole runs: `bullet_holes` came back 19 of 21 black with the `0.5.0` binary as
+well as the new one.
+
 ---
 
 ## The rest of the backlog is clear
