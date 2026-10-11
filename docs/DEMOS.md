@@ -1,16 +1,36 @@
 # Demos
 
-Every example in the repo, and what each one is for. All seven run from a clean checkout with no
-assets and no setup:
+Every example in the repo, and what each one is for. The 24 windowed ones and the terminal
+`fracture_cube` run from a clean checkout with no assets and no setup. Six of them declare a
+`required-features` entry in `Cargo.toml`; both features are on by default, and the flag is shown so
+a `--no-default-features` build knows what to ask for:
 
 ```sh
-cargo run --release --example fracture_cube   # terminal only — no window, no GPU
-cargo run --release --example sever           # needs a GPU
-cargo run --release --example explode         # needs a GPU
-cargo run --release --example bullet_holes    # needs a GPU
-cargo run --release --example carnage         # needs a GPU
-cargo run --release --example ribbons         # needs a GPU
-cargo run --release --example pooling         # needs a GPU
+cargo run -p bevy_carnage --release --example fracture_cube   # terminal only — no window, no GPU
+cargo run -p bevy_carnage --release --example sever
+cargo run -p bevy_carnage --release --example explode
+cargo run -p bevy_carnage --release --example bullet_holes
+cargo run -p bevy_carnage --release --features vfx --example carnage
+cargo run -p bevy_carnage --release --features vfx --example ribbons
+cargo run -p bevy_carnage --release --features vfx --example pooling
+cargo run -p bevy_carnage --release --features flesh --example flesh
+cargo run -p bevy_carnage --release --features flesh --example preset
+cargo run -p bevy_carnage --release --features flesh --example carnage_web
+cargo run -p bevy_carnage --release --example cross_section
+cargo run -p bevy_carnage --release --example fracture_modes
+cargo run -p bevy_carnage --release --example flaymap_peel
+cargo run -p bevy_carnage --release --example laceration_open
+cargo run -p bevy_carnage --release --example fault_modes
+cargo run -p bevy_carnage --release --example stain_morphology
+cargo run -p bevy_carnage --release --example pattern_classes
+cargo run -p bevy_carnage --release --example rheology
+cargo run -p bevy_carnage --release --example drying
+cargo run -p bevy_carnage --release --example fragment_energy
+cargo run -p bevy_carnage --release --example gore_tier
+cargo run -p bevy_carnage --release --example wetmap_paint
+cargo run -p bevy_carnage --release --example viscera_spill
+cargo run -p bevy_carnage --release --example spill
+cargo run -p bevy_carnage --release --example entrails
 ```
 
 The clips below are **not screen recordings**. They come from headless recorders — `capture`,
