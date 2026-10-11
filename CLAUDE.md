@@ -36,7 +36,7 @@ Two runs of the same build on the same asset must produce bit-identical fragment
 
 ## Rules
 
-- **Bevy 0.19 is pinned.** Read the vendored source (`~/.cargo/registry/src/index.crates.io-*/bevy-0.19.0/`, and its `examples/`), not bevy.org — that documents `main` and has been wrong for this pin more than once.
+- **Bevy 0.19 is pinned.** Read the vendored source (`~/.cargo/registry/src/index.crates.io-*/bevy-0.19.1/`, and its `examples/`), not bevy.org — that documents `main` and has been wrong for this pin more than once.
 - Consult Bevy documentation often. It can be found at codex_fs/offline_reference_docs/bevy-0.19-book/
 - **A missing `Res<T>` panics its system in 0.19**; it does not skip. Both resources this reads are `init_resource`d by the plugin, which is what keeps that true — a caller supplying `FractureSettings` inserts it *before* adding the plugin, and `init_resource` then no-ops.
 - **All run conditions are evaluated — there is no short-circuit.** A bare `Res<T>` in a `.run_if(..)` closure panics whenever that resource is absent, even behind an earlier condition that returned false.
@@ -263,7 +263,7 @@ This crate's product is not viscera. It is *reproducible* viscera, and every rul
 
 #### Rules
 
-- **Bevy 0.19 is pinned.** Read the vendored `bevy-0.19.0` source, not bevy.org — that documents `main` and has been wrong for this pin more than once. Three traps already paid for: a missing `Res<T>` **panics** its system rather than skipping it, `Resource` is a subtrait of `Component` so you cannot derive both, and `add_plugins` tuples cap at 15.
+- **Bevy 0.19 is pinned.** Read the vendored `bevy-0.19.1` source, not bevy.org — that documents `main` and has been wrong for this pin more than once. Three traps already paid for: a missing `Res<T>` **panics** its system rather than skipping it, `Resource` is a subtrait of `Component` so you cannot derive both, and `add_plugins` tuples cap at 15.
 - **No `unwrap()`**, no `expect`, no panicking index. Every index in `src/solver.rs` is proved in range by the single `let n = …min()…` line at the top of `solve_one`; keep it that way rather than adding a guard per access.
 - **One path per feature.** No fallbacks, no legacy shims, no stub placeholders. Degenerate input is *clamped and reported*, which is one path with a guard, not two paths.
 - **The crate never spawns.** `tube_mesh` returns a `Mesh`. Choosing the material, the handle, the parent and the schedule slot is the caller's job, and a crate that chose them would be unusable in any game that wanted different ones.
