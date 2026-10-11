@@ -340,7 +340,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.1`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.2`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.2` changed: the bake again, and the hitch it causes
+
+Same output as `0.5.0` and `0.5.1`, byte for byte, by the same digest. Placing the subject's skin onto its fragments used to recompute every cell's face planes for each triangle it tested. Each cell's planes are now computed once. On `bench_carnage` the bake drops from 50.2 to 41.4 ms for sixteen bodies, and the worst per-body spike from 3.8 to 3.0 ms on an M4 Pro. Since `0.5.0` the bake is 25 % cheaper and its worst frame hitch 28 % shorter.
 
 ### What `0.5.1` changed: the same carnage, cheaper to bake
 
