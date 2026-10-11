@@ -10,7 +10,7 @@
 //! The key legend below is duplicated verbatim into `web/play.html`'s `#notes-wetmap_paint` block, and
 //! **that block is the spec**: if the two disagree, the page is right and this file is wrong.
 //!
-//! `cargo run -p bevy_wetmap --example wetmap_paint`
+//! `cargo run -p bevy_carnage --release --example wetmap_paint`
 
 use std::f32::consts::FRAC_PI_2;
 

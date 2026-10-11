@@ -5,7 +5,7 @@
 //! knob to taste.
 //!
 //! ```sh
-//! cargo run -p bloodstain --example dry_timeline
+//! cargo run -p bevy_carnage --release --example dry_timeline
 //! ```
 
 use bevy_carnage::bloodstain::dry::{DRY_REF_AREA_M2, appearance, dry_ticks};

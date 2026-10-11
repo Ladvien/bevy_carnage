@@ -6,7 +6,7 @@
 //! thrown downrange.
 //!
 //! ```sh
-//! cargo run -p bloodstain --example stain_sweep
+//! cargo run -p bevy_carnage --release --example stain_sweep
 //! ```
 
 use bevy_carnage::bloodstain::stain::{Impact, rasterise, stain_shape};

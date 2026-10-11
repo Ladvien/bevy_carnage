@@ -9,7 +9,7 @@
 //! Nothing here reads a clock or the filesystem: the cadence, the orbit and the digest all come off a
 //! `Local<u32>` frame counter, so this example builds for `wasm32-unknown-unknown` as-is.
 //!
-//! `cargo run -p bevy_flaymap --example flaymap_peel`
+//! `cargo run -p bevy_carnage --release --example flaymap_peel`
 
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;

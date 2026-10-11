@@ -10,7 +10,7 @@
 //! between are tethered every twelfth, which is eleven, and a sheet of peritoneum does not take that,
 //! so they part and drop.
 //!
-//! `cargo run -p bevy_viscera --example spill`
+//! `cargo run -p bevy_carnage --release --example spill`
 
 use bevy::color::palettes::css;
 use bevy::prelude::*;

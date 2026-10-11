@@ -19,7 +19,7 @@
 //! Formulation: Deul, Charrier & Bender, *Direct position-based solver for stiff rods*
 //! (`doi:10.1111/cgf.13326`); Bergou et al., *Discrete elastic rods* (`doi:10.1145/1399504.1360662`).
 //!
-//! `cargo run -p bevy_viscera --example viscera_spill`
+//! `cargo run -p bevy_carnage --release --example viscera_spill`
 
 use bevy::color::palettes::css;
 use bevy::prelude::*;

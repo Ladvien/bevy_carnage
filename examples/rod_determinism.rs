@@ -6,7 +6,7 @@
 //!
 //! There is no window, no `App`, no GPU and no `DefaultPlugins` here on purpose: [`bevy_carnage::viscera::step`]
 //! is a plain function over plain data, so a build machine that cannot open a window can still run the
-//! check. `cargo run -p bevy_viscera --example rod_determinism`.
+//! check. `cargo run -p bevy_carnage --release --example rod_determinism`.
 
 use bevy::math::Vec3;
 use bevy_carnage::viscera::{

@@ -8,7 +8,7 @@
 //! Run it over ssh if you like. That is rather the point.
 //!
 //! ```sh
-//! cargo run -p bevy_wetmap --example canvas_digest
+//! cargo run -p bevy_carnage --release --example canvas_digest
 //! ```
 
 use bevy::asset::Assets;
