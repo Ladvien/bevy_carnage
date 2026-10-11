@@ -21,9 +21,10 @@ const LATTICE_MIX: u64 = 0x517c_c1b7_2722_0a95;
 /// **The hasher every lattice-keyed map in this crate uses**, because the default one dominated the bake.
 ///
 /// It lives beside [`WELD`] rather than at its first call site, because what it hashes is a position
-/// quantised onto that lattice, and five separate maps do exactly that: the attribute weld's cell index
-/// and the relief pass's coarse-vertex canon (both [`crate::mesh`]), the shell-welding vertex ids
-/// below, and [`crate::proxy`]'s `CellBuilder` table and its point dedupe.
+/// quantised onto that lattice, or a position's exact bits, and six separate maps do that: the
+/// attribute weld's cell index and its exact-repeat index and the relief pass's coarse-vertex canon
+/// (all [`crate::mesh`]), the shell-welding vertex ids below, and [`crate::proxy`]'s `CellBuilder`
+/// table and its point dedupe.
 ///
 /// **Measured before it was written.** `sample` put 41 % of the benchmark's self time in
 /// `mesh::soup_to_mesh`, and the reason is arithmetic rather than mysterious: the weld's 27-cell probe

@@ -309,6 +309,37 @@ struct AttributeWeld {
     /// Keyed by [`LatticeHash`], not `RandomState` — see that type for why, and for why it cannot move
     /// a single emitted vertex.
     cells: LatticeMap<(i64, i64, i64), Vec<Candidate>>,
+    /// **Every emitted vertex by its exact key** — recentred position bits, normal bucket, UV bucket —
+    /// so a corner that repeats one already emitted costs one lookup instead of the 27-cell probe.
+    ///
+    /// [`Soup::push_tri`] copies a shared vertex into each triangle that uses it, so most corners a
+    /// fragment hands the weld are bit-for-bit repeats. For such a repeat the probe's answer is already
+    /// known, and the argument is what makes this safe rather than merely fast. Say `v` is bit-identical
+    /// to an emitted vertex `x`, with equal normal and UV buckets. Then the vertices the probe would
+    /// accept for `v` are exactly the ones it would accept for `x`, because the test reads nothing
+    /// else. Any vertex emitted before `x` failed that test when `x` probed, or `x` would not exist.
+    /// Any vertex `y` emitted after `x` that passed it would have found `x` in its own probe when it
+    /// was inserted, since the 27-cell neighbourhood is symmetric, and so would never have been
+    /// emitted. So `x` is the only vertex the probe can return, and returning it directly moves
+    /// nothing.
+    ///
+    /// **Only an emission is recorded here, never a probe's answer.** A probe that matched some `m`
+    /// says nothing about a vertex emitted later that sits earlier in the walk order, so caching `m`
+    /// would be a guess. And only finite positions are keyed: `same_point` rejects NaN, which bit
+    /// equality would not.
+    exact: LatticeMap<ExactKey, u32>,
+}
+
+/// [`AttributeWeld::exact`]'s key: the recentred position as raw bits, packed into two words so the
+/// lattice hasher takes it in seven mixes, then the normal and UV buckets the probe compares.
+type ExactKey = (u64, u64, (i64, i64, i64), (i64, i64));
+
+fn exact_key(p: Vec3, n: (i64, i64, i64), uv: (i64, i64)) -> Option<ExactKey> {
+    if !p.is_finite() {
+        return None;
+    }
+    let xy = (u64::from(p.x.to_bits()) << 32) | u64::from(p.y.to_bits());
+    Some((xy, u64::from(p.z.to_bits()), n, uv))
 }
 
 /// Quantisation step for the normal bucket. About one degree at unit length — far finer than any
@@ -322,6 +353,7 @@ impl AttributeWeld {
     fn with_capacity(verts: usize) -> Self {
         Self {
             cells: HashMap::with_capacity_and_hasher(verts, LatticeHash),
+            exact: HashMap::with_capacity_and_hasher(verts, LatticeHash),
         }
     }
 
@@ -340,6 +372,11 @@ impl AttributeWeld {
         let uk = |x: f32| (x / UV_STEP).round() as i64;
         let want_n = (nk(v.nrm.x), nk(v.nrm.y), nk(v.nrm.z));
         let want_uv = (uk(v.uv.x), uk(v.uv.y));
+
+        let exact = exact_key(p, want_n, want_uv);
+        if let Some(id) = exact.and_then(|k| self.exact.get(&k).copied()) {
+            return id;
+        }
 
         // The 27-cell probe: a candidate one lattice cell away may still be the same point.
         //
@@ -377,6 +414,9 @@ impl AttributeWeld {
             .entry(key)
             .or_default()
             .push(Candidate { id, pos: e, nrm: want_n, uv: want_uv });
+        if let Some(k) = exact {
+            self.exact.insert(k, id);
+        }
         id
     }
 }
