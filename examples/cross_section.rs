@@ -1,6 +1,6 @@
 //! **Three limbs, three regions, three cut faces.** A prism per region — sized like a thigh, a
 //! trunk and a skull — sliced flat, its cap annotated with depth-below-skin and painted with that
-//! region's strip. Orbit with the mouse wheel; the bands are what the whole crate is for.
+//! region's strip. The camera orbits on its own, off the clock; the bands are what the whole crate is for.
 //!
 //! ```sh
 //! cargo run --example cross_section

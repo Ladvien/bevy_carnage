@@ -5,7 +5,7 @@
 `docs/research-brief.md` (the open problems), `docs/isomesh-upstream-asks.md` (what we need from the
 validator).
 
-**15 tickets archived, 10 landed in phase 3 (AG-015 … AG-024), 7 landed in phase 4 (AG-025 … AG-031), 2 landed in phase 6 (AG-032, AG-034), 1 open (AG-033, blocked).**
+**15 tickets archived, 10 landed in phase 3 (AG-015 … AG-024), 7 landed in phase 4 (AG-025 … AG-031), 3 landed in phase 6 (AG-032, AG-034, AG-035), 1 open (AG-033, blocked).**
 The architectural change this backlog opened with has landed: the crate no longer cuts the triangle
 soup. It cuts a caller-supplied convex proxy and carries the render triangles along as a payload.
 
@@ -806,6 +806,7 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
 | [x] | **AG-032 — dependencies to the newest the ecosystem allows.** `bevy` 0.19.0 → 0.19.1, `serde` 1.0.228 → 1.0.229 and `wasm-bindgen` 0.2.126 → 0.2.129, with the transitive closure under them, in both lockfiles: the workspace's, moved by `cargo update --recursive` on this crate's own packages so game-only dependencies stayed put, and the standalone one the mirror CI builds from, moved by a plain `cargo update` on a copy of the crate. Manifests untouched: every requirement already admits the newest version, and raising a library's minimum only restricts its consumers. `CLAUDE.md`'s vendored-source path follows to `bevy-0.19.1`. | S |
 | [ ] | **AG-033 — Bevy 0.20.** Out on 2026-10-08, and the crate stays on the 0.19 line until its two neighbours move. | L |
 | [x] | **AG-034 — nine example headers told you to run crates that no longer exist.** `cargo run -p bevy_wetmap`, `-p bevy_flaymap` and `-p bevy_viscera` in seven headers, `-p bloodstain` in two more, all folded into `bevy_carnage` at 0.5.0. Each is now `cargo run -p bevy_carnage --release --example <name>`. | S |
+| [x] | **AG-035 — `cross_section` promised a mouse wheel it does not read.** The header said "Orbit with the mouse wheel"; the camera orbits on its own, off the clock, and `web/play.html` already said so. The comment now says what the code does. | S |
 
 > BLOCKED: bevy_hanabi has no bevy-0.20 release (crates.io 0.19.0; its main still declares bevy 0.19), and the game's avian3d 0.7 is on bevy 0.19 with no 0.20 release; the game consumes this crate by path, so the crate cannot move alone.
 
@@ -813,6 +814,7 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
 
 - **AG-032.** Held against a baseline taken on the same host before the bump. The crate's 287-test suite and every other test binary pass with identical counts, so `hash_f32`, `the_spatter_model_is_frozen`, the seven bloodstain goldens and `the_measured_rows_are_the_papers` did not move and nothing was re-blessed. The whole workspace's `cargo test --exclude bevy_debugger_mcp` gives the same 103 result lines before and after, including one failure that was already there (`emerge-mapper`'s `no_two_leaders_cross`). The release, lean and example builds, the 15-demo wasm check and `scripts/demo_facts.sh` pass, and clippy reports the same 338 warning lines with the same text. The standalone tree's `cargo test` passes on Linux x86_64, which is what the mirror CI runs. `wasm-bindgen-cli` has to move to 0.2.129 to match, since `build_web.sh` reads its version out of the lock. Three things the plan assumed were not so, each equally true before the bump: `cargo tree --no-default-features --features serde -e normal | grep -c bevy_render` prints 4, not 0, in the workspace and in the standalone tree; `cargo check --workspace --all-targets` fails in four `bevy_debugger_mcp` benches, and that crate's `stdio_integration_test` hangs `cargo test --workspace`; and a standalone `cargo test` on an Apple-silicon Mac, at the default opt-level 0, fails `preset::tests::a_wound_stains_the_floor_beneath_it` ("nothing landed on the floor") on the old lock as well as the new, while it passes at opt-level 1, which is the workspace's, and on Linux. That last one is a codegen-sensitive result on one platform, recorded here and not fixed.
 - **AG-034.** The grep the ticket named, `cargo run -p bevy_(wetmap|flaymap|viscera|cross_section|laceration|fracture_modes)|-p bloodstain`, found nine files, not the seven the plan counted: `stain_sweep` and `dry_timeline` still said `-p bloodstain`. None of the nine needs `--features`. The same grep over `docs/`, `README.md`, `tools/`, `web/` and `scripts/` is empty.
+- **AG-035.** The example reads no `KeyCode`, no `MouseButton` and no `MouseWheel` at all; `orbit` moves the camera from `time.elapsed_secs()`. Nothing else in the file made a wheel claim.
 
 ---
 
