@@ -365,19 +365,16 @@ impl ProxyCell {
         if n == Vec3::ZERO { None } else { Some((self.verts[f[0] as usize], n)) }
     }
 
-    /// Is `p` inside this cell? **The Tier B assignment test** — a render triangle belongs to the
-    /// fragment whose cell contains its centroid.
+    /// The cell as the half-spaces it is the intersection of: **the Tier B assignment test** — a
+    /// render triangle belongs to the fragment whose cell contains its centroid.
     ///
-    /// Convexity makes this a half-space test per face and nothing more: no ray casting, no winding
-    /// number, no tolerance beyond the shared [`EPS`]. A point exactly on a shared face counts as
-    /// inside both neighbours, which is deliberate — a triangle must never fall through the gap
-    /// between two cells and vanish.
-    pub(crate) fn contains(&self, p: Vec3) -> bool {
-        (0..self.faces.len()).all(|fi| match self.face_plane(fi) {
-            Some((o, n)) => (p - o).dot(n) <= EPS,
-            // A degenerate face cannot exclude anything; refusing here would drop the triangle.
-            None => true,
-        })
+    /// Every face's plane is computed once, here, by Newell's method, and [`Halfspaces::contains`]
+    /// tests against them. The test used to live on the cell and rerun Newell's method over every
+    /// face for every point. The render-triangle assignment asks once per triangle per candidate
+    /// cell, which made that recomputation the bake's largest single cost on `bench_carnage`. The
+    /// planes are a function of the cell alone, so building them once changes no answer.
+    pub(crate) fn halfspaces(&self) -> Halfspaces {
+        Halfspaces((0..self.faces.len()).map(|fi| self.face_plane(fi)).collect())
     }
 
     /// Split by a plane into `(above, below)`, either of which is `None` when the cell lies wholly on
@@ -590,6 +587,27 @@ impl ProxyCell {
                 out.push_tri(vtx(a), vtx(b), vtx(c), self.face_kind[fi] != FaceKind::Supplied);
             }
         }
+    }
+}
+
+/// A cell's face planes, in face order, as [`ProxyCell::halfspaces`] computed them. Holds no
+/// reference to the cell, so it answers for the cell as it was when built; every caller builds it
+/// after its cells stop changing and uses it only before any of them is clipped.
+pub(crate) struct Halfspaces(Vec<Option<(Vec3, Vec3)>>);
+
+impl Halfspaces {
+    /// Is `p` inside the cell?
+    ///
+    /// Convexity makes this a half-space test per face and nothing more: no ray casting, no winding
+    /// number, no tolerance beyond the shared [`EPS`]. A point exactly on a shared face counts as
+    /// inside both neighbours, which is deliberate — a triangle must never fall through the gap
+    /// between two cells and vanish.
+    pub(crate) fn contains(&self, p: Vec3) -> bool {
+        self.0.iter().all(|&plane| match plane {
+            Some((o, n)) => (p - o).dot(n) <= EPS,
+            // A degenerate face cannot exclude anything; refusing here would drop the triangle.
+            None => true,
+        })
     }
 }
 
@@ -905,7 +923,7 @@ mod tests {
 
     #[test]
     fn contains_agrees_with_the_box_it_was_built_from() {
-        let c = unit_box();
+        let c = unit_box().halfspaces();
         assert!(c.contains(Vec3::ZERO));
         assert!(c.contains(Vec3::new(0.49, 0.49, 0.49)));
         assert!(!c.contains(Vec3::new(0.51, 0.0, 0.0)));
