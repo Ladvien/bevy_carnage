@@ -40,7 +40,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_carnage — the flagship".into(),
-                canvas: Some("#bevy".into()),
+                canvas: Some("#carnage-canvas".into()),
                 fit_canvas_to_parent: true,
                 ..default()
             }),

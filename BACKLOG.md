@@ -5,7 +5,7 @@
 `docs/research-brief.md` (the open problems), `docs/isomesh-upstream-asks.md` (what we need from the
 validator).
 
-**15 tickets archived, 10 landed in phase 3 (AG-015 … AG-024), 7 landed in phase 4 (AG-025 … AG-031), 4 landed in phase 6 (AG-032, AG-034 … AG-036), 1 open (AG-033, blocked).**
+**15 tickets archived, 10 landed in phase 3 (AG-015 … AG-024), 7 landed in phase 4 (AG-025 … AG-031), 5 landed in phase 6 (AG-032, AG-034 … AG-037), 1 open (AG-033, blocked).**
 The architectural change this backlog opened with has landed: the crate no longer cuts the triangle
 soup. It cuts a caller-supplied convex proxy and carries the render triangles along as a payload.
 
@@ -808,6 +808,7 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
 | [x] | **AG-034 — nine example headers told you to run crates that no longer exist.** `cargo run -p bevy_wetmap`, `-p bevy_flaymap` and `-p bevy_viscera` in seven headers, `-p bloodstain` in two more, all folded into `bevy_carnage` at 0.5.0. Each is now `cargo run -p bevy_carnage --release --example <name>`. | S |
 | [x] | **AG-035 — `cross_section` promised a mouse wheel it does not read.** The header said "Orbit with the mouse wheel"; the camera orbits on its own, off the clock, and `web/play.html` already said so. The comment now says what the code does. | S |
 | [x] | **AG-036 — the demo counts were stale in five places.** `docs/DEMOS.md` said "All seven run" and listed seven commands for a crate with twenty-four windowed examples; `scripts/build_web.sh`, the CI `site` job (its comment and its name) and `web/play.html` said "ten" for a roster of fifteen. `DEMOS.md` now lists every windowed example, with the feature the six that need one require, and the rest say fifteen. | S |
+| [x] | **AG-037 — two web demos never found their canvas.** `flesh` and `carnage_web` asked the `WindowPlugin` for `"#bevy"`; `web/play.html` has only `<canvas id="carnage-canvas">`, so on the site both rendered nothing. Both now name `#carnage-canvas`, as the other thirteen do. | S |
 
 > BLOCKED: bevy_hanabi has no bevy-0.20 release (crates.io 0.19.0; its main still declares bevy 0.19), and the game's avian3d 0.7 is on bevy 0.19 with no 0.20 release; the game consumes this crate by path, so the crate cannot move alone.
 
@@ -817,6 +818,7 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
 - **AG-034.** The grep the ticket named, `cargo run -p bevy_(wetmap|flaymap|viscera|cross_section|laceration|fracture_modes)|-p bloodstain`, found nine files, not the seven the plan counted: `stain_sweep` and `dry_timeline` still said `-p bloodstain`. None of the nine needs `--features`. The same grep over `docs/`, `README.md`, `tools/`, `web/` and `scripts/` is empty.
 - **AG-035.** The example reads no `KeyCode`, no `MouseButton` and no `MouseWheel` at all; `orbit` moves the camera from `time.elapsed_secs()`. Nothing else in the file made a wheel claim.
 - **AG-036.** The twenty-four are the examples that build a `DefaultPlugins` window; `rod_determinism` only mentions it in a comment and is not one. The six `required-features` entries in `Cargo.toml` are `carnage`, `ribbons` and `pooling` (`vfx`) and `flesh`, `preset` and `carnage_web` (`flesh`); both features are on by default, so the flag is there for a `--no-default-features` build. The roster of fifteen was counted from `DEMOS` in `build_web.sh` and in `web/play.html`, and `scripts/demo_facts.sh` still passes. The CI job's `name:` changed with its comment; `main` has no branch protection or ruleset, so no required status check names it.
+- **AG-037.** One string per file; `fit_canvas_to_parent` stays. Native runs are unaffected, since `canvas` is read only on wasm32. What proves it in a browser is the web pass of the round that follows; the fallback proof is `grep -n canvas examples/{flesh,carnage_web}.rs`, which now shows `#carnage-canvas` and no `#bevy`.
 
 ---
 
