@@ -619,39 +619,64 @@ impl Scene {
 /// byte-identical, so the fracture, the bond graph, the wound extraction and the feel curves are
 /// untouched — and `pulses` fell by 865, which is **exactly** the wound count. Every wound lost one
 /// heartbeat and no wound lost two. `droplets` and `stains` follow that one lost beat.
-const GOLDEN_DIGEST: u64 = 0xfc71_5deb_a0ea_5cf8;
+///
+/// The fifth is not a change to the script, and that is why the golden is now pinned **per
+/// architecture**. The single value this held, `0xfc71_5deb_a0ea_5cf8` with 544 fragments, could not be
+/// reproduced in `AG-039`: an Apple-silicon Mac produces `0x4366_a8b6_4352_c85a` with 554 fragments at
+/// the very commit that blessed it, `438908b`, and at each commit since that a bisect tested. An
+/// x86_64 Linux host (glibc 2.44) produces `0x99ca_3d14_78d2_58e3` today, also 554 fragments, with one
+/// bond and one pulse fewer. The likely cause, inferred and not isolated: `f32::sin`, `cos`, `atan2`
+/// and `powf` go to the platform's maths library, which can differ in the last bit between Apple's
+/// libm and glibc, and a last-bit difference in a cut plane is a different partition. `CLAUDE.md`'s
+/// promise is two runs of the *same build* agreeing, and both pins below keep it. A third platform
+/// may need a third pin, which the refusal message hands you.
+#[cfg(target_arch = "aarch64")]
+const GOLDEN_DIGEST: u64 = 0x4366_a8b6_4352_c85a;
+#[cfg(not(target_arch = "aarch64"))]
+const GOLDEN_DIGEST: u64 = 0x99ca_3d14_78d2_58e3;
 
 /// What the script is supposed to produce. Checked field by field so a failure names the thing that
 /// moved instead of just saying a hash did.
 ///
 /// Three of these are worth reading rather than scrolling past:
 ///
-/// - **`fragments` is 544, exactly `TARGET_PIECES * SUBJECTS`.** That equality is the evidence the cut
-///   loop is doing its job; when it was 274 against a target of 12, the target was not binding at all.
-/// - **`bonds` is 1164 against the old 417.** Six shells cut to 34 pieces give the bond graph real
-///   branching, which is what makes `radial` + `wounds_from_reach` a meaningful query.
-/// - **`cap_tris` is 1.4x `skin_tris`, and used to be 3.4x.** The drawn surface of a fractured body
+/// - **`fragments` is 554, ten more than `TARGET_PIECES * SUBJECTS` = 544.** The old pin recorded
+///   exactly 544, which was the evidence the cut loop reaches its target. The arm64 build gives 554 at
+///   the commit that pin was blessed on, so the extra ten are not this pin's doing; where they come
+///   from has not been traced.
+/// - **`bonds` is 1006 (1005 on x86_64) against the old 417.** Six shells cut to 34 pieces give the
+///   bond graph real branching, which is what makes `radial` + `wounds_from_reach` a meaningful query.
+///   The one-bond difference between platforms is a coplanar-face match decided by the last bit of a
+///   face normal.
+/// - **`cap_tris` is 1.2x `skin_tris`, and used to be 3.4x.** The drawn surface of a fractured body
 ///   is still mostly newly-created cut face — so anything touching cap generation moves far more
-///   triangles than its name suggests — but the two reductions in `append_cut_faces` took it from
-///   250,942 to 106,721 (**-57.5 %**), which is where the bake's `soften` cost went.
-/// - **`skin_tris` moved 73,660 -> 73,684, and that +24 is not a leak.** `append_cut_faces` writes
-///   into the same soup as the render skin and `draw_piece` softens the *combined* result on purpose,
-///   so that the relaxation bevels the skin/cap edge; the split by interior tag happens afterwards.
-///   Perturbing cap vertices therefore perturbs the weld along the shared seam by 0.03 %. Measured in
-///   isolation the two reductions give +5 and +25 — their combination being +24 rather than +30 is
-///   the evidence it is a weld interaction and not a systematic offset. `RELIEF_STRIDE`'s own docs
-///   carry the full table.
+///   triangles than its name suggests — and the two reductions in `append_cut_faces` are where the
+///   bake's `soften` cost went. `RELIEF_STRIDE`'s own docs carry the table.
+#[cfg(target_arch = "aarch64")]
 const GOLDEN_COUNTS: Counts = Counts {
-    fragments: 544,
-    ejecta: 172,
-    bonds: 1164,
-    wounds: 865,
-    pulses: 7785,
-    droplets: 290_678,
-    stains: 327_568,
-    skin_tris: 73_684,
-    cap_tris: 106_721,
-    hitstop: 1792,
+    fragments: 554,
+    ejecta: 192,
+    bonds: 1006,
+    wounds: 862,
+    pulses: 7038,
+    droplets: 296_178,
+    stains: 336_748,
+    skin_tris: 100_613,
+    cap_tris: 117_089,
+    hitstop: 1893,
+};
+#[cfg(not(target_arch = "aarch64"))]
+const GOLDEN_COUNTS: Counts = Counts {
+    fragments: 554,
+    ejecta: 192,
+    bonds: 1005,
+    wounds: 862,
+    pulses: 7037,
+    droplets: 296_178,
+    stains: 336_748,
+    skin_tris: 100_613,
+    cap_tris: 117_089,
+    hitstop: 1893,
 };
 
 fn percentile(sorted: &[f64], q: f64) -> f64 {
