@@ -340,7 +340,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.0`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.1`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.1` changed: the same carnage, cheaper to bake
+
+No public item moved, and every byte the crate emits is what `0.5.0` emitted for the same input. `bench_carnage`'s digest over every fragment, wound, stain and droplet is unchanged, and the bench refuses to report a time when it is not. The bake is 8.7 % cheaper on that script (55.1 → 50.3 ms for sixteen bodies, worst per-body spike 4.1 → 3.8 ms on an M4 Pro), because the attribute weld that builds each fragment's mesh now resolves a corner it has already emitted with one lookup instead of a 27-cell probe. Also in this release: `bevy` 0.19.1 and `serde` 1.0.229 in the lockfiles, and the example run commands, demo counts and web canvas fixes in `BACKLOG.md`'s phase 6.
 
 ### What `0.5.0` changed: the seven crates are modules
 

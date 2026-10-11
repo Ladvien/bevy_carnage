@@ -1,5 +1,9 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.1` is a patch: the same output, a cheaper bake.** The attribute weld resolves a corner it has
+# already emitted with one lookup instead of the 27-cell probe, which the bench measures at -8.7 % of
+# the bake with its digest unchanged. Lockfiles move to `bevy` 0.19.1; the manifest's requirements do not.
+#
 # **`0.5.0` folds the seven kernel crates in as modules.** `bevy_carnage::wetmap` and the rest are the
 # same paths they were as re-exports, so a consumer that followed the README changes nothing; the
 # manifest loses seven dependencies and gains none. The minor bump is for the one thing that does
@@ -28,7 +32,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
