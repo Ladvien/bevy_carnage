@@ -60,6 +60,8 @@ use bevy_carnage::blood::dry::appearance;
 use bevy_carnage::blood::stain::{Impact, impact_at_plane, stain_radius, stain_shape};
 use bevy_carnage::blood::{self, Bleed, BloodSettings, Droplet, PatternClass, WoundKind, patterns};
 
+mod common;
+
 /// The fixed-tick rate every duration in `BloodSettings` is quoted at.
 const HZ: u32 = 60;
 /// The floor, metres from the centre to an edge.
@@ -193,6 +195,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         // The blood dials are authored in ticks at 60 Hz, so the demo runs its mechanisms on a 60 Hz
         // fixed tick and counts integers. No clock is read anywhere in here.
         .insert_resource(Time::<Fixed>::from_hz(f64::from(HZ)))

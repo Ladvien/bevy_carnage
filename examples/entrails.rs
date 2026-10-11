@@ -119,6 +119,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .add_plugins(VisceraPlugin)
         // **The crate is integer-tick at 60 Hz and never reads a clock**; Bevy's `Time<Fixed>`
         // defaults to 64, which would make the guts fall 7% fast. The crate's README states this.

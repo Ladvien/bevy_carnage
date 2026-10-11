@@ -180,6 +180,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         // **The tuned dials go in before the plugin.** `CarnageVfxPlugin` `init_resource`s
         // `CarnageSettings`, which no-ops when it is already present — so a caller that authors its
         // own block inserts it first and its values win. There is no merge and no partial default.

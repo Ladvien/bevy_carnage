@@ -89,6 +89,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .add_plugins(CarnageVfxPlugin)
         .insert_resource(Aim(Vec3::new(0.0, 0.10, 0.0)))
         .init_resource::<Bores>()

@@ -19,6 +19,8 @@ use bevy_carnage::laceration::{
     Gape, Laceration, LacerationClock, LacerationPlugin, Region, Tension, skin_patch,
 };
 
+mod common;
+
 /// The patch: 30 cm across in 5 mm cells, which is fine enough that a 6 mm lip has vertices to land on.
 const PATCH_M: f32 = 0.30;
 const PATCH_CELLS: u32 = 60;
@@ -42,6 +44,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .add_plugins(bevy_carnage::cross_section::CrossSectionPlugin)
         .add_plugins(LacerationPlugin)
         .add_systems(Startup, setup)

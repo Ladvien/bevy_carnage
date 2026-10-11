@@ -46,6 +46,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .add_plugins(GorePlugin)
         .insert_resource(Time::<Fixed>::from_hz(60.0))
         .init_resource::<Shots>()

@@ -16,6 +16,8 @@ use bevy::color::palettes::css;
 use bevy::prelude::*;
 use bevy_carnage::viscera::{spill, tube_mesh, Mesentery, Strand, ViscSettings, VisceraPlugin, VisceraSystems};
 
+mod common;
+
 /// Sides on the swept tube. Eight is 384 triangles over a 25-node strand.
 const SIDES: u32 = 8;
 /// Where the wound is, and which way it opens.
@@ -40,6 +42,7 @@ struct Spawner {
 fn main() {
     App::new()
         .add_plugins((DefaultPlugins, VisceraPlugin))
+        .add_plugins(common::autopilot::Autopilot)
         // The crate is integer-tick at 60 Hz and never reads the clock; Bevy's default is 64.
         .insert_resource(Time::<Fixed>::from_hz(60.0))
         .add_systems(Startup, setup)

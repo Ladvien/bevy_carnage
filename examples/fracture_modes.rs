@@ -12,6 +12,8 @@
 use bevy::prelude::*;
 use bevy_carnage::fracture_modes::{CellGraph, FractureModeCache, FractureModesPlugin, Impact, ModeSettings};
 
+mod common;
+
 const COLS: usize = 6;
 const ROWS: usize = 4;
 /// The column whose right-hand faces are the weak seam.
@@ -24,6 +26,7 @@ fn main() {
             primary_window: Some(Window { title: "bevy_fracture_modes".into(), ..default() }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .add_plugins(FractureModesPlugin)
         .insert_resource(ModeSettings { k: 4, ..Default::default() })
         .init_resource::<Wall>()

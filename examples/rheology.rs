@@ -36,6 +36,8 @@ use bevy_carnage::blood::dry::{SRGB_MET, SRGB_OXY};
 use bevy_carnage::blood::rheo::{self, MU_INF, MU_ZERO, PERFUSION_STRESS_PA};
 use bevy_carnage::{BLOOD_DENSITY, BloodSettings, blood, hash_f32};
 
+mod common;
+
 /// The fixed tick, and the rate `bloodstain`'s shipped tick counts are authored for. Every age here
 /// is an integer count of these — no `Instant` anywhere, because there is no such clock in a
 /// browser.
@@ -197,6 +199,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .insert_resource(Time::<Fixed>::from_hz(HZ as f64))
         .init_resource::<Dials>()
         .init_resource::<Ticks>()

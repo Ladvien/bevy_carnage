@@ -34,7 +34,8 @@
 //! beside the bars.
 //!
 //! **The subject is a bone in metres**, ~1.98e-4 m³, because Grady's law is SI and reads a real
-//! volume: a 22 cm shaft 3 cm thick. Nothing here reaches for `examples/common/` — that module's
+//! volume: a 22 cm shaft 3 cm thick. Nothing here reaches for the scene half of `examples/common/`
+//! (only its `autopilot`, which has no scene in it) — that module's
 //! blood half draws forward decals, which live behind the `vfx` feature, and every wasm demo is
 //! built with `vfx` off.
 //!
@@ -45,6 +46,8 @@ use bevy_carnage::{
     CutSettings, FaultPolicy, FractureSettings, LoadingMode, ProxyCell, TissueClass, fracture_mesh,
     grady_mott_target,
 };
+
+mod common;
 
 /// Half-extents of the shaft, metres. `0.03 x 0.22 x 0.03` — a long bone, and the volume Grady's law
 /// actually reads.
@@ -244,6 +247,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .init_resource::<Dials>()
         .init_resource::<Report>()
         .add_systems(Startup, setup)

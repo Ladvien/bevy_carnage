@@ -13,6 +13,8 @@ use bevy_carnage::cross_section::{
     CrossSectionAtlas, CrossSectionPlugin, CrossSectionSettings, Region, SkinPlane, annotate_cap,
 };
 
+mod common;
+
 /// Sides of the prism standing in for a limb. Enough that the cap reads as round.
 const SIDES: usize = 32;
 
@@ -22,6 +24,7 @@ fn main() {
             primary_window: Some(Window { title: "bevy_cross_section".into(), ..default() }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .add_plugins(CrossSectionPlugin)
         .add_systems(Startup, setup.after(bevy_carnage::cross_section::CrossSectionSystems))
         .add_systems(Update, orbit)

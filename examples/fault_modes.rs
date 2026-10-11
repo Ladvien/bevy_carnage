@@ -36,7 +36,8 @@
 //! with no long axis makes three of the four degenerate into each other, which is exactly how a
 //! demo of this feature passes for the wrong reason. It is the same shaft
 //! `tests/fault_modes.rs::limb` asserts against, so the demo and the test are talking about one
-//! subject. Nothing here reaches for `examples/common/`: that module's blood half draws its slicks
+//! subject. Nothing here reaches for the scene half of `examples/common/` (only its `autopilot`, which
+//! has no scene in it): that module's blood half draws its slicks
 //! as forward decals, which live behind the `vfx` feature, and every wasm demo is built with `vfx`
 //! off. So this example owns its own three-line scene, exactly as `explode.rs` does.
 //!
@@ -50,6 +51,8 @@ use bevy_carnage::{
     CutSettings, FaultPolicy, FractureSettings, LoadingMode, ProxyCell, TRABECULAR_MAX_PIECES,
     TissueClass, fracture_mesh,
 };
+
+mod common;
 
 /// Half-extents of the shaft: twice as long as it is wide, so there is a long axis to twist about.
 /// The same figure as `tests/fault_modes.rs::limb`.
@@ -247,6 +250,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .init_resource::<Dials>()
         .init_resource::<Report>()
         .add_systems(Startup, setup)

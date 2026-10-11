@@ -18,6 +18,8 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_carnage::wetmap::{StainShape, WetCanvas, WetSettings, WetmapPlugin};
 
+mod common;
+
 /// Edge length of the canvas, in texels — the crate's shipped default. 64 KB per upload.
 const CANVAS: u32 = 128;
 
@@ -64,6 +66,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .add_plugins(WetmapPlugin)
         // 60 Hz, because `WetSettings::dry_ticks` is quoted at 60 Hz. Bevy's default fixed rate is 64,
         // which would silently make the shipped 1800 ticks 28 seconds instead of 30.

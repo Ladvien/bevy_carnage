@@ -153,6 +153,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .insert_resource(Aim(SHOTS[0].1))
         .init_resource::<Bores>()
         .init_resource::<Dials>()

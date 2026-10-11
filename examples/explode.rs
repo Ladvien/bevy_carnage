@@ -124,6 +124,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .insert_resource(Cycle {
             timer: Timer::from_seconds(INTACT_SECS, TimerMode::Once),
             phase: Phase::Intact,

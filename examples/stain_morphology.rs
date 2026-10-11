@@ -56,6 +56,8 @@ use bevy_carnage::blood::stain::{
     weber,
 };
 
+mod common;
+
 /// Impact angles across the wall, degrees. Descending, so `right` is the shallower hit.
 const ANGLES_DEG: [f32; 6] = [90.0, 75.0, 60.0, 45.0, 30.0, 15.0];
 /// Impact speeds down the wall, m/s. Descending, so `up` is the faster hit.
@@ -132,6 +134,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .add_systems(Startup, setup)
         .add_systems(Update, (sweep, hud).chain())
         .run();

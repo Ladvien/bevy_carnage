@@ -229,6 +229,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .insert_resource(Time::<Fixed>::from_hz(HZ as f64))
         .insert_resource(GorePolicy::for_tier(GoreTier::BloodAndGore))
         .insert_resource(CarnageSettings {

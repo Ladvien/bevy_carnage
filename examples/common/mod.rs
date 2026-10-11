@@ -23,6 +23,11 @@
 #![allow(dead_code)]
 
 pub mod body;
+/// **The windowed examples' self-driving plugin** — scripted keys, screenshots and exit, read from
+/// `CARNAGE_AUTOPILOT` and inert without it. Unlike the recorder it is not native-only: it adds
+/// nothing when the variable is absent, and a browser never has it, so it compiles on wasm32 and
+/// every windowed example registers it without a `cfg`.
+pub mod autopilot;
 /// **The preset's scene** — the two-line inclusion, as a scene both the windowed demo and the
 /// headless clip build. Behind `flesh`, like the preset it stands on, so the `serde`-only check of
 /// every other example still compiles this module tree.

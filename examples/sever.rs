@@ -92,6 +92,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .insert_resource(Aim(Vec3::new(0.0, 0.25, 0.0)))
         .insert_resource(Granularity(GRANULARITIES.len() - 1))
         .insert_resource(Soften(2))

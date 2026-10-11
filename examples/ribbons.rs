@@ -70,6 +70,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         // The deterministic half is not needed here: `common::body` bakes through `fracture_mesh`,
         // the pure path. `CarnageVfxPlugin` is what brings in Hanabi and the ribbon systems.
         .add_plugins(CarnageVfxPlugin)

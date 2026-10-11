@@ -15,6 +15,8 @@ use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
 use bevy_carnage::flaymap::{BoneExposed, FlayCanvas, FlaySettings, FlaymapPlugin, Layer, Layers, Region};
 
+mod common;
+
 /// Edge length of the canvas, in texels.
 const CANVAS: u32 = 128;
 /// Frames between hits. Twenty at 60 Hz is a hit every third of a second — slow enough to watch a
@@ -54,6 +56,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(common::autopilot::Autopilot)
         .add_plugins(FlaymapPlugin)
         .init_resource::<Peel>()
         .add_systems(Startup, setup)
