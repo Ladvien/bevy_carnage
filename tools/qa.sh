@@ -210,17 +210,24 @@ TIMEOUT=${QA_TIMEOUT:-180}
 # thread was stuck into `<out>/<name>.hang.txt`: a hang that is gone on the next run can only be
 # diagnosed from the run that had it.
 run_limited() {
-  local secs=$1 flag pid wd rc
+  local secs=$1 flag finished pid wd rc
   shift
   flag=$(mktemp)
+  finished="$flag.finished"
   "$@" &
   pid=$!
   (
     sleep "$secs"
+    # **The run may have ended while this slept.** To stop this subshell the parent kills its
+    # `sleep` (bash would not act on the subshell's own TERM until that child returned), and bash
+    # then runs the next line before the TERM lands. Without this check that next line reported a
+    # timeout for a run that had already exited, and the subshell died before sampling anything.
+    # That race was every "exit hang" `AG-045` and `AG-056` chased: a run that finished in seconds,
+    # logged as hitting the 180 s timeout, with no hang file.
+    [ -e "$finished" ] && exit 0
     echo timeout >"$flag"
-    # The process state first, then the sample, and sample's own output too. With that output sent to
-    # /dev/null, the first two hangs after `AG-045` (`spill` and `viscera_spill`, one round) left no
-    # file and no reason; a process stuck while exiting may refuse to be sampled, and this says so.
+    # The process state first, then the sample, and sample's own output too, so a real hang leaves
+    # its reason in the file even if the process refuses to be sampled.
     if command -v sample >/dev/null 2>&1 && [ -n "${HANG_FILE:-}" ]; then
       { ps -o pid,stat,etime,command -p "$pid"; sample "$pid" 2 -file "$HANG_FILE.sample"; } >"$HANG_FILE" 2>&1 || true
     fi
@@ -231,11 +238,12 @@ run_limited() {
   wd=$!
   rc=0
   wait "$pid" || rc=$?
+  : >"$finished"
   pkill -P "$wd" 2>/dev/null || true
   kill "$wd" 2>/dev/null || true
   wait "$wd" 2>/dev/null || true
   if [ -s "$flag" ]; then rc=124; fi
-  rm -f "$flag"
+  rm -f "$flag" "$finished"
   return "$rc"
 }
 
