@@ -111,13 +111,29 @@ fn main() {
             severed.sever_all(&broken);
             let islands = bake.0.islands(bake.0.members(), &severed);
             let keep = islands.iter().enumerate().max_by_key(|(i, x)| (x.len(), std::cmp::Reverse(*i))).map(|(i, _)| i);
+            // **The kept island stays only while it stands on something** — a cell reaching the
+            // body's lowest extent, the feet. Kept unconditionally, it hung at standing height for
+            // the rest of the clip once the modes parted the legs.
+            let lowest = |id: &bevy_carnage::FragmentId| {
+                bake.1.get(id.index()).map_or(f32::INFINITY, |c| c.points().iter().map(|p| p.y).fold(f32::INFINITY, f32::min))
+            };
+            let floor = bake.0.members().iter().map(|id| lowest(id)).fold(f32::INFINITY, f32::min);
+            let stands = keep.and_then(|k| islands.get(k)).is_some_and(|island| island.iter().any(|id| lowest(id) <= floor + 1.0e-3));
             for (i, island) in islands.iter().enumerate() {
-                if Some(i) == keep {
+                if Some(i) == keep && stands {
                     continue;
                 }
+                let falls = Some(i) == keep;
+                let middle = island.iter().filter_map(|id| bake.1.get(id.index()).map(|c| c.center())).sum::<Vec3>() / island.len().max(1) as f32;
                 for id in island {
                     let centre = bake.1.get(id.index()).map(|c| c.center()).unwrap_or(Vec3::ZERO);
-                    thrown.push((*id, ((centre - shot).normalize_or_zero() + Vec3::new(0.0, 0.5, 0.6)) * 0.9));
+                    let v = if falls {
+                        // Not hit, so not thrown: a slow outward slump, and gravity brings it down.
+                        Vec3::new(centre.x - middle.x, 0.0, centre.z - middle.z).normalize_or_zero() * 0.3 - Vec3::Y * 0.01
+                    } else {
+                        ((centre - shot).normalize_or_zero() + Vec3::new(0.0, 0.5, 0.6)) * 0.9
+                    };
+                    thrown.push((*id, v));
                 }
             }
             println!("gore: modes broke {} bond(s) into {} piece(s)", broken.len(), islands.len());

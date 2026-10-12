@@ -19,8 +19,8 @@
 //! | 18 | a projectile to the left shoulder — the arm goes, the body stays up |
 //! | 48 | one to the head |
 //! | 80 | a slash at the right shoulder |
-//! | 112 | a swept blade through the waist, taking the legs |
-//! | 144 | a blast in the chest, which finishes what is left |
+//! | 112 | a swept blade through the waist, taking the legs — and with them all the body stood on, so the rest comes down in a heap |
+//! | 144 | a blast in the chest, which now lands on nothing standing: the body is already down |
 //!
 //! Frames land in `--out <dir>` (default `frames-sever/`). Turn them into a GIF with `tools/gif.sh`.
 //!

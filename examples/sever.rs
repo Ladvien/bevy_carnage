@@ -91,7 +91,7 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .insert_resource(Aim(Vec3::new(0.0, 0.25, 0.0)))
         .insert_resource(Granularity(GRANULARITIES.len() - 1))
@@ -294,6 +294,10 @@ fn strike(world: &mut World) {
             ),
             (n, 0) => format!(
                 "{}: severed {n} bond(s), but nothing came loose yet. Hit it again",
+                blow.label()
+            ),
+            (n, off) if out.fell => format!(
+                "{}: severed {n} bond(s) - nothing holds it up now, all {off} piece(s) came down. R to reset",
                 blow.label()
             ),
             (n, off) => format!("{}: severed {n} bond(s), {off} fragment(s) came off", blow.label()),

@@ -50,10 +50,12 @@ that; the subject had no anatomy to break along.
 
 ## `sever` — it comes apart where you hit it
 
-![A blue blocked-out humanoid standing; a projectile takes off its arm, another its head, a slash takes the other arm, a blade through the waist takes both legs and a blast finishes the torso](sever.gif)
+![A blue blocked-out humanoid standing; a projectile takes off its arm, another its head, a slash takes the other arm, and a blade through the waist takes both legs, after which the rest has nothing to stand on and comes down in a heap](sever.gif)
 
 The subject stays standing and you take pieces off it. One bake, cached at startup; every blow is a
-region query against it plus a threshold, and whatever stops being connected falls off.
+region query against it plus a threshold, and whatever stops being connected falls off. **The body
+stays up only while its biggest piece still touches the floor**: take the legs and the rest has
+nothing to stand on, so it comes down too, slumping into a heap rather than being thrown.
 
 The clip is scripted. Run it yourself and you aim:
 
@@ -330,7 +332,7 @@ pulls the wedges around a channel apart, and this demo fires one.
 `capture_carnage` prints one line and two runs must print the same one:
 
 ```text
-carnage: frames=382 wounds=253 stains=26892 digest=c7fde149e80f1b13
+carnage: frames=382 wounds=289 stains=32043 digest=b540ac712d86e37a
 ```
 
 The digest is FNV-1a over every stain position in placement order, so it covers the whole new layer
@@ -535,6 +537,12 @@ WIDTH=560 LEGEND=none  tools/gif.sh frames-holes docs/holes.gif "Bullet holes �
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-carnage docs/carnage.gif ""
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-flesh   docs/flesh.gif ""
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-preset  docs/preset.gif ""
+
+# `fracture_modes.gif` is `capture_gore`'s second clip, frames 90-179, renumbered from frame0000.
+cargo run --release --example capture_gore -- --out frames-gore
+mkdir -p frames-modes && for n in $(seq 90 179); do
+  cp "frames-gore/frame$(printf %04d "$n").png" "frames-modes/frame$(printf %04d $((n - 90))).png"; done
+WIDTH=480 LEGEND=none tools/gif.sh frames-modes docs/fracture_modes.gif ""
 ```
 
 **`carnage` is the one clip with `STRIDE`, and the reason is length.** It has to run long enough to
@@ -549,8 +557,9 @@ the whole carnage layer — much sharper than comparing two pictures.
 
 **Do not compare the pictures, and this is now measured rather than assumed.** An earlier revision of
 this section claimed the rendered PNGs were byte-identical between runs on the development host. On an
-Apple-silicon host they are not: two runs of the *same* release binary, same digest
-`c7fde149e80f1b13`, same 382 frames / 253 wounds / 26 892 stains, differ in **202 of the 382 PNGs**.
+Apple-silicon host they are not: two runs of the *same* `0.5.2` release binary, same digest, differ in
+**361 of the 382 PNGs**, from frame 19 on, measured on 2026-10-11. (Earlier measured: 202 of 382 at
+the old digest `c7fde149e80f1b13`.)
 
 That is not a defect and it is not something to fix. This clip is the one recorder that adds
 [`CarnageVfxPlugin`], so the pixels include GPU particles — and a GPU particle system has no promised

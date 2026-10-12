@@ -179,7 +179,7 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         // **The tuned dials go in before the plugin.** `CarnageVfxPlugin` `init_resource`s
         // `CarnageSettings`, which no-ops when it is already present — so a caller that authors its
@@ -381,6 +381,11 @@ fn strike(world: &mut World) {
         (0, _) => format!(
             "{}: nothing left to break here. Move the aim (arrows) or reset (R)",
             blow.label()
+        ),
+        (n, off) if out.fell => format!(
+            "{}: {n} bond(s) severed - nothing holds it up now, all {off} came down, {} wound(s) bleeding",
+            blow.label(),
+            wounds.len()
         ),
         (n, off) => format!(
             "{}: {n} bond(s) severed, {off} came off, {} wound(s) bleeding",

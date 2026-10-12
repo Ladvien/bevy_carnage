@@ -4,7 +4,7 @@ Fracture modes on a convex decomposition: precompute, once, the sparse mass-orth
 
 > **A module of `bevy_carnage` since 0.5.0.** This was a crate of its own — the family below — until 2026-09-04, when the seven leaves were folded back into the one crate a game is meant to depend on. This page is its module documentation, kept whole; the paths in it are spelled the way a consumer reaches them now.
 
-![A necked bar breaking at its neck under a blow at either end](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/fracture_modes.gif)
+![The blockout humanoid takes a blow on the shoulder; the fracture modes part it along its weakest faces, and with nothing left to stand on it comes down in a heap of banded pieces](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/fracture_modes.gif)
 
 ## The family
 

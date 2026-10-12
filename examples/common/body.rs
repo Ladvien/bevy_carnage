@@ -894,6 +894,23 @@ pub struct Outcome {
     pub newly: usize,
     /// Fragments that stopped being connected to the body.
     pub off: usize,
+    /// **The body itself lost its footing.** The biggest island no longer touches the floor, so it
+    /// is not standing on anything and comes down with the rest. Counted in `off`.
+    pub fell: bool,
+}
+
+/// How close to the floor a fragment's cell must reach to count as a foot. The subject stands with
+/// its lowest point exactly on the floor ([`ORIGIN`]), and a cell cut from a leg's bottom keeps that
+/// face, so the comparison is against a lattice-sized tolerance rather than anything tuned.
+const FOOTING: f32 = 1.0e-3;
+
+/// Does this fragment touch the floor while the body stands?
+fn is_foot(baked: &Baked, id: FragmentId) -> bool {
+    baked
+        .parts
+        .get(id.index())
+        .and_then(|p| p.as_ref())
+        .is_some_and(|p| p.cell.points().iter().any(|q| q.y <= FOOTING - ORIGIN.y))
 }
 
 /// **The whole feature in one function.** Pick a region, threshold the reach it comes back with,
@@ -905,6 +922,9 @@ pub fn strike(world: &mut World, blow: Blow, at: Vec3) -> Outcome {
         return Outcome::default();
     }
     let mut outcome = Outcome::default();
+    // The body's own island, when it lost its footing. A `Vec` in island order: it is searched, never
+    // hashed, so nothing about it can depend on a hasher.
+    let mut fallen: Vec<FragmentId> = Vec::new();
 
     // Which fragments stopped being connected to the body. Scoped so every borrow of `Damage` and
     // `Baked` has ended before anything is spawned.
@@ -928,12 +948,23 @@ pub fn strike(world: &mut World, blow: Blow, at: Vec3) -> Outcome {
 
         let ids: Vec<FragmentId> = standing.iter().map(|(_, id)| *id).collect();
         let islands = damage.bonds.islands(&ids, &damage.broken);
-        // **The body is the biggest island.** That is this example's rule, not the crate's — a game
-        // with a floor would more likely keep whichever island is still standing on it.
+        // **The body is the biggest island, while it still stands on something.** That is this
+        // example's rule, not the crate's. Holding the biggest island in place unconditionally is
+        // what left a torso hanging at hip height over the legs a blade had just taken: nothing
+        // under it, its shadow detached on the floor, for the rest of the clip. A body whose
+        // biggest island touches no floor is not standing, so it comes down too.
         let body = islands.iter().enumerate().max_by_key(|(_, i)| i.len()).map(|(k, _)| k);
+        let stands = body.and_then(|k| islands.get(k)).is_some_and(|island| {
+            world.get_resource::<Baked>().is_some_and(|b| island.iter().any(|&id| is_foot(b, id)))
+        });
         for (k, island) in islands.iter().enumerate() {
-            if Some(k) != body {
-                damage.gone.extend(island.iter().copied());
+            if Some(k) == body && stands {
+                continue;
+            }
+            damage.gone.extend(island.iter().copied());
+            if Some(k) == body {
+                outcome.fell = true;
+                fallen.extend(island.iter().copied());
             }
         }
         let gone = damage.gone.clone();
@@ -941,6 +972,13 @@ pub fn strike(world: &mut World, blow: Blow, at: Vec3) -> Outcome {
         standing.into_iter().filter(|(_, id)| gone.contains(id)).collect()
     };
 
+    // Where the falling body's pieces slump away from: the mean of their centres, in island order.
+    let fallen_centre = {
+        let centres: Vec<Vec3> = world.get_resource::<Baked>().map_or_else(Vec::new, |b| {
+            fallen.iter().filter_map(|id| b.parts.get(id.index())?.as_ref().map(|p| p.center_local)).collect()
+        });
+        if centres.is_empty() { Vec3::ZERO } else { centres.iter().sum::<Vec3>() / centres.len() as f32 }
+    };
     for (entity, id) in &leaving {
         world.entity_mut(*entity).despawn();
         let center = world
@@ -951,8 +989,14 @@ pub fn strike(world: &mut World, blow: Blow, at: Vec3) -> Outcome {
             .get_resource::<Baked>()
             .and_then(|b| b.parts.get(id.index())?.as_ref().map(|p| p.volume))
             .unwrap_or(REFERENCE_VOLUME);
-        let (velocity, spin) = launch(*id, center, at, volume);
+        // A piece the blow freed is thrown by it. A piece of a body that lost its footing was not
+        // hit; it slumps from where it stood and comes down under gravity.
+        let (velocity, spin) =
+            if fallen.contains(id) { topple(*id, center, fallen_centre, volume) } else { launch(*id, center, at, volume) };
         spawn_fragment(world, *id, Some((velocity, spin)));
+    }
+    if outcome.fell {
+        info!("  the body lost its footing and came down");
     }
     if !leaving.is_empty() {
         info!("  {} fragment(s) came off", leaving.len());
@@ -978,6 +1022,18 @@ pub fn launch(id: FragmentId, center: Vec3, at: Vec3, volume: f32) -> (Vec3, Vec
     let heft = heft(volume);
     let spin = Vec3::new(h(1) - 0.5, h(2) - 0.5, h(3) - 0.5).normalize_or_zero() * (7.0 + 7.0 * h(2));
     (dir * (2.4 + 2.0 * h(4)) * heft, spin * heft)
+}
+
+/// **A piece of a body that lost its footing.** Nothing hit it, so it gets no impulse worth the name:
+/// a slow horizontal slump away from the falling body's centre, so the heap spreads instead of
+/// stacking in one column, and a slow tumble. Gravity does the rest. Same frozen hash as [`launch`],
+/// on different channels, so a piece's topple does not echo its throw.
+pub fn topple(id: FragmentId, center: Vec3, from: Vec3, volume: f32) -> (Vec3, Vec3) {
+    let h = |n: u32| hash_f32(id.0.wrapping_mul(2_654_435_761).wrapping_add(n));
+    let out = Vec3::new(center.x - from.x, 0.0, center.z - from.z).normalize_or_zero();
+    let heft = heft(volume);
+    let spin = Vec3::new(h(5) - 0.5, h(6) - 0.5, h(7) - 0.5).normalize_or_zero() * (1.5 + 2.0 * h(8));
+    (out * (0.35 + 0.45 * h(9)) * heft, spin * heft)
 }
 
 /// The fragment size that leaves at unmodified speed — roughly a mid-sized chunk of this subject.

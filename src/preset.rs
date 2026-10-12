@@ -233,11 +233,17 @@ impl GoreBreakable {
         Self { leaves, bonds, modes, region, blow: 2.5 }
     }
 
-    /// Which leaves a blow at `at_local` throws: the islands the modes part, all but the largest.
-    /// Without modes, every leaf.
-    fn thrown_by(&self, at_local: Vec3) -> Vec<crate::FragmentId> {
+    /// What a blow at `at_local` does to the leaves: which the modes part off and throw, and which
+    /// belong to a body that lost its footing and comes down. Without modes, every leaf is thrown.
+    ///
+    /// The largest island stays standing **only while it still holds a leaf the body stood on** — one
+    /// reaching the subject's own lowest extent, in its local frame. This crate knows no floor, so
+    /// "what it stood on" is the only footing it can see. Keeping the largest island unconditionally
+    /// left a torso and head hanging at standing height once a blow took the legs. The torso stayed
+    /// motionless for the rest of the clip, its shadow on the floor well below it.
+    fn thrown_by(&self, at_local: Vec3) -> Parted {
         let Some(modes) = &self.modes else {
-            return self.leaves.iter().map(|l| l.id).collect();
+            return Parted { thrown: self.leaves.iter().map(|l| l.id).collect(), fell: Vec::new() };
         };
         let Some(struck) = self
             .leaves
@@ -249,7 +255,7 @@ impl GoreBreakable {
             })
             .map(|l| l.id)
         else {
-            return Vec::new();
+            return Parted::default();
         };
         let magnitude = modes.impulse_for(struck, 2).unwrap_or(0.1) * self.blow;
         let broken = modes.break_at(struck, magnitude);
@@ -261,13 +267,39 @@ impl GoreBreakable {
             .enumerate()
             .max_by_key(|(i, island)| (island.len(), core::cmp::Reverse(*i)))
             .map(|(i, _)| i);
-        islands
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| Some(*i) != keep)
-            .flat_map(|(_, island)| island.iter().copied())
-            .collect()
+        let lowest = |id: &crate::FragmentId| {
+            self.leaves
+                .iter()
+                .find(|l| l.id == *id)
+                .map_or(f32::INFINITY, |l| l.cell.points().iter().map(|p| p.y).fold(f32::INFINITY, f32::min))
+        };
+        let floor = self.leaves.iter().map(|l| lowest(&l.id)).fold(f32::INFINITY, f32::min);
+        let stands = keep
+            .and_then(|k| islands.get(k))
+            .is_some_and(|island| island.iter().any(|id| lowest(id) <= floor + FOOTING));
+        let mut parted = Parted::default();
+        for (i, island) in islands.iter().enumerate() {
+            match (Some(i) == keep, stands) {
+                (true, true) => {}
+                (true, false) => parted.fell.extend(island.iter().copied()),
+                (false, _) => parted.thrown.extend(island.iter().copied()),
+            }
+        }
+        parted
     }
+}
+
+/// How close to the subject's lowest extent a leaf must reach to be one it stands on. A leaf cut
+/// from the bottom keeps that face exactly, so this is a lattice-sized tolerance, not a tuned one.
+const FOOTING: f32 = 1.0e-3;
+
+/// What one blow does to a breakable body's leaves.
+#[derive(Default)]
+struct Parted {
+    /// Parted off by the modes, and thrown by the blow.
+    thrown: Vec<crate::FragmentId>,
+    /// The largest island, when nothing it stood on is left: not hit, so not thrown — it comes down.
+    fell: Vec<crate::FragmentId>,
 }
 
 /// **What lies under intact skin**: bruises and burns, as an image the flesh material blends under
@@ -1099,13 +1131,47 @@ fn throw_pieces(
         let centre = root_xf.transform_point(piece.center_local);
         let away = (centre - at).normalize_or_zero();
         let velocity = (away + Vec3::new(0.0, 0.6, 0.0)) * (1.5 / (1.0 + piece.size));
-        let at_tf = Transform::from_translation(centre).with_rotation(root_xf.rotation()).with_scale(root_xf.scale());
-        if let Some(outer) = piece.outer.clone() {
-            commands.spawn((Mesh3d(outer), MeshMaterial3d(skin.clone()), at_tf, Flying(velocity)));
-        }
-        if let Some(cap_mesh) = piece.cap.clone() {
-            commands.spawn((Mesh3d(cap_mesh), MeshMaterial3d(cap.clone()), at_tf, Flying(velocity)));
-        }
+        spawn_flying(commands, piece, root_xf, velocity, &cap, &skin);
+    }
+}
+
+/// Spawn the pieces of a body that lost its footing. Nothing hit them, so nothing throws them: each
+/// slumps outward from the falling body's centre, slowly and horizontally, so the heap spreads
+/// instead of stacking in one column, and gravity in [`fly`] brings it down.
+fn slump_pieces(
+    commands: &mut Commands,
+    pieces: &[Piece],
+    root_xf: &GlobalTransform,
+    cap: Handle<FleshMaterial>,
+    skin: Handle<StandardMaterial>,
+) {
+    if pieces.is_empty() {
+        return;
+    }
+    let centres: Vec<Vec3> = pieces.iter().map(|p| root_xf.transform_point(p.center_local)).collect();
+    let middle = centres.iter().sum::<Vec3>() / centres.len() as f32;
+    for (piece, centre) in pieces.iter().zip(&centres) {
+        let out = Vec3::new(centre.x - middle.x, 0.0, centre.z - middle.z).normalize_or_zero();
+        spawn_flying(commands, piece, root_xf, out * (0.5 / (1.0 + piece.size)), &cap, &skin);
+    }
+}
+
+/// One piece, in flight from where it sat on the body.
+fn spawn_flying(
+    commands: &mut Commands,
+    piece: &Piece,
+    root_xf: &GlobalTransform,
+    velocity: Vec3,
+    cap: &Handle<FleshMaterial>,
+    skin: &Handle<StandardMaterial>,
+) {
+    let centre = root_xf.transform_point(piece.center_local);
+    let at_tf = Transform::from_translation(centre).with_rotation(root_xf.rotation()).with_scale(root_xf.scale());
+    if let Some(outer) = piece.outer.clone() {
+        commands.spawn((Mesh3d(outer), MeshMaterial3d(skin.clone()), at_tf, Flying(velocity)));
+    }
+    if let Some(cap_mesh) = piece.cap.clone() {
+        commands.spawn((Mesh3d(cap_mesh), MeshMaterial3d(cap.clone()), at_tf, Flying(velocity)));
     }
 }
 
@@ -1116,10 +1182,11 @@ fn throw_bodies(
     mut bodies: Query<(Entity, &GlobalTransform, &mut ThrowNow)>,
 ) {
     for (entity, xf, mut throw) in &mut bodies {
-        let flying = throw.body.thrown_by(throw.at_local);
+        let parted = throw.body.thrown_by(throw.at_local);
         let skin = throw.skin.clone();
         let cap = throw.cap.clone();
         let mut thrown = Vec::new();
+        let mut fell = Vec::new();
         // The island that stays standing is drawn where it stood: every leaf is a piece now, the
         // body's own meshes are gone with the body, and a standing piece is one with no velocity.
         for leaf in throw.body.leaves.drain(..) {
@@ -1129,8 +1196,10 @@ fn throw_bodies(
                 center_local: leaf.center_local,
                 size: leaf.half_extents.length(),
             };
-            if flying.contains(&leaf.id) {
+            if parted.thrown.contains(&leaf.id) {
                 thrown.push(piece);
+            } else if parted.fell.contains(&leaf.id) {
+                fell.push(piece);
             } else {
                 let centre = xf.transform_point(piece.center_local);
                 let at_tf = Transform::from_translation(centre).with_rotation(xf.rotation()).with_scale(xf.scale());
@@ -1142,7 +1211,8 @@ fn throw_bodies(
                 }
             }
         }
-        throw_pieces(&mut commands, &thrown, xf, throw.at, cap, skin);
+        throw_pieces(&mut commands, &thrown, xf, throw.at, cap.clone(), skin.clone());
+        slump_pieces(&mut commands, &fell, xf, cap, skin);
         commands.entity(entity).despawn();
     }
 }

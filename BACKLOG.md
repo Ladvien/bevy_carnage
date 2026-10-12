@@ -5,7 +5,7 @@
 `docs/research-brief.md` (the open problems), `docs/isomesh-upstream-asks.md` (what we need from the
 validator).
 
-**15 tickets archived, 10 landed in phase 3 (AG-015 … AG-024), 7 landed in phase 4 (AG-025 … AG-031), 10 landed in phase 6 (AG-032, AG-034 … AG-042), 1 open (AG-033, blocked).**
+**15 tickets archived, 10 landed in phase 3 (AG-015 … AG-024), 7 landed in phase 4 (AG-025 … AG-031), 11 landed in phase 6 (AG-032, AG-034 … AG-043), 1 open (AG-033, blocked).**
 The architectural change this backlog opened with has landed: the crate no longer cuts the triangle
 soup. It cuts a caller-supplied convex proxy and carries the render triangles along as a payload.
 
@@ -814,6 +814,7 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
 | [x] | **AG-040 — the bake welded each fragment's mesh with 27 hash lookups per corner, most of them for a corner it had already emitted.** `AttributeWeld` keeps an exact-repeat index (recentred position bits, normal bucket, UV bucket), so a bit-for-bit repeat returns its vertex in one lookup. The proof that this returns what the probe would have is in the field's doc. The bake on `bench_carnage` drops from 55.1 to 50.3 ms (−8.7 %), with the digest unchanged. | S |
 | [x] | **AG-041 — the bake recomputed every cell's face planes for every triangle it placed.** `ProxyCell::contains` ran Newell's method over every face on each call, and assigning the render skin calls it once per triangle per candidate cell. `ProxyCell::halfspaces` computes each cell's planes once, and `Halfspaces::contains` is now the only containment test. The bake on `bench_carnage` drops from 50.2 to 41.4 ms (−17.7 %), with the digest unchanged. | S |
 | [x] | **AG-042 — the visual pass could not see 35 of its own windowed shots.** Round 1 lost them to pure black (`sever` 13, `ribbons` 7, `pooling` 5, `preset` 4, `rheology` 3, `stain_morphology` 3), because a macOS window that is covered, on another Space, or behind a locked screen stops presenting. With a script, the autopilot now opens no window at all: `common::autopilot::plugins` swaps winit for a plain loop, every camera draws into an off-screen image at 2× the window's logical size, time steps a fixed 1/60 s per frame, `exit` waits for every shot in flight, and each frame waits for the GPU. All 24 windowed examples are registered through it. `qa.sh`'s digest summary also caught `capture_gore` and `capture_family` for the first time. | M |
+| [x] | **AG-043 — once the legs went, the torso hung at standing height for the rest of the clip (R1-01, high).** In six examples and three layers, the biggest island was held in place whether or not anything touched the floor beneath it. Now it stays standing only while it holds a piece the body stood on. Otherwise it comes down with the rest, slumping into a heap rather than being thrown, since nothing hit it. Fixed in `examples/common/body.rs` (`sever`, `carnage`, `entrails`, `ribbons` and their recorders, with "nothing holds it up now" in the HUDs), in `capture_gore`'s fracture-modes clip, and in the crate's own `preset`, whose `thrown_by` judges footing by the subject's lowest extent since the crate knows no floor. | M |
 
 > BLOCKED: bevy_hanabi has no bevy-0.20 release (crates.io 0.19.0; its main still declares bevy 0.19), and the game's avian3d 0.7 is on bevy 0.19 with no 0.20 release; the game consumes this crate by path, so the crate cannot move alone.
 
@@ -837,26 +838,42 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
   - **Without vsync the CPU ran ahead of the GPU.** That lost each run's final shots and hung `carnage` and `rheology` past their timeout, hence the `exit` hold and the per-frame wait.
 
   The off-screen render is the scene, cameras and HUD the window shows. Side by side, round 1's `sever` window shot and the off-screen one share HUD size, layout and lighting at 1920×1360.
+- **AG-043, measured and looked at.** Byte-compared against round 1, each change starts exactly where the body loses its legs and nowhere earlier:
+  - `capture_sever` is identical through frame 111 and changes from 112, two frames after the waist blade.
+  - `capture_ribbons` changes from 118.
+  - `capture_preset` changes from 120, the moment the body breaks.
+  - `capture_gore` changes only in its fracture-modes clip, frames 90–179.
+  - `capture_demo`, `capture_holes`, `capture_pooling`, `capture_entrails` and `capture_flesh` are untouched, and so are the other three `capture_gore` clips.
+
+  Digests moved where they should: `capture_carnage` 220 wounds / 21 546 stains / `0f45a783feb6bb85` → 289 / 32 043 / `b540ac712d86e37a`, because the fallen torso's pieces bleed too, and `capture_gore`'s fracture-modes hash `5676116bc7e015de` → `860dd78ff64d9c47`. `capture_preset`'s digest does not cover flying pieces and stayed `af15ebc6c1c8033d`. Looked at frame by frame:
+  - `capture_sever` at 108, 112, 116, 124, 140 and 177: standing, legs gone, the torso coming down as one mass, then a heap with red cut faces.
+  - `capture_carnage` at 200 and 380 against round 1: a bleeding heap where a hovering block was.
+  - `capture_gore` at 125, 150 and 179: a heap of banded pieces, zoomed to show fat, muscle and bone in the gaps.
+  - `capture_preset` at 130, 200 and 359.
+  - Windowed `entrails` blow 5: 34 chunks and 8 of 8 strands streaming, where round 1 showed 15 chunks and no guts at all.
+
+  `sever.gif`, `carnage.gif`, `preset.gif` and `fracture_modes.gif` are regenerated, and the last now has a recipe in `docs/DEMOS.md`. `fracture_modes.md`'s alt text described a necked bar, but the GIF has always been this humanoid; it says so now. Looked at and kept: the new `fracture_modes.gif` shows faint Bayer-dither speckle where the torso used to be. Measured, the floor's mean colour equals the source frame's (99,96,93) and the background's standard deviation is 0.0066, so the encode is faithful. Found along the way and filed for round 2: a red cut face turned toward the sun washes out to pale pink (`capture_carnage` frame 380), and `ribbons` logs ten despawned-entity command warnings where round 1 logged six.
 
 ### Rounds
 
 | round | examples rendered | new defects | fixed | blocked | open |
 |---|---|---|---|---|---|
-| iter-01 | 12 recorders, 9 terminal, 24 windowed | 83 candidates, not yet re-inspected | 0 | 0 | 83 |
+| iter-01 | 12 recorders, 9 terminal, 24 windowed | 83 candidates, not yet re-inspected | 1 (R1-01, `AG-043`) | 0 | 82 |
+| iter-02 (partial) | 24 windowed off screen; the 9 recorders `AG-043` touched | 2 found while fixing R1-01 | — | 0 | 84 |
 
-**Round 1 found 83 candidates and fixed none of them, because the work moved to performance**
-(`AG-039` … `AG-041`, released as `0.5.1` and `0.5.2`, neither of which changed a pixel). The
-deduplicated list is `docs/visual-pass-round-1.md`. Five are high severity:
+**Round 1 found 83 candidates.** The work then moved to performance (`AG-039` … `AG-041`,
+released as `0.5.1` and `0.5.2`, neither of which changed a pixel) and to the harness (`AG-042`).
+The deduplicated list is `docs/visual-pass-round-1.md`. Of its five high-severity rows, one is fixed
+and four are open:
 
-- the torso staying at standing height after the legs go (six examples);
+- ~~the torso staying at standing height after the legs go (six examples)~~, fixed by `AG-043`;
 - viscera and blood strands launched as rigid body-length rods;
 - `carnage`'s GPU spray drawn as pink square confetti;
 - `laceration_open`'s cut opening as a dashed row of pits rather than a trough;
 - `pooling`'s repeat shots never merging, because the autopilot never moves the aim.
 
-The harness has defects of its own, listed in that file. The worst is windows on the laptop
-presenting black for whole runs: `bullet_holes` came back 19 of 21 black with the `0.5.0` binary as
-well as the new one.
+The harness defect that made all of this hard to see, windows presenting black, is gone with
+`AG-042`: a round now runs on the build host with its screen locked.
 
 ---
 
