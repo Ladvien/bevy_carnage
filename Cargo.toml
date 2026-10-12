@@ -1,5 +1,11 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.21`: the preset obeys the player's violence setting** (`AG-094`). `GorePolicy` was a
+# resource nothing in the crate read, so the two-line inclusion had no way to offer a gore setting.
+# The preset now reads `tier` (at `Stylised` a hit is announced as `Wounded` and nothing is painted),
+# `blood_decals`, `viscera` and `dismemberment`, at every hit and every drip. The default is the old
+# behaviour: `capture_preset` is byte-identical, and so is a run at `BloodAndGore`.
+#
 # **`0.5.20`: a hit costs what the blood it lands on costs, not the world it lands in** (`AG-093`).
 # The spray tests each droplet against a surface's bounding box before it casts at the surface, so
 # twelve hits in one tick on a 97 000-triangle character fell from 19.4 ms to 3.1 ms and one hit among
@@ -111,7 +117,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.20"
+version = "0.5.21"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

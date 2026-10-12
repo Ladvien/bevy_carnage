@@ -82,6 +82,40 @@ A torso's skin and fat are 18 mm deep and its muscle wall reaches 25.5 mm, so an
 skin and fat, 20 mm reaches muscle and spills guts, and a run of hits that passes 25.5 mm shows bone
 and breaks a body that can break.
 
+## The player's settings
+
+![One scripted scene three times: at the stylised tier a yellow spark marks each shot and nothing bleeds; at the blood tier the wounds bleed and pool and the body stays whole; at blood and gore the body comes apart](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/tiers.gif)
+
+A violence setting is a rating requirement in some markets and an accessibility one in most, and
+since 0.5.21 the preset follows it. `GorePolicy` is read at every hit, so a settings menu replaces
+the resource and the next hit obeys it; nothing already painted is taken back.
+
+```rust,ignore
+// Before or after the plugin: the plugin only `init_resource`s one.
+app.insert_resource(GorePolicy::for_tier(GoreTier::Blood));
+// Later, from a menu:
+*policy = GorePolicy::for_tier(GoreTier::Stylised);
+```
+
+| `GorePolicy` | what the preset does |
+|---|---|
+| `GoreTier::Stylised` (`draws_blood()` is false) | A hit that would have opened a wound is found and announced as `Wounded`, at the same point with the same normal and area, and nothing is painted, torn, spilled or thrown. **The game puts a spark, a flash or a sound where the blood would have been.** A blow's bruise and a burn's eschar are not blood and are unchanged. |
+| `blood_decals: false` | The body takes the wound and bleeds on itself. Nothing reaches the world: not the spray on the floor, a sheet or the next body, and not the drips off the wound. |
+| `viscera: false` | A torso opened to the muscle spills nothing. |
+| `dismemberment: false` | The first hit to show cortex still forwards `BoneExposed`, and the body does not break: no `GoreFractured`, no pieces. |
+
+`GorePolicy::for_tier` sets the switches that go with a tier: `Blood` is `viscera` and
+`dismemberment` off, `BloodAndGore` and `GrossViolence` are all on, and `Stylised` turns all three
+off as well. The tier on its own is documentation of intent, except that `Stylised` is what
+`draws_blood()` reads. The preset does not read the rest of the policy: `persistence_scale`, because
+the wetmap's blood dries and never fades by design, and `screen_blood`, `ragdolls`, `shake_scale`,
+the flash limit and the aim cone, because they belong to the code that draws what the preset does
+not. The default is `BloodAndGore`, with every switch on, so a game that never inserts a policy
+sees exactly what it saw before 0.5.21.
+
+`examples/preset.rs` has the setting on `T`, and `capture_preset -- --tier 0|1|2` replays the clip
+under a tier; it draws the spark at `Stylised` from the `Wounded` message, the way a game would.
+
 ## What you get back
 
 - `Wounded` — every open wound: where, its normal, its area, and the bloodstain pattern class. Drive

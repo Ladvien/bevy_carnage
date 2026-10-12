@@ -515,6 +515,14 @@ What to look for, by frame: **30** the shot opens the raised forearm where the r
 
 Run it and you aim it yourself: `1` a shot to the raised forearm, `2` a slash across the thigh, `3` a shot to the chest, `4` a hot iron, `5` a blow, `R` reset. `capture_skinned` prints the digest line two runs must agree on.
 
+## `tiers` — the player's violence setting
+
+![The same scripted scene three times side by side: at the stylised tier a yellow spark marks each shot and nothing bleeds; at the blood tier the wounds bleed and pool on the floor and the body stays standing; at blood and gore the body comes apart and the guts spill](tiers.gif)
+
+`capture_preset -- --tier 0|1|2`, three runs of the preset's own script under three `GorePolicy` values, set side by side. Nothing else differs: the same shots land on the same frames at the same places. **Left, `Stylised`:** no blood is painted and no wound opens, and the preset still writes the `Wounded` message a bleeding hit writes, at the same point with the same normal and area. The spark is `common/preset_scene.rs::sparks`, which does what a game would do with that message, in `CarnageSettings::substitute_srgb`; the point is that the hit is confirmed on the same tick, which is what Gears of War 4 kept and Vermintide 2's gore-off deleted. The bruise and the burn from frame 30 are not blood and stay. **Middle, `Blood`:** the wounds bleed, run, pool and spray the floor and the sheet, and the third shot to one spot shows bone and forwards `BoneExposed`, but nothing spills and the body does not break. **Right, `BloodAndGore`:** the shipped default, and byte-identical in all 360 frames to a run with no `--tier` at all, which is the clip `preset.gif` is cut from. The three digests are `0159fbd22324808d`, `8f0f29e7dc579b13` and `18f0a90a7032b04e`.
+
+Press `T` in `examples/preset.rs` to cycle the setting live. The next hit follows it and nothing already painted is taken back.
+
 ## Regenerating these
 
 Any change that moves emitted geometry should regenerate them, or the picture stops describing the
@@ -554,6 +562,21 @@ WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-carnage docs/carnage.g
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-flesh   docs/flesh.gif ""
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-preset  docs/preset.gif ""
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-skinned docs/skinned.gif ""
+
+# `tiers.gif` is `capture_preset` three times, once per tier, cropped to the middle, labelled and set
+# side by side, one frame in two. `--tier` is `stylised`, `blood` or `gore` (or `0`, `1`, `2`).
+for t in 0 1 2; do cargo run --release --example capture_preset -- --tier $t --out frames-tier-$t; done
+mkdir -p frames-tiers && k=0 && for i in $(seq 0 2 358); do
+  f=$(printf "frame%04d.png" $i)
+  magick \( frames-tier-0/$f -crop 560x500+120+0 +repage -resize 340x \) \
+         \( frames-tier-1/$f -crop 560x500+120+0 +repage -resize 340x \) \
+         \( frames-tier-2/$f -crop 560x500+120+0 +repage -resize 340x \) +append \
+    -background '#1b1c1f' -gravity north -splice 0x26 -font "$BOLD" -pointsize 13 \
+    -gravity northwest -fill '#e8e0d8' \
+    -annotate +10+6 "Stylised — a spark, no blood" -annotate +350+6 "Blood — no guts, nothing breaks" \
+    -annotate +690+6 "Blood and gore" "frames-tiers/$(printf frame%04d $k).png"
+  k=$((k + 1)); done
+WIDTH=900 FPS=60 STRIDE=1 LEGEND=none tools/gif.sh frames-tiers docs/tiers.gif ""
 
 # `cross_section.gif` is `capture_gore`'s first clip, frames 0-89, renumbered from frame0000.
 cargo run --release --example capture_gore -- --out frames-gore

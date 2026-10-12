@@ -65,6 +65,15 @@ pub enum GoreTier {
 ///
 /// Insert it before [`CarnagePlugin`](crate::CarnagePlugin) to own the values; the plugin
 /// `init_resource`s it, which does nothing when it is already present.
+///
+/// **The preset reads four of its fields**, at every hit, so a settings menu changes the next one:
+/// [`tier`](Self::tier) through [`draws_blood`](Self::draws_blood) (at [`GoreTier::Stylised`] a hit is
+/// announced as [`Wounded`](crate::Wounded) and nothing is painted), and the three switches
+/// [`blood_decals`](Self::blood_decals) (what the spray and the drips put on the world),
+/// [`viscera`](Self::viscera) (guts) and [`dismemberment`](Self::dismemberment) (a body coming
+/// apart). The rest are for the code that draws what the preset does not: screen blood, decals,
+/// shake, flashes. [`persistence_scale`](Self::persistence_scale) in particular is not read: the
+/// wetmap's blood dries and never fades, by design.
 #[derive(Resource, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]

@@ -10,6 +10,7 @@
 //! | `2` | a blow to the left arm — a bruise that ages in time-lapse under intact skin |
 //! | `3` | a hot iron on the right thigh — a burn whose degree the damage integral decides |
 //! | `4` | a slash across the left thigh — a laceration that bleeds and drips |
+//! | `T` | the player's gore setting: stylised (sparks, no blood), blood (no guts, nothing breaks), blood and gore |
 //! | `R` | reset |
 //!
 //! Every visual is the preset's and the flesh material's. Compare `carnage_web.rs`, which wired the
@@ -17,6 +18,7 @@
 
 use bevy::prelude::*;
 use bevy_carnage::preset::{GorePlugin, GoreSystems};
+use bevy_carnage::{GorePolicy, GoreTier};
 
 mod common;
 use common::preset_scene::{self, Body, Part, Sheet, Slab, Sun};
@@ -31,7 +33,7 @@ fn main() {
         .add_plugins(GorePlugin)
         .insert_resource(Time::<Fixed>::from_hz(60.0))
         .add_systems(Startup, setup)
-        .add_systems(Update, (keys, sweep))
+        .add_systems(Update, (keys, sweep, tier_key, preset_scene::sparks.run_if(|policy: Res<GorePolicy>| !policy.draws_blood())))
         .configure_sets(FixedUpdate, GoreSystems)
         .run();
 }
@@ -59,11 +61,43 @@ fn setup(
     commands.init_resource::<Shots>();
     preset_scene::spawn(&mut commands, &mut meshes, &mut materials, &mut images);
     commands.spawn((
-        Text::new("1 shot   2 blow   3 iron   4 slash   R reset"),
+        Text::new(format!("1 shot   2 blow   3 iron   4 slash   T gore: {}   R reset", label(GoreTier::BloodAndGore))),
+        Hud,
         TextFont { font_size: bevy::text::FontSize::Px(14.0), ..default() },
         TextColor(Color::srgb(0.92, 0.88, 0.86)),
         Node { position_type: PositionType::Absolute, left: Val::Px(12.0), top: Val::Px(10.0), ..default() },
     ));
+}
+
+/// The legend, so the tier readout can be rewritten in place.
+#[derive(Component)]
+struct Hud;
+
+/// The words for a tier, as a settings menu would print them.
+fn label(tier: GoreTier) -> &'static str {
+    match tier {
+        GoreTier::Stylised => "stylised: sparks, no blood",
+        GoreTier::Blood => "blood: no guts, nothing breaks",
+        GoreTier::BloodAndGore | GoreTier::GrossViolence => "blood and gore",
+    }
+}
+
+/// **`T` is the player's violence setting**: one `GorePolicy` resource, replaced from the tier. The
+/// next hit follows it, and nothing already painted is taken back. The preset reads `Stylised` as
+/// "announce, do not paint", `Blood` as "blood, but no guts and no breaking", and the other two as
+/// everything.
+fn tier_key(input: Res<ButtonInput<KeyCode>>, mut policy: ResMut<GorePolicy>, mut hud: Single<&mut Text, With<Hud>>) {
+    if input.just_pressed(KeyCode::KeyT) {
+        let next = match policy.tier {
+            GoreTier::Stylised => GoreTier::Blood,
+            GoreTier::Blood => GoreTier::BloodAndGore,
+            GoreTier::BloodAndGore | GoreTier::GrossViolence => GoreTier::Stylised,
+        };
+        *policy = GorePolicy::for_tier(next);
+    }
+    if policy.is_changed() {
+        hud.0 = format!("1 shot   2 blow   3 iron   4 slash   T gore: {}   R reset", label(policy.tier));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -34,6 +34,16 @@
 //! Every surface a [`Gore`] dresses gets the flesh material, so all of the above is drawn with
 //! subsurface wrap, a wet clear coat and, on cloth, a film composited over the weave.
 //!
+//! # The player's settings
+//!
+//! [`crate::GorePolicy`] is read at every hit, so a settings menu changes the next one and takes
+//! nothing back. **Reduction is substitution, never deletion:** at [`crate::GoreTier::Stylised`] a hit
+//! that would have opened a wound is still found and announced as [`crate::Wounded`], at the same
+//! point with the same normal and area, and nothing is painted, torn, spilled or thrown, so the
+//! game puts its own effect where the blood would have been. `blood_decals` is the world's share of
+//! the blood (the spray, and what drips off the wound), `viscera` the guts and `dismemberment` a body
+//! coming apart, each its own switch; `GoreTier::Blood` is the tier with the last two off.
+//!
 //! # The clock
 //!
 //! [`GoreClock`] is one `u32` advanced once per `FixedUpdate`. That is the tick every leaf asks the
@@ -54,7 +64,7 @@ use crate::bloodstain::{BloodSettings, Wound as BloodWound, WoundKind, wound_see
 
 use crate::flesh::{FleshMaterial, FleshMode, FleshParams, FleshPlugin, FleshTables};
 use crate::skin::{self, Pose, Rig};
-use crate::{CarnagePlugin, FractureCache, FractureSubject, Wounded};
+use crate::{CarnagePlugin, FractureCache, FractureSubject, GorePolicy, Wounded};
 
 /// **What a surface is, to the preset.**
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
@@ -341,6 +351,24 @@ impl Drawn {
             },
             _ => Self::Rigid,
         }
+    }
+}
+
+/// **The message a hit that opened a wound announces**: where, which way it faces, how wide, and what
+/// kind of opening. One function for the wound that bleeds and the one a tier draws no blood for, so
+/// the second is the first with nothing painted, never a near copy of it.
+fn announce(hit: &GoreHit, at: Vec3, normal: Vec3) -> Wounded {
+    Wounded {
+        at,
+        normal,
+        area: core::f32::consts::PI * hit.radius_m * hit.radius_m,
+        severity: 1.0,
+        kind: if hit.depth_mm() > 0.0 { WoundKind::Channel } else { WoundKind::Severance },
+        class: if hit.so2 >= crate::bloodstain::spectral::SO2_ARTERIAL {
+            crate::bloodstain::PatternClass::ArterialSpurt
+        } else {
+            crate::bloodstain::PatternClass::Impact
+        },
     }
 }
 
@@ -1173,6 +1201,7 @@ struct HitContext<'w> {
     bone: MessageWriter<'w, BoneExposed>,
     wounded: MessageWriter<'w, Wounded>,
     fractured: MessageWriter<'w, GoreFractured>,
+    policy: Option<Res<'w, GorePolicy>>,
 }
 
 /// The scene graph [`take_hits`] walks to find a hit's baked subject and its skin material.
@@ -1209,9 +1238,16 @@ fn take_hits(
         bone,
         wounded,
         fractured,
+        policy,
     } = &mut cx;
     let SubjectLookup { parents, subjects, breakables, dressed } = &lookup;
     let tick = clock.0;
+    // What the player's settings allow, read once per batch. A tier that does not draw blood draws
+    // none of the rest; each of the other three is its own switch, so a game can allow blood and
+    // refuse the world's share of it, or the guts, or a body coming apart. Absent, everything is.
+    let policy = policy.as_deref().cloned().unwrap_or_default();
+    let draws_blood = policy.draws_blood();
+    let (spray, guts, breaks) = (draws_blood && policy.blood_decals, draws_blood && policy.viscera, draws_blood && policy.dismemberment);
     // Every hit of the tick, in one pass. A hit that reaches bone queues the subject's despawn, and a
     // later hit in the same batch on a sibling part still passes the query — so every insert below
     // is a `try_insert`, which tolerates a despawn queued ahead of it where `insert` panics.
@@ -1260,6 +1296,19 @@ fn take_hits(
             _ => Region::Torso,
         };
 
+        // **Reduction is substitution, never deletion** ([`GorePolicy`]). At a tier that does not draw
+        // blood, a hit that would have opened a wound is still found, placed and announced: the same
+        // `Wounded`, at the same point, with the same normal and area. Nothing is painted, torn or
+        // thrown, and the game puts whatever it wants at that point in blood's place.
+        if !draws_blood && matches!(hit.kind, HitKind::Impact { .. } | HitKind::Slash { .. }) {
+            let (at_world, normal_world) = match ray_hit(mesh, xf, hit.from, hit.dir) {
+                Some(l) => (xf.transform_point(l.point), xf.affine().transform_vector3(l.normal).normalize_or_zero()),
+                None => (hit.from, -hit.dir.normalize_or_zero()),
+            };
+            let normal_world = if normal_world.dot(-hit.dir) < 0.0 { -normal_world } else { normal_world };
+            wounded.write(announce(&hit, at_world, normal_world));
+            continue;
+        }
         // 1. Peel. A slash opens geometry instead; a blow and a burn go through the dermis below.
         let mut handoff = None;
         let mut deepest = Layer::Skin;
@@ -1365,7 +1414,7 @@ fn take_hits(
         // plane cannot catch — a sheet, a wall, the next body part. Straight rather than ballistic
         // for those: a droplet at 8–40 m/s falls under a centimetre in the metre it travels.
         let droplets = crate::bloodstain::patterns::impact_spatter(&wound, &dials.blood);
-        for surface in &surfaces {
+        for surface in surfaces.iter().filter(|_| spray) {
             let Surface { entity: other, mesh: other_handle, xf: other_xf, gore: other_gore, skin: other_skin } = surface;
             if *other == hit.entity {
                 continue;
@@ -1467,18 +1516,7 @@ fn take_hits(
                 }
             });
         }
-        wounded.write(Wounded {
-            at: at_world,
-            normal: normal_world,
-            area: wound.area,
-            severity: 1.0,
-            kind: wound.kind,
-            class: if hit.so2 >= crate::bloodstain::spectral::SO2_ARTERIAL {
-                crate::bloodstain::PatternClass::ArterialSpurt
-            } else {
-                crate::bloodstain::PatternClass::Impact
-            },
-        });
+        wounded.write(announce(&hit, at_world, normal_world));
 
         // 4. A slash gapes instead of cratering.
         if let HitKind::Slash { along, depth_mm } = hit.kind {
@@ -1523,6 +1561,7 @@ fn take_hits(
         // 5. Guts, from a torso that has been opened to the muscle.
         if region == Region::Torso
             && dials.strands > 0
+            && guts
             && matches!(deepest, Layer::Muscle | Layer::Cortex | Layer::Marrow)
             && let Some(visc) = visc.as_deref()
         {
@@ -1558,6 +1597,10 @@ fn take_hits(
             && let Some(msg) = BoneExposed::from_handoff(hit.entity, &h)
         {
             bone.write(msg);
+            // A tier without dismemberment forwards the bone and breaks nothing.
+            if !breaks {
+                continue;
+            }
             // Walk up to a baked subject or a runtime body and break it.
             let mut root = hit.entity;
             let mut subject = subjects.get(root).ok();
@@ -1752,6 +1795,7 @@ fn throw_bodies(
 }
 
 /// **Pulse every open wound onto its wetmap** until the clot.
+#[allow(clippy::too_many_arguments)]
 fn bleed(
     clock: Res<GoreClock>,
     dials: Res<GoreDials>,
@@ -1760,8 +1804,10 @@ fn bleed(
     rigging: Rigging,
     mut sites: Bleeders,
     mut floors: Query<(&Gore, &Mesh3d, &GlobalTransform, &mut WetCanvas), With<FloorTag>>,
+    policy: Option<Res<GorePolicy>>,
 ) {
     let tick = clock.0;
+    let drips = policy.as_deref().is_none_or(|p| p.draws_blood() && p.blood_decals);
     let edges = edge_settings(&dials, wet_settings.as_deref());
     for (gore, mut wounds, xf, mesh3d, skin, mut wet) in &mut sites {
         // The pose a skinned body is drawn in now, read once for every wound it is bleeding and only
@@ -1788,6 +1834,10 @@ fn bleed(
             };
             let texels = wet.size();
             wet.paint_uv_with(site.uv, &shape_on(gore, &shape, texels), tick, &edges);
+            // What runs off the body onto the world is the world's share of the blood.
+            if !drips {
+                continue;
+            }
             // What runs off falls straight down from where the wound is now: one drip per systole,
             // sized the way `crate::bloodstain::patterns::drip_trail` sizes a drip, onto every floor —
             // so a pool grows under a wound that keeps bleeding, and the wetmap's own spread does the
@@ -2485,14 +2535,10 @@ mod tests {
         assert!(worn.iter().all(|id| *id == skin.id()), "a piece was thrown in a material the part never wore");
     }
 
-    /// **A game with its own physics gets every piece, and the body breaks once.** With
-    /// `spawn_fragments` off, the bone handoff writes one [`GoreFractured`] whose pieces each have a
-    /// mesh, a place and a size, and the preset spawns none of them and leaves the body to the game.
-    /// A second part of the same body hit to bone does not break it again.
-    #[test]
-    fn a_game_with_physics_gets_the_pieces() {
-        let mut app = headless();
-        app.world_mut().resource_mut::<GoreDials>().spawn_fragments = false;
+    /// **A body that can break**: a root carrying the baked leaves of a cube and two dressed cube parts
+    /// under it, a metre apart, already dressed by the first tick. Returns the root, the parts and the
+    /// material the parts wore.
+    fn breakable_body(app: &mut App) -> (Entity, [Entity; 2], Handle<StandardMaterial>) {
         let cube = Cuboid::new(0.4, 0.4, 0.4).mesh().build();
         let proxy = [crate::ProxyCell::from_box(Vec3::ZERO, Vec3::splat(0.2))];
         let fracture = crate::fracture_mesh(&[(&cube, Mat4::IDENTITY)], &proxy, &crate::CutSettings::new(4, 0.05, 3));
@@ -2501,14 +2547,24 @@ mod tests {
         let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(cube);
         let world = app.world_mut();
         let root = world.spawn((Transform::from_xyz(0.0, 1.0, 0.0), GlobalTransform::from_xyz(0.0, 1.0, 0.0), breakable)).id();
-        let parts: Vec<Entity> = [0.0, 1.0]
-            .map(|x| {
-                world
-                    .spawn((Mesh3d(mesh.clone()), MeshMaterial3d(skin.clone()), Transform::IDENTITY, GlobalTransform::from_xyz(x, 1.0, 0.0), Gore::skin(Region::Limb), ChildOf(root)))
-                    .id()
-            })
-            .into();
+        let parts = [0.0, 1.0].map(|x| {
+            world
+                .spawn((Mesh3d(mesh.clone()), MeshMaterial3d(skin.clone()), Transform::IDENTITY, GlobalTransform::from_xyz(x, 1.0, 0.0), Gore::skin(Region::Limb), ChildOf(root)))
+                .id()
+        });
         app.world_mut().run_schedule(FixedUpdate);
+        (root, parts, skin)
+    }
+
+    /// **A game with its own physics gets every piece, and the body breaks once.** With
+    /// `spawn_fragments` off, the bone handoff writes one [`GoreFractured`] whose pieces each have a
+    /// mesh, a place and a size, and the preset spawns none of them and leaves the body to the game.
+    /// A second part of the same body hit to bone does not break it again.
+    #[test]
+    fn a_game_with_physics_gets_the_pieces() {
+        let mut app = headless();
+        app.world_mut().resource_mut::<GoreDials>().spawn_fragments = false;
+        let (root, parts, skin) = breakable_body(&mut app);
         for (part, x) in parts.into_iter().zip([0.0, 1.0]) {
             app.world_mut().write_message(GoreHit::impact(part, Vec3::new(x, 1.0, 2.0), Vec3::NEG_Z, 0.03, 60.0));
             app.world_mut().run_schedule(FixedUpdate);
@@ -2722,5 +2778,98 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The `Wounded` messages and the `BoneExposed` messages this world has written so far.
+    fn announced(app: &App) -> (Vec<Wounded>, usize) {
+        let wounded = app.world().resource::<Messages<Wounded>>();
+        let bone = app.world().resource::<Messages<BoneExposed>>();
+        (wounded.get_cursor().read(wounded).copied().collect(), bone.get_cursor().read(bone).count())
+    }
+
+    /// **A tier that draws no blood still announces the hit, and paints nothing.** Reduction is
+    /// substitution, never deletion: the `Wounded` a Stylised hit writes is the one the default tier
+    /// writes, point for point, so a game that puts a spark where blood would be gets the same place,
+    /// normal and size. The canvases are exactly as they were, and no wound opens to bleed.
+    #[test]
+    fn a_tier_that_draws_no_blood_still_announces_the_hit() {
+        let hit = |tier: Option<crate::GoreTier>| {
+            let mut app = headless();
+            if let Some(tier) = tier {
+                app.insert_resource(GorePolicy::for_tier(tier));
+            }
+            let sphere = app.world_mut().resource_mut::<Assets<Mesh>>().add(Sphere::new(0.3).mesh().uv(24, 12));
+            let body = app.world_mut().spawn((Mesh3d(sphere), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Limb))).id();
+            app.world_mut().run_schedule(FixedUpdate);
+            let (flay, wet) = (app.world().get::<FlayCanvas>(body).map(|c| c.digest()), app.world().get::<WetCanvas>(body).map(|c| c.digest()));
+            app.world_mut().write_message(GoreHit::impact(body, Vec3::new(0.0, 0.1, 2.0), Vec3::NEG_Z, 0.03, 6.0));
+            app.world_mut().run_schedule(FixedUpdate);
+            let untouched = app.world().get::<FlayCanvas>(body).map(|c| c.digest()) == flay && app.world().get::<WetCanvas>(body).map(|c| c.digest()) == wet;
+            let opened = app.world().get::<Wounds>(body).is_some_and(|w| !w.0.is_empty());
+            (announced(&app).0, untouched, opened)
+        };
+        let (stylised, untouched, opened) = hit(Some(crate::GoreTier::Stylised));
+        let (default, default_untouched, default_opened) = hit(None);
+        assert_eq!(stylised.len(), 1, "a Stylised hit announced {} wounds", stylised.len());
+        assert_eq!(stylised, default, "the announcement is not the one the default tier makes");
+        assert!(untouched && !opened, "a tier that draws no blood painted or opened something");
+        assert!(!default_untouched && default_opened, "the control painted nothing, so the comparison proves nothing");
+    }
+
+    /// **Blood without gore keeps the body in one piece.** `GoreTier::Blood` allows the blood and
+    /// refuses the mutilation: the part that took 60 mm still bleeds, the bone is still forwarded as
+    /// `BoneExposed`, and nothing breaks, spills or is thrown. The default tier is the control: the
+    /// same two hits break it.
+    #[test]
+    fn blood_without_gore_keeps_the_body_in_one_piece() {
+        let run = |tier: Option<crate::GoreTier>| {
+            let mut app = headless();
+            if let Some(tier) = tier {
+                app.insert_resource(GorePolicy::for_tier(tier));
+            }
+            let (root, parts, _) = breakable_body(&mut app);
+            for (part, x) in parts.into_iter().zip([0.0, 1.0]) {
+                app.world_mut().write_message(GoreHit::impact(part, Vec3::new(x, 1.0, 2.0), Vec3::NEG_Z, 0.03, 60.0));
+                app.world_mut().run_schedule(FixedUpdate);
+            }
+            let thrown = app.world_mut().query_filtered::<(), Or<(With<Flying>, With<Standing>)>>().iter(app.world()).count();
+            let guts = app.world_mut().query_filtered::<(), With<Gut>>().iter(app.world()).count();
+            let bled = parts.iter().any(|p| app.world().get::<WetCanvas>(*p).is_some_and(|w| w.wetted_area() > 0.0));
+            (app.world().get_entity(root).is_ok(), thrown, guts, bled, announced(&app).1)
+        };
+        let (standing, thrown, guts, bled, bones) = run(Some(crate::GoreTier::Blood));
+        assert!(standing && thrown == 0 && guts == 0, "Blood broke the body: standing {standing}, {thrown} pieces, {guts} guts");
+        assert!(bled, "Blood drew no blood");
+        assert!(bones > 0, "the bone was not forwarded at a tier that refuses only the breaking");
+        let (standing, thrown, _, _, _) = run(None);
+        assert!(!standing && thrown > 0, "the control did not break: standing {standing}, {thrown} pieces");
+    }
+
+    /// **The world's share of the blood is its own switch.** With `blood_decals` off the body still
+    /// takes the wound and bleeds on itself, and nothing reaches the floor — not the spray, and not the
+    /// drips that fall from the wound as it keeps pulsing.
+    #[test]
+    fn world_blood_can_be_refused_while_the_body_bleeds() {
+        let run = |decals: bool| {
+            let mut app = headless();
+            app.insert_resource(GorePolicy { blood_decals: decals, ..GorePolicy::default() });
+            let sphere = app.world_mut().resource_mut::<Assets<Mesh>>().add(Sphere::new(0.3).mesh().uv(24, 12));
+            // 40 m across, because the spray flies metres before it lands and a small slab would take only the drips.
+            let plane = app.world_mut().resource_mut::<Assets<Mesh>>().add(Plane3d::new(Vec3::Y, Vec2::splat(20.0)).mesh().build());
+            let body = app.world_mut().spawn((Mesh3d(sphere), Transform::from_xyz(0.0, 1.0, 0.0), GlobalTransform::from_xyz(0.0, 1.0, 0.0), Gore::skin(Region::Limb))).id();
+            let floor = app.world_mut().spawn((Mesh3d(plane), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::floor().with_uv_per_metre(1.0 / 40.0))).id();
+            app.world_mut().run_schedule(FixedUpdate);
+            app.world_mut().write_message(GoreHit::impact(body, Vec3::new(0.0, 1.0, 2.0), Vec3::NEG_Z, 0.03, 6.0));
+            for _ in 0..120 {
+                app.world_mut().run_schedule(FixedUpdate);
+            }
+            let area = |e: Entity| app.world().get::<WetCanvas>(e).map(|w| w.wetted_area()).unwrap_or(0.0);
+            (area(body), area(floor))
+        };
+        let (body, floor) = run(false);
+        assert!(body > 0.0, "the body took no blood with world blood off");
+        assert_eq!(floor, 0.0, "world blood was off and the floor took {floor}");
+        let (_, control) = run(true);
+        assert!(control > 0.0, "the control put nothing on the floor, so the test proves nothing");
     }
 }

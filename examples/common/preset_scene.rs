@@ -28,6 +28,63 @@ pub struct Slab;
 /// The scene's light, so a reset does not stack another on top of it.
 #[derive(Component)]
 pub struct Sun;
+/// A spark the game draws where a tier that draws no blood announced a wound.
+#[derive(Component)]
+pub struct Spark(pub u32);
+
+/// **The game's half of "reduction is substitution".** `GorePlugin` at `GoreTier::Stylised` paints no
+/// blood, but it still writes the same [`bevy_carnage::Wounded`] a bleeding hit writes, at the same
+/// point with the same normal and area. This is what a game does with it: a short spark in
+/// [`bevy_carnage::CarnageSettings::substitute_srgb`], where the blood would have been. A real game
+/// would play its own effect; the point is that it is told where, and when, and how big.
+pub fn sparks(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut wounds: MessageReader<bevy_carnage::Wounded>,
+    mut sparks: Query<(Entity, &mut Spark, &mut Transform)>,
+    mut kit: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
+) {
+    let (mesh, material) = kit
+        .get_or_insert_with(|| {
+            let [r, g, b] = bevy_carnage::CarnageSettings::default().substitute_srgb;
+            let colour = Color::srgb(r, g, b);
+            (
+                meshes.add(Sphere::new(1.0).mesh().uv(16, 8)),
+                materials.add(StandardMaterial { base_color: colour, emissive: colour.to_linear() * 20.0, unlit: true, ..default() }),
+            )
+        })
+        .clone();
+    for wound in wounds.read() {
+        let radius = (wound.area / core::f32::consts::PI).sqrt().max(0.01);
+        commands.spawn((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_translation(wound.at + wound.normal * radius).with_scale(Vec3::splat(radius * 2.2)),
+            Spark(8),
+        ));
+    }
+    for (entity, mut spark, mut transform) in &mut sparks {
+        spark.0 = spark.0.saturating_sub(1);
+        transform.scale *= 0.82;
+        if spark.0 == 0 {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+/// **A tier by number or name**, for the examples' `--tier` flag: `0` or `stylised`, `1` or `blood`,
+/// `2` or `gore`, `3` or `gross`.
+pub fn tier_named(name: &str) -> Option<bevy_carnage::GoreTier> {
+    use bevy_carnage::GoreTier::{Blood, BloodAndGore, GrossViolence, Stylised};
+    match name.to_ascii_lowercase().as_str() {
+        "0" | "stylised" => Some(Stylised),
+        "1" | "blood" => Some(Blood),
+        "2" | "gore" => Some(BloodAndGore),
+        "3" | "gross" => Some(GrossViolence),
+        _ => None,
+    }
+}
 
 /// Which thickness row a part's cut faces and canvases use.
 pub fn region_of(part: usize) -> Region {

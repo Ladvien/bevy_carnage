@@ -20,6 +20,7 @@ use std::time::Duration;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use bevy_carnage::preset::{GoreClock, GorePlugin};
+use bevy_carnage::{GorePolicy, GoreTier};
 use bevy_carnage::wetmap::WetCanvas;
 
 mod common;
@@ -34,11 +35,27 @@ fn main() {
     // spatter in front all in frame. From the old (1.1, 1.5, 2.9) the sheet stood in front of the
     // right arm and the scalded thigh for the whole clip (R1-13).
     let camera = common::preset_scene::view(-0.08);
+    // `--tier 0|1|2|3` (or `stylised|blood|gore|gross`) replays the same script under that
+    // `GorePolicy`. Absent, the shipped policy is in force, which is what the committed clip shows.
+    let tier = common::arg("--tier").map(|t| {
+        preset_scene::tier_named(&t).unwrap_or_else(|| {
+            eprintln!("capture_preset: unknown tier {t:?}; use 0-3 or stylised, blood, gore, gross");
+            std::process::exit(2)
+        })
+    });
     let Some(mut rec) = Recorder::new_with(800, 500, camera, &out, |app| {
         // **The clock is the frame, not the wall.** The preset runs on `FixedUpdate`; with the default
         // real-time strategy the number of fixed ticks per recorded frame depends on how long the
         // screenshot took, and the digest would depend on the machine. One sixtieth per update, and
         // a 60 Hz fixed step, is exactly one tick per frame.
+        if let Some(tier) = tier {
+            // Before the plugin, which `init_resource`s the shipped one and so leaves this alone.
+            app.insert_resource(GorePolicy::for_tier(tier));
+            if tier == GoreTier::Stylised {
+                // The game's half of a tier that draws no blood: a spark where it would have been.
+                app.add_systems(Update, preset_scene::sparks);
+            }
+        }
         app.add_plugins(GorePlugin)
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
             .insert_resource(Time::<Fixed>::from_hz(60.0))

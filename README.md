@@ -97,6 +97,12 @@ What a hit does, in order: the flaymap peels to the depth asked; the wound's spa
 
 **A hit costs what its blood costs, not the world it lands in.** Twelve pellets from a shotgun in one tick take 3.1 ms on a character of 97 000 triangles, and one hit among 240 dressed surfaces 1.4 ms, on one Apple M5 in release. [`docs/preset.md`](docs/preset.md#what-it-costs) has the table and how to measure your own scene.
 
+**The preset obeys the player's violence setting.** Insert a `GorePolicy` (`GorePolicy::for_tier(GoreTier::Blood)`) and the next hit follows it, so a settings menu is one resource: at `Stylised` a hit is still announced as `Wounded`, at the same point, and nothing bleeds, so the game puts a spark where the blood would have been; `Blood` keeps the blood and refuses the guts and the breaking; the world's share of the blood, the guts and the breaking are each a switch of their own. Reduction is substitution, never deletion.
+
+![The same scripted scene three times: at the stylised tier a yellow spark marks each shot and nothing bleeds; at the blood tier the wounds bleed and pool on the floor and the body stays whole; at blood and gore the body comes apart](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/tiers.gif)
+
+That is `capture_preset -- --tier 0|1|2`; `T` cycles it live in `examples/preset.rs`, and [`docs/preset.md`](docs/preset.md#the-players-settings) has the table.
+
 ## Quick start — the bake by hand
 
 Mark what should break, then read the bake back when it dies. The launch is yours, and so is the solver.
