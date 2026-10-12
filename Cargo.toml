@@ -1,5 +1,9 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.6` is a patch for the floor stains.** A stain decal painted any surface within a metre above
+# its plane, so a body standing in blood was streaked up the legs and chunks lying in a pool turned
+# pink; it now paints within 4 cm. Nothing else moved.
+#
 # **`0.5.5` is a patch for the ribbons.** A gib's blood strand is a thumb-wide stream that holds its
 # width over its first half, where it was a finger-wide thread tapering from the head; and the ribbon
 # systems' commands no longer warn when the consumer despawns a chunk in the same frame.
@@ -49,7 +53,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.5"
+version = "0.5.6"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

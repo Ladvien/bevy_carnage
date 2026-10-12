@@ -340,7 +340,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.5`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.6`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.6` changed: stains stay on the floor
+
+A stain or pool decal painted any surface up to a metre above its plane, fading with height — Bevy's `depth_fade_factor` is in metres, and it was 1.0. A body standing in its own blood was streaked up its feet and washed pale up its shins, and chunks lying in a pool turned into translucent pink ghosts. A stain now paints within 4 cm of where it lies, enough for a floor that is not quite where it was placed and the sole of a foot, at the cost of 5 % of a stain's opacity on the floor itself.
 
 ### What `0.5.5` changed: the blood a gib drags
 
