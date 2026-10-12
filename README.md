@@ -340,7 +340,12 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.4`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.5`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.5` changed: the blood a gib drags
+
+- **A ribbon reads as blood, not thread.** `vfx::gib_ribbon` drew each strand 12 mm wide at its head and tapered it to nothing, so most of a strand was thinner than a finger and read as fishing line from a few metres. It is 20 mm now, a dragged stream, and holds that width over its first half.
+- **No warning when a chunk goes first.** The ribbon systems queued plain commands, so a consumer that despawned its chunks from a system the crate cannot be ordered against, a reset or a cull, logged "Entity despawned" per ribbon. They use the `try_` forms now, and a ribbon for a chunk that no longer exists is simply not attached.
 
 ### What `0.5.4` changed: a fix for `0.5.3`'s laceration
 

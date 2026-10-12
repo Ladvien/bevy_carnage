@@ -1,5 +1,9 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.5` is a patch for the ribbons.** A gib's blood strand is a thumb-wide stream that holds its
+# width over its first half, where it was a finger-wide thread tapering from the head; and the ribbon
+# systems' commands no longer warn when the consumer despawns a chunk in the same frame.
+#
 # **`0.5.4` is a patch that fixes `0.5.3`.** Its new laceration clip removed every triangle a cut
 # entered, so a slash across a low-poly face deleted the face. The new rules now apply only where every
 # vertex is within the influence radius; a coarser mesh stays closed, as in `0.5.2`. Nothing else moved.
@@ -45,7 +49,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.4"
+version = "0.5.5"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
