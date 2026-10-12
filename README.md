@@ -340,7 +340,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.13`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.14`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.14` changed: a slash cuts one character, and the preset has a checklist
+
+Under the preset, a slash rewrote the hit entity's own mesh handle, and a loaded scene shares that handle between every instance of a character, so one slash opened the same gape on all of them. The slashed entity now draws a copy of its mesh, tangents included, and only it is torn. [`docs/preset.md`](docs/preset.md) is new. It lists what the preset assumes of a real character (the fixed step, `UV_0`, `uv_per_metre`, `gravity_uv`, the scale, the hit ray, who owns the pieces), with a units table and the known limits.
 
 ### What `0.5.13` changed: a wetmap costs what its blood covers
 

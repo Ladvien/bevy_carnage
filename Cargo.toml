@@ -1,5 +1,8 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.14`: a slash cuts one character** (`AG-087`), not every instance sharing its mesh; and
+# `docs/preset.md` (`AG-086`), the checklist for putting the preset on a real glTF character.
+#
 # **`0.5.13`: a wetmap costs what its blood covers** (`AG-085`). The passes run over the rectangle the
 # blood is in, grown by the two texels a tick can move it, and a still canvas skips its tick;
 # `WetCanvas::is_still` is new. Bit-identical: no digest moved.
@@ -81,7 +84,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.13"
+version = "0.5.14"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

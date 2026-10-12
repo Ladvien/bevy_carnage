@@ -1019,6 +1019,13 @@ fn take_hits(
             let n_local = normal_local.unwrap_or(Vec3::Y);
             let half = hit.radius_m / xf.scale().max_element().max(1.0e-6);
             let source = meshes.add(mesh.clone());
+            // **The wound is torn into a mesh this entity owns.** The laceration rewrites the
+            // entity's drawn mesh in place, and a loaded scene shares one mesh handle between every
+            // instance of a character: torn through the shared handle, one slash opened the same
+            // gape on every enemy wearing that mesh. The copy keeps whatever the mesh had, tangents
+            // included.
+            let drawn = meshes.add(mesh.clone());
+            commands.entity(hit.entity).try_insert(Mesh3d(drawn));
             commands.entity(hit.entity).try_insert(Laceration {
                 path: vec![p - along_local * half, p, p + along_local * half],
                 normal: n_local,
@@ -1522,6 +1529,28 @@ mod tests {
         assert!(app.world().get::<Dressed>(body).is_some(), "dressed on the tick after it landed");
         let tangents = app.world().resource::<Assets<Mesh>>().get(&mesh).is_some_and(|m| m.contains_attribute(Mesh::ATTRIBUTE_TANGENT));
         assert!(tangents);
+    }
+
+    /// **A slash tears only the entity it hit.** Two dressed bodies draw one shared mesh handle, as
+    /// every instance of a loaded scene does. The slashed one gets a mesh of its own to tear; the
+    /// other still draws the shared handle, so no wound opens on it.
+    #[test]
+    fn a_slash_tears_only_the_entity_it_hit() {
+        let mut app = headless();
+        let shared = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.4, 0.6, 0.2).mesh().build());
+        let spawn = |app: &mut App, x: f32| {
+            app.world_mut()
+                .spawn((Mesh3d(shared.clone()), Transform::from_xyz(x, 0.0, 0.0), GlobalTransform::from_xyz(x, 0.0, 0.0), Gore::skin(Region::Limb)))
+                .id()
+        };
+        let (hit, other) = (spawn(&mut app, 0.0), spawn(&mut app, 2.0));
+        app.world_mut().run_schedule(FixedUpdate);
+        app.world_mut().write_message(GoreHit::slash(hit, Vec3::new(0.0, 0.0, 2.0), Vec3::NEG_Z, Vec3::X, 0.08, 6.0));
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(app.world().get::<Laceration>(hit).is_some(), "the slash laid no laceration");
+        let drawn = |e: Entity| app.world().get::<Mesh3d>(e).map(|m| m.0.id());
+        assert_ne!(drawn(hit), Some(shared.id()), "the slashed body still draws the shared mesh, so its tear lands on every instance");
+        assert_eq!(drawn(other), Some(shared.id()), "the body nobody hit stopped drawing its own mesh");
     }
 
     /// A blow bruises without bleeding, and the bruise warms the dermis under the blow within the
