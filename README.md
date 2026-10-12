@@ -95,6 +95,8 @@ What a hit does, in order: the flaymap peels to the depth asked; the wound's spa
 
 **A skinned, animated character needs no extra step.** Put `Gore` on the skinned mesh as on any other. Hits, sprays and drips are cast at the pose the joints put it in, which is the pose on screen; a wound is a triangle and a place in it, so it bleeds from where that spot of skin is now; and the blood runs downhill in the world. A skin whose joints have no transform yet drops a hit with one warning rather than casting it at the bind pose. [`docs/preset.md`](docs/preset.md#skinned-characters) has the list, and `examples/skinned.rs` is the proof.
 
+**A hit costs what its blood costs, not the world it lands in.** Twelve pellets from a shotgun in one tick take 3.1 ms on a character of 97 000 triangles, and one hit among 240 dressed surfaces 1.4 ms, on one Apple M5 in release. [`docs/preset.md`](docs/preset.md#what-it-costs) has the table and how to measure your own scene.
+
 ## Quick start — the bake by hand
 
 Mark what should break, then read the bake back when it dies. The launch is yours, and so is the solver.

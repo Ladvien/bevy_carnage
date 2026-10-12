@@ -354,6 +354,65 @@ struct Surface {
     skin: Option<SkinnedMesh>,
 }
 
+/// **A surface's bounds, for the spray's broad phase**: the axis-aligned box of its vertices in the
+/// mesh's own space, and the map into it from world space. A ray is moved into the box's space, not
+/// the box into the ray's, the way every cast in this crate moves the ray and not the geometry.
+struct Bounds {
+    min: Vec3,
+    max: Vec3,
+    to_local: bevy::math::Affine3A,
+}
+
+impl Bounds {
+    /// The box of `mesh`'s vertices as `xf` places it. `None` for a mesh with no positions, or a
+    /// transform that cannot be inverted: nothing is culled against those, so a cast still happens
+    /// and still says why it cannot work.
+    fn of(mesh: &Mesh, xf: &GlobalTransform) -> Option<Self> {
+        let Ok(Some(VertexAttributeValues::Float32x3(positions))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_POSITION) else {
+            return None;
+        };
+        let (mut min, mut max) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+        for p in positions {
+            let p = Vec3::from(*p);
+            if p.is_finite() {
+                min = min.min(p);
+                max = max.max(p);
+            }
+        }
+        // A box must never be a hair smaller than the triangles in it, or a cull loses blood.
+        let pad = Vec3::splat(1.0e-4) + (max - min) * 1.0e-4;
+        let to_local = xf.affine().inverse();
+        (min.is_finite() && max.is_finite() && to_local.is_finite()).then_some(Self { min: min - pad, max: max + pad, to_local })
+    }
+
+    /// **Whether the ray from `from` along `dir` can enter the box ahead of its origin**: the slab
+    /// test. Conservative: `true` is "cast at it", never "it lands", and a ray that cannot be tested
+    /// (not finite) is passed to the cast, which refuses it.
+    fn reached_by(&self, from: Vec3, dir: Vec3) -> bool {
+        let origin = self.to_local.transform_point3(from);
+        let d = self.to_local.transform_vector3(dir);
+        if !(origin.is_finite() && d.is_finite()) {
+            return true;
+        }
+        let (mut near, mut far) = (0.0f32, f32::INFINITY);
+        for axis in 0..3 {
+            if d[axis].abs() < 1.0e-12 {
+                if origin[axis] < self.min[axis] || origin[axis] > self.max[axis] {
+                    return false;
+                }
+            } else {
+                let (a, b) = ((self.min[axis] - origin[axis]) / d[axis], (self.max[axis] - origin[axis]) / d[axis]);
+                near = near.max(a.min(b));
+                far = far.min(a.max(b));
+                if near > far {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
+
 /// What [`dress`] visits: every [`Gore`] entity that has not been dressed yet.
 type Undressed<'w, 's> = Query<
     'w,
@@ -1169,6 +1228,8 @@ fn take_hits(
     // A skinned surface is posed once per batch, the first time a droplet is cast at it: a pose is a
     // pass over every vertex, and a batch of shots at one body would otherwise pose it once per shot.
     let mut posed: std::collections::HashMap<Entity, Option<Mesh>> = std::collections::HashMap::new();
+    // And each surface's box once per batch, for the same reason.
+    let mut bounds: std::collections::HashMap<Entity, Option<Bounds>> = std::collections::HashMap::new();
     let identity = GlobalTransform::IDENTITY;
     for hit in hits {
         let Ok((gore, mesh3d, xf, skin, flay, wet)) = bodies.get_mut(hit.entity) else { continue };
@@ -1341,8 +1402,16 @@ fn take_hits(
                 }
                 _ => {
                     let mut landed = Vec::new();
+                    // **Broad phase.** A droplet whose ray misses the surface's box cannot land on it,
+                    // and the box is one pass over the vertices once per batch where a cast is one
+                    // pass over the triangles once per droplet. A surface with no box (a mesh with no
+                    // positions) is cast at, so its refusal is still heard.
+                    let bound = bounds.entry(*other).or_insert_with(|| Bounds::of(other_mesh, other_xf));
                     for (i, d) in droplets.iter().enumerate().take(SPRAY_CAST) {
                         let dir = Vec3::new(d.dir[0], d.dir[1], d.dir[2]);
+                        if bound.as_ref().is_some_and(|b| !b.reached_by(at_world, dir)) {
+                            continue;
+                        }
                         let radius = crate::bloodstain::stain::stain_radius(d, d.speed, &dials.blood);
                         let shape = StainShape {
                             major: radius * 2.4,
@@ -2575,5 +2644,83 @@ mod tests {
         app.world_mut().run_schedule(FixedUpdate);
         let floor_wet = app.world().get::<WetCanvas>(floor).map(|w| w.wetted_area()).unwrap_or(0.0);
         assert!(floor_wet > 0.0, "nothing landed on the floor");
+    }
+
+    /// **A culled droplet would have missed.** The spray's broad phase tests each droplet's ray against
+    /// the surface's box before the cast, so a box a hair smaller than its mesh, or a slab test with an
+    /// axis wrong, loses blood without a sound. Four thousand deterministic rays at a sphere under a
+    /// scaled, turned and moved placement: every ray the mesh catches is one the box lets through, and
+    /// both outcomes are present in numbers, so the test cannot pass by culling nothing.
+    #[test]
+    fn the_broad_phase_never_culls_a_ray_the_mesh_would_catch() {
+        let mesh = Sphere::new(0.4).mesh().uv(16, 8);
+        let placement = Transform::from_xyz(0.7, -0.2, 1.1)
+            .with_rotation(Quat::from_euler(EulerRot::XYZ, 0.6, -1.1, 0.3))
+            .with_scale(Vec3::new(1.5, 0.5, 2.0));
+        let xf = GlobalTransform::from(placement);
+        let Some(bounds) = Bounds::of(&mesh, &xf) else { panic!("a sphere has a box") };
+        let (mut caught, mut turned_away) = (0, 0);
+        for i in 0..4000u32 {
+            let r = |k: u32| crate::hash_f32(i.wrapping_mul(7919).wrapping_add(k.wrapping_mul(104_729)));
+            let from = Vec3::new(r(1), r(2), r(3)) * 8.0 - Vec3::splat(4.0);
+            // Half the rays are aimed at somewhere near the mesh and half point anywhere, so some hit
+            // and some are turned away by the box.
+            let aimed = placement.translation + (Vec3::new(r(7), r(8), r(9)) * 2.0 - Vec3::ONE) * 0.7;
+            let dir = if i % 2 == 0 { aimed - from } else { Vec3::new(r(4), r(5), r(6)) * 2.0 - Vec3::ONE };
+            let reached = bounds.reached_by(from, dir);
+            let hit = ray_hit(&mesh, &xf, from, dir).is_some();
+            assert!(!hit || reached, "ray {i} from {from:?} along {dir:?} hits the mesh and the broad phase culled it");
+            caught += usize::from(hit);
+            turned_away += usize::from(!reached);
+        }
+        assert!(caught > 100 && turned_away > 1000, "{caught} rays hit and {turned_away} were culled: the test saw too little of one");
+    }
+
+    /// **A measurement, not a test**: milliseconds one `FixedUpdate` costs when it takes one hit, and
+    /// when it takes a shotgun's twelve, by how many dressed surfaces the world has. Every part is a
+    /// UV sphere, six to a character, so the surfaces overlap more than a body's would and the spray
+    /// reaches more of them. Run it with
+    /// `cargo test -p bevy_carnage --lib --release -- hit_cost_by_scene_size --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn hit_cost_by_scene_size() {
+        for (characters, rings) in [(1usize, 24u32), (1, 64), (10, 24), (40, 24)] {
+            let mut app = headless();
+            let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Sphere::new(0.3).mesh().uv(rings * 2, rings));
+            let tris = Sphere::new(0.3).mesh().uv(rings * 2, rings).indices().map(|i| i.len() / 3).unwrap_or(0);
+            let mut first = None;
+            for c in 0..characters {
+                for part in 0..6 {
+                    let at = Vec3::new((c % 8) as f32 * 1.5, 0.3 + part as f32 * 0.25, (c / 8) as f32 * 1.5);
+                    let e = app
+                        .world_mut()
+                        .spawn((Mesh3d(mesh.clone()), Transform::from_translation(at), GlobalTransform::from(Transform::from_translation(at)), Gore::skin(Region::Torso)))
+                        .id();
+                    first.get_or_insert(e);
+                }
+            }
+            let plane = app.world_mut().resource_mut::<Assets<Mesh>>().add(Plane3d::new(Vec3::Y, Vec2::splat(30.0)).mesh().build());
+            app.world_mut().spawn((Mesh3d(plane), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::floor().with_uv_per_metre(1.0 / 60.0)));
+            app.world_mut().run_schedule(FixedUpdate);
+            let Some(target) = first else { return };
+            for pellets in [1usize, 12] {
+                let mut times = Vec::new();
+                for shot in 0..8 {
+                    for pellet in 0..pellets {
+                        let from = Vec3::new(0.02 * (shot * pellets + pellet) as f32 - 0.1, 0.3 + 0.01 * pellet as f32, 3.0);
+                        app.world_mut().write_message(GoreHit::impact(target, from, Vec3::NEG_Z, 0.03, 0.5));
+                    }
+                    let t = std::time::Instant::now();
+                    app.world_mut().run_schedule(FixedUpdate);
+                    times.push(t.elapsed().as_secs_f64() * 1000.0);
+                }
+                times.sort_by(|a, b| a.total_cmp(b));
+                println!(
+                    "{characters:>3} characters x 6 parts of {tris} tris, {pellets:>2} hit(s) in one tick: median {:.2} ms, max {:.2} ms",
+                    times[times.len() / 2],
+                    times[times.len() - 1]
+                );
+            }
+        }
     }
 }

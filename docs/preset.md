@@ -98,6 +98,34 @@ and breaks a body that can break.
   `GoreDials::open_wounds` (16), and a hit inside one reopens it. A wound leaves the list once its
   bleed has clotted.
 
+## What it costs
+
+Milliseconds one `FixedUpdate` takes when it takes one hit, and when it takes a shotgun's twelve at
+one body, by how much is dressed. Release build, one Apple M5. Each part is a UV sphere, six to a
+character, closer together than a body's parts are, so the spray reaches more of them than it would.
+An idle tick in the same scenes is 0.03 to 0.06 ms. The left figure of each pair is 0.5.19, the right
+is 0.5.20.
+
+| dressed | one hit | twelve hits |
+|---|---|---|
+| 1 character, 6 parts of 2,208 triangles | 0.91 → 0.66 | 4.81 → 2.37 |
+| 1 character, 6 parts of 16,128 triangles | 1.70 → 0.74 | 19.44 → 3.10 |
+| 10 characters, 60 surfaces | 2.99 → 0.92 | 28.60 → 2.58 |
+| 40 characters, 240 surfaces | 9.91 → 1.35 | 129.10 → 26.53 |
+
+What was slow was the spray: each hit casts 24 droplets at every other dressed surface in the world,
+and each cast walked every triangle of it. A droplet is now tested against that surface's bounding
+box first, and cast only if its ray can enter it. The box is one pass over the vertices once per
+batch of hits, so a shotgun pays for it once. Nothing it skips could have landed, and the clips are
+byte-identical.
+
+What is left at 240 surfaces is the blood itself. Profiled while hits kept landing on 240
+canvases, `WetCanvas::shade`, `spread`, `tick` and `drip` were nearly all of the main thread and
+`ray_uv` was under two samples in a hundred. A wetmap costs what its blood covers, so a game that
+dresses only the characters near the player pays for those. The measurement is the ignored test
+`hit_cost_by_scene_size`: `cargo test -p bevy_carnage --lib --release -- hit_cost_by_scene_size
+--ignored --nocapture`.
+
 ## Known limits
 
 - **A skinned body that breaks throws its pieces in the bind pose.** The fracture is baked from the
