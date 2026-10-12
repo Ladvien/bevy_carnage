@@ -73,7 +73,19 @@ pub fn arg(flag: &str) -> Option<String> {
     None
 }
 
-/// The furniture every recorded scene shares: a key light, a fill, and a floor to land on.
+/// **The exposure the shared scene is lit for**: EV100 11.2, a stop and a half under Bevy's default.
+///
+/// Bevy multiplies by `2^-ev100 / 1.2` and lights a matte surface by `albedo · lux · cos / π`, so at
+/// the default 9.7 a white surface facing the 9 000 lux key came out at 2.9, not 1. Everything was
+/// lifted about threefold, so the floor had to be authored at 2 % — darker than fresh blood — to render
+/// mid-grey. Blood and cut faces, whose colours come from the crate's film model rather than from this
+/// file, were lifted into pink with it. At 11.2 that white surface renders at 1.04. The props are
+/// authored at albedos they plausibly have and render about as before, while blood keeps its own
+/// albedo and reads as dark against them.
+pub const SCENE_EXPOSURE: bevy::camera::Exposure = bevy::camera::Exposure { ev100: bevy::camera::Exposure::EV100_BLENDER + 1.5 };
+
+/// The furniture every recorded scene shares: a key light, a fill, a floor to land on, and the
+/// exposure the three are read at — set on every camera already spawned, so call this after them.
 pub fn light_and_floor(world: &mut World) {
     // **The fill is not a nicety.** With a single directional light, every surface turned away from
     // it renders at zero — and a cut face at zero, against a dark background, does not read as a
@@ -88,11 +100,17 @@ pub fn light_and_floor(world: &mut World) {
         DirectionalLight { illuminance: 9_000.0, shadow_maps_enabled: true, ..default() },
         Transform::from_xyz(4.0, 8.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+    let cameras: Vec<Entity> = world.query_filtered::<Entity, With<Camera3d>>().iter(world).collect();
+    for camera in cameras {
+        world.entity_mut(camera).insert(SCENE_EXPOSURE);
+    }
     let floor = world
         .resource_mut::<Assets<Mesh>>()
         .add(Mesh::from(Plane3d::default().mesh().size(14.0, 14.0)));
     let dark = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
-        base_color: Color::srgb(0.16, 0.16, 0.18),
+        // Raised with `SCENE_EXPOSURE` by a little more than its 2.83, because the constant specular
+        // share of a matte floor's brightness drops with the exposure and does not scale with albedo.
+        base_color: Color::srgb(0.33, 0.33, 0.36),
         perceptual_roughness: 0.95,
         ..default()
     });

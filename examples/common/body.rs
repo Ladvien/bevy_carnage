@@ -509,6 +509,11 @@ pub struct BodyMaterials {
     // file no longer owns a second, plainer way to draw blood on a floor.
 }
 
+/// **The blockout's skin.** One constant for every scene that draws the body, raised with
+/// [`super::SCENE_EXPOSURE`] by its 2.83 and a little more for the specular share the exposure takes,
+/// so it renders the blue it always did.
+pub const SKIN: Color = Color::srgb(0.52, 0.71, 0.87);
+
 impl BodyMaterials {
     pub fn new(world: &mut World) -> BodyMaterials {
         let aim = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
@@ -517,7 +522,7 @@ impl BodyMaterials {
             ..default()
         });
         BodyMaterials {
-            skin: material(world, Color::srgb(0.30, 0.42, 0.52), 0.85),
+            skin: material(world, SKIN, 0.85),
             // **Darker and much glossier than a "red material".** At roughness 0.55 a flat cut face
             // is lit evenly across its whole area, which is what stone and ice look like; dropping it
             // to 0.25 puts a moving highlight on each face instead, and that specular travel is most

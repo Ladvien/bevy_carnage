@@ -199,7 +199,7 @@ enum Tint {
 
 /// The intact subject wears the neutral skin — it has no verdict, because it has not been cut.
 fn spawn_intact(world: &mut World) {
-    let skin = material(world, Color::srgb(0.30, 0.42, 0.52), 0.85);
+    let skin = material(world, body::SKIN, 0.85);
     for (mesh, xform) in body::subject() {
         let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
         world.spawn((
@@ -242,7 +242,7 @@ fn break_it(rec: &mut Recorder, tint: Tint) {
             .map(|v| {
                 let color = match tint {
                     Tint::Audit => v.color(),
-                    Tint::Demo => Color::srgb(0.30, 0.42, 0.52),
+                    Tint::Demo => body::SKIN,
                 };
                 (v, material(world, color, 0.85))
             })
