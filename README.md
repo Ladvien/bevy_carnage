@@ -340,7 +340,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.12`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.13`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.13` changed: a wetmap costs what its blood covers
+
+`WetCanvas::tick` ran its four passes over every texel, every tick, so a body dressed by the preset paid about 0.44 ms per 128² canvas per tick even with no blood on it: 17.7 ms a tick for 40 parts, on an x86_64 host. A canvas now runs its passes over the rectangle its blood is in, grown by the two texels one tick can move it, and skips a tick entirely while it is still, meaning all its blood has set or it has none. `WetCanvas::is_still` reports that state. Idle canvases now cost effectively nothing, and freshly shot ones about 1/38 of what they did. Every result is bit-identical: no digest, image or frame moved.
 
 ### What `0.5.12` changed: blood runs down, and wounds bleed
 

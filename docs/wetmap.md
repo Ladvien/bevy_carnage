@@ -36,6 +36,8 @@ Both moving passes read a snapshot taken at their own top and write disjoint slo
 
 **Dry paint does not move.** Wetness gates every change to `amount` in passes 1–3, which is what makes a run stop where it stopped rather than creeping forever, and what stops a dried crust from soaking away.
 
+**A tick costs what the blood covers, not what the canvas covers.** A canvas keeps the smallest rectangle holding every texel with blood in it. Since one tick moves blood at most two texels (drip one, then spread one more), the passes run over that rectangle grown by two, and every other texel is zero and would stay zero. A canvas whose blood has all set, or that has none, is a fixed point, so `tick` returns at once until a paint or a change of settings wakes it, and `is_still` reports it. Both are exact: the canvas's buffer, images and digest are what four passes over every texel produce, and `the_live_rectangle_changes_nothing_but_the_cost` checks that tick for tick. Measured on 40 canvases of 128² on an x86_64 Linux host: idle, 17.7 ms a tick became effectively nothing; each shot once, 18.0 ms became 0.47 ms.
+
 `lib.rs` is `#![doc = include_str!("../README.md")]`, so this is a doctest and the compiler checks it:
 
 ```rust
