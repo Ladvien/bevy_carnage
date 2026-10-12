@@ -78,7 +78,9 @@ pub fn setup(
     commands.spawn((
         Mesh3d(limb_mesh),
         MeshMaterial3d(limb_mat),
-        Transform::from_xyz(-0.85, 0.0, 0.0).with_rotation(Quat::from_rotation_z(FRAC_PI_2)),
+        // Lying on the slab: its axis one radius above the floor at −0.35. At y = 0 it hung 19 cm
+        // above its own shadow (R1-63).
+        Transform::from_xyz(-0.85, -0.19, 0.0).with_rotation(Quat::from_rotation_z(FRAC_PI_2)),
         limb_wet,
         Limb,
     ));
