@@ -47,6 +47,27 @@ pub const EXPOSURE: bevy::camera::Exposure = bevy::camera::Exposure { ev100: bev
 /// does not reach renders as it did rather than three and a half times darker.
 pub const AMBIENT: f32 = 910.0;
 
+/// **Where the windowed demos' camera stands, `seconds` in**: a slow sweep across the front, never an
+/// orbit.
+///
+/// Every hit the scene scripts lands on the body's front, and the sun stands front-left, so a full
+/// orbit spent half of every lap on the side where no wound shows and only the fill lights the body:
+/// one flat brown shape (R1-12). It also passed behind the sheet, which stands front-right, and lost
+/// the body below the shoulders for seconds at a time (R1-13). The sweep stays between 70° left and
+/// 5° right of straight ahead: every wound is lit and in view, and the sheet stands beside the body.
+/// Past about 10° right it starts to cover the right arm and the scalded thigh. One swing takes 25 s.
+pub fn sweep(seconds: f32) -> Transform {
+    view(-0.57 + 0.65 * (seconds * 0.25).sin())
+}
+
+/// The camera on the sweep's circle, `angle` radians right of straight ahead. Aimed low and in front
+/// of the body rather than at its chest, because the spatter a torso shot throws lands on the floor
+/// in front of it, and aimed at the chest the frame cut most of it off at the bottom.
+pub fn view(angle: f32) -> Transform {
+    Transform::from_xyz(2.9 * angle.sin() + 0.3, 1.5, 2.9 * angle.cos())
+        .looking_at(Vec3::new(0.15, 0.55, 0.3), Vec3::Y)
+}
+
 /// Spawn everything. `skin` is the body's own material; the preset dresses over it.
 pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
     let skin = materials.add(StandardMaterial {
@@ -117,9 +138,11 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut
         Transform::from_xyz(-1.5, 4.0, 3.0).looking_at(Vec3::new(0.0, 0.8, 0.0), Vec3::Y),
         Sun,
     ));
-    // **A fill from the far side**, a quarter of the sun and unshadowed. With the sun alone the orbit's
-    // back half saw only ambient, and the whole body read as one flat dark brown with no face of it
-    // telling from another (R1-12). Marked `Sun` so a reset despawns it with the rest of the scene.
+    // **A fill from the far side**, a quarter of the sun and unshadowed. With the sun alone every face
+    // turned from it saw only ambient, and from the back the whole body read as one flat dark brown
+    // (R1-12). The demos no longer go round the back (see [`sweep`]), but the faces the sun misses on
+    // the right still read as shaped rather than flat. Marked `Sun` so a reset despawns it with the
+    // rest of the scene.
     commands.spawn((
         DirectionalLight { illuminance: 2_750.0, shadow_maps_enabled: false, ..default() },
         Transform::from_xyz(1.5, 2.5, -3.0).looking_at(Vec3::new(0.0, 0.8, 0.0), Vec3::Y),

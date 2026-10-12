@@ -30,7 +30,10 @@ const FRAMES: u32 = 360;
 
 fn main() {
     let out = common::arg("--out").unwrap_or_else(|| "frames-preset".to_string());
-    let camera = Transform::from_xyz(1.1, 1.5, 2.9).looking_at(Vec3::new(0.15, 0.7, 0.0), Vec3::Y);
+    // On the windowed demos' sweep, near straight ahead: the body, the sheet beside it and the floor
+    // spatter in front all in frame. From the old (1.1, 1.5, 2.9) the sheet stood in front of the
+    // right arm and the scalded thigh for the whole clip (R1-13).
+    let camera = common::preset_scene::view(-0.08);
     let Some(mut rec) = Recorder::new_with(800, 500, camera, &out, |app| {
         // **The clock is the frame, not the wall.** The preset runs on `FixedUpdate`; with the default
         // real-time strategy the number of fixed ticks per recorded frame depends on how long the

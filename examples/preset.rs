@@ -31,13 +31,13 @@ fn main() {
         .add_plugins(GorePlugin)
         .insert_resource(Time::<Fixed>::from_hz(60.0))
         .add_systems(Startup, setup)
-        .add_systems(Update, (keys, orbit))
+        .add_systems(Update, (keys, sweep))
         .configure_sets(FixedUpdate, GoreSystems)
         .run();
 }
 
 #[derive(Component)]
-struct Orbit;
+struct Sweep;
 
 /// How many shots have landed on the torso, so each lands a hair from the last.
 #[derive(Resource, Default)]
@@ -46,10 +46,10 @@ struct Shots(u32);
 fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(1.1, 1.5, 2.9).looking_at(Vec3::new(0.15, 0.7, 0.0), Vec3::Y),
+        preset_scene::sweep(0.0),
         AmbientLight { brightness: preset_scene::AMBIENT, ..default() },
         preset_scene::EXPOSURE,
-        Orbit,
+        Sweep,
     ));
     commands.init_resource::<Shots>();
     preset_scene::spawn(&mut commands, &mut meshes, &mut materials);
@@ -105,9 +105,8 @@ fn keys(
     }
 }
 
-fn orbit(time: Res<Time>, mut cams: Query<&mut Transform, With<Orbit>>) {
-    let t = time.elapsed_secs() * 0.15;
+fn sweep(time: Res<Time>, mut cams: Query<&mut Transform, With<Sweep>>) {
     for mut tf in &mut cams {
-        *tf = Transform::from_xyz(2.9 * t.sin() + 0.3, 1.5, 2.9 * t.cos()).looking_at(Vec3::new(0.15, 0.7, 0.0), Vec3::Y);
+        *tf = preset_scene::sweep(time.elapsed_secs());
     }
 }
