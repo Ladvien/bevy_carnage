@@ -540,27 +540,49 @@ WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-carnage docs/carnage.g
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-flesh   docs/flesh.gif ""
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-preset  docs/preset.gif ""
 
-# `fracture_modes.gif` is `capture_gore`'s second clip, frames 90-179, renumbered from frame0000.
+# `cross_section.gif` is `capture_gore`'s first clip, frames 0-89, renumbered from frame0000.
 cargo run --release --example capture_gore -- --out frames-gore
+mkdir -p frames-xs && for n in $(seq 0 89); do
+  cp "frames-gore/frame$(printf %04d "$n").png" "frames-xs/frame$(printf %04d "$n").png"; done
+WIDTH=480 LEGEND=none tools/gif.sh frames-xs docs/cross_section.gif ""
+
+# `fracture_modes.gif` is the same run's second clip, frames 90-179, renumbered the same way.
 mkdir -p frames-modes && for n in $(seq 90 179); do
   cp "frames-gore/frame$(printf %04d "$n").png" "frames-modes/frame$(printf %04d $((n - 90))).png"; done
 WIDTH=480 LEGEND=none tools/gif.sh frames-modes docs/fracture_modes.gif ""
 
-# `laceration.gif` is the same run's fourth clip, frames 300-419, renumbered the same way.
+# `flaymap.gif` is the third clip, frames 180-299.
+mkdir -p frames-flay && for n in $(seq 180 299); do
+  cp "frames-gore/frame$(printf %04d "$n").png" "frames-flay/frame$(printf %04d $((n - 180))).png"; done
+WIDTH=480 LEGEND=none tools/gif.sh frames-flay docs/flaymap.gif ""
+
+# `laceration.gif` is the fourth clip, frames 300-419.
 mkdir -p frames-lac && for n in $(seq 300 419); do
   cp "frames-gore/frame$(printf %04d "$n").png" "frames-lac/frame$(printf %04d $((n - 300))).png"; done
 WIDTH=480 LEGEND=none tools/gif.sh frames-lac docs/laceration.gif ""
+
+# `spectral.gif` and `wetmap.gif` are `capture_family`'s two clips: frames 0-149, every second one,
+# and frames 150-389, renumbered from frame0000.
+cargo run --release --example capture_family -- --out frames-family
+mkdir -p frames-spectral frames-wet && for n in $(seq 0 149); do
+  cp "frames-family/frame$(printf %04d "$n").png" "frames-spectral/frame$(printf %04d "$n").png"; done
+for n in $(seq 150 389); do
+  cp "frames-family/frame$(printf %04d "$n").png" "frames-wet/frame$(printf %04d $((n - 150))).png"; done
+WIDTH=480 STRIDE=2 LEGEND=none tools/gif.sh frames-spectral docs/spectral.gif ""
+WIDTH=480 LEGEND=none tools/gif.sh frames-wet docs/wetmap.gif ""
 
 # `viscera.gif` is `capture_entrails` whole, every second frame at 30 fps.
 cargo run --release --example capture_entrails -- --out frames-entrails
 WIDTH=480 FPS=30 STRIDE=2 LEGEND=none tools/gif.sh frames-entrails docs/viscera.gif ""
 ```
 
-**`carnage` is the one clip with `STRIDE`, and the reason is length.** It has to run long enough to
-*show* a wound clot, which the shipped `clot_ticks = 360` puts at six seconds — 382 frames against the
-other clips' ~180. A GIF stores whole frames, so its size is very nearly linear in frame count, and at
-`STRIDE=1` it came out at 6.2 MB against their 1.3–1.8 MB. `STRIDE=2` keeps every second frame and
-`FPS=60` re-times what is left, so the clip plays at the same speed as the others at half the bytes.
+**`carnage`, `flesh` and `preset` use `STRIDE=2` with `FPS=60`, and the reason is length.** `carnage`
+has to run long enough to *show* a wound clot, which the shipped `clot_ticks = 360` puts at six seconds
+— 382 frames against the fracture clips' ~100-180. A GIF stores whole frames, so its size is very
+nearly linear in frame count, and at `STRIDE=1` it came out at 6.2 MB against their 1.3–1.8 MB.
+`STRIDE=2` keeps every second frame and `FPS=60` re-times what is left, so the clip plays at the same
+speed as the others at half the bytes. `viscera` and `spectral` keep every second frame at 30 fps
+instead, and play at double speed.
 
 **Run `capture_carnage` twice and compare its final line.** It prints
 `carnage: frames=… wounds=… stains=… digest=…`, and an identical digest is the determinism check for
