@@ -340,7 +340,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.15`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.16`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.16` changed: every wound bleeds, from where it is
+
+Under the preset, a second hit on a body part replaced the first wound, which stopped bleeding mid-pulse. Each pulse also re-cast the hit's world ray, so a body that had moved since bled from where it used to stand, or not at all. A part's open wounds are now the `Wounds` component. Each wound is found once, as a UV on the wetmap and a point on the mesh, and it pulses there and drips from where that point is now, however the body moves. A hit inside an open wound reopens it. A wound leaves once its bleed has clotted, and `GoreDials::open_wounds` (16) bounds a burst of fire. **API:** `WoundSite` holds `uv` and `at_local` where it held the ray. `Soaking::landings` holds UVs. `WetCanvas::paint_world` and `paint_world_with` return `Option<Vec2>`, the UV they painted, where they returned `bool`. The preset clip now grazes the chest before the shots, and `preset.gif` is re-recorded.
 
 ### What `0.5.15` changed: a textured character keeps its skin
 

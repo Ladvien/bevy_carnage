@@ -195,17 +195,40 @@ pub struct Dressed {
     pub original: Option<Handle<StandardMaterial>>,
 }
 
-/// A wound the preset is bleeding, on this entity's wetmap.
-#[derive(Component, Clone, Copy, Debug)]
+/// **One wound the preset is bleeding**, found once, where the hit landed.
+#[derive(Clone, Copy, Debug)]
 pub struct WoundSite {
-    /// The ray that made the wound, world; every pulse is painted through it again.
-    pub from: Vec3,
-    /// Its direction.
-    pub dir: Vec3,
-    /// The wound in world space, for the pulse schedule and the stains it throws.
+    /// Where the wound is on this entity's wetmap. Every pulse is painted here. The spot belongs to
+    /// the skin, so a body that walks, turns or falls after the hit keeps bleeding from its wound.
+    /// Until 0.5.16 each pulse re-cast the hit's world ray, which on a moved body landed elsewhere
+    /// or nowhere.
+    pub uv: Vec2,
+    /// Where the wound is on the mesh, mesh-local, so what runs off falls from where the wound is now.
+    pub at_local: Vec3,
+    /// The wound as it opened, world space: the pulse schedule's seed and severity.
     pub wound: BloodWound,
     /// The schedule.
     pub bleed: crate::bloodstain::Bleed,
+}
+
+/// **Every wound this entity is bleeding**, oldest first. A hit away from the open wounds opens a
+/// new one beside them; until 0.5.16 it replaced the last, and that wound stopped bleeding
+/// mid-pulse. A hit inside an open wound reopens it: its bleed starts again from the spurt, rather
+/// than a second schedule pulsing the same hole. A wound leaves the list once its perfusion envelope
+/// reaches zero, after which it can never pulse again, and past [`GoreDials::open_wounds`] the
+/// oldest stops bleeding.
+#[derive(Component, Clone, Debug, Default)]
+pub struct Wounds(pub Vec<WoundSite>);
+
+impl Wounds {
+    /// Open `site`: it replaces any open wound within `reach_uv` of it, and the oldest past `cap`
+    /// stop.
+    fn open(&mut self, site: WoundSite, reach_uv: f32, cap: usize) {
+        self.0.retain(|s| s.uv.distance(site.uv) > reach_uv);
+        self.0.push(site);
+        let excess = self.0.len().saturating_sub(cap);
+        self.0.drain(..excess);
+    }
 }
 
 /// **A body built at runtime that the preset may break.** For a body that is a loaded scene, put
@@ -428,8 +451,8 @@ pub struct Bruising {
 /// widens the stain over the seconds after it lands.
 #[derive(Component, Debug, Default)]
 pub struct Soaking {
-    /// `(ray origin, ray direction, silhouette in metres, tick it landed)` per landing still spreading.
-    pub landings: Vec<(Vec3, Vec3, StainShape, u32)>,
+    /// `(UV it landed at, silhouette in metres, tick it landed)` per landing still spreading.
+    pub landings: Vec<(Vec2, StainShape, u32)>,
 }
 
 /// A thrown fragment the preset integrates.
@@ -480,6 +503,10 @@ pub struct GoreDials {
     /// integrated at hit time under still air — damage accrues after the heat is removed, and this
     /// is how much of that the hit accounts for at once.
     pub burn_cooling_s: f32,
+    /// **How many wounds one surface bleeds from at once.** A hit past this stops the oldest
+    /// bleeding; a wound also stops once its bleed has clotted. Each pulse costs one stamp on the
+    /// surface and one drip on each floor, so this bounds what a burst of fire into one part costs.
+    pub open_wounds: usize,
 }
 
 impl Default for GoreDials {
@@ -498,6 +525,7 @@ impl Default for GoreDials {
             floor_canvas: 256,
             bruise_hours_per_tick: 0.02,
             burn_cooling_s: 5.0,
+            open_wounds: 16,
         }
     }
 }
@@ -926,9 +954,10 @@ fn take_hits(
             direction: [0.0, 1.0],
             seed,
         };
+        let mut painted = None;
         if let Some(mut wet) = wet {
             let texels = wet.size();
-            let _ = wet.paint_world_with(&mesh, xf, hit.from, hit.dir, &shape_on(gore, &shape, texels), tick, &edges);
+            painted = wet.paint_world_with(&mesh, xf, hit.from, hit.dir, &shape_on(gore, &shape, texels), tick, &edges);
         }
         // What the wound throws lands on everything else: the closed-form stains on every floor, and
         // the spray's own droplets cast straight at every other dressed surface for what a floor's
@@ -972,10 +1001,11 @@ fn take_hits(
                             seed: seed.wrapping_add(i as u32),
                         };
                         let texels = other_wet.size();
-                        if other_wet.paint_world_with(other_mesh, other_xf, at_world, dir, &shape_on(other_gore, &shape, texels), tick, &edges)
+                        if let Some(uv) =
+                            other_wet.paint_world_with(other_mesh, other_xf, at_world, dir, &shape_on(other_gore, &shape, texels), tick, &edges)
                             && other_gore.kind == GoreKind::Cloth
                         {
-                            landed.push((at_world, dir, shape, tick));
+                            landed.push((uv, shape, tick));
                         }
                     }
                     if !landed.is_empty()
@@ -990,12 +1020,23 @@ fn take_hits(
                 }
             }
         }
-        commands.entity(hit.entity).try_insert(WoundSite {
-            from: hit.from,
-            dir: hit.dir,
-            wound,
-            bleed: crate::bloodstain::Bleed::new(tick, &wound),
-        });
+        // The wound bleeds from where it opened on the skin: beside the ones it already has, or in
+        // place of one it landed inside. Silenced, as `try_insert` is: an earlier hit this tick may
+        // have broken the body and despawned the part.
+        if let (Some(uv), Some(at_local)) = (painted, at_local)
+            && let Ok(mut e) = commands.get_entity(hit.entity)
+        {
+            let site = WoundSite { uv, at_local, wound, bleed: crate::bloodstain::Bleed::new(tick, &wound) };
+            let (reach, cap) = (hit.radius_m * gore.uv_per_metre, dials.open_wounds);
+            e.queue_silenced(move |mut e: EntityWorldMut| match e.get_mut::<Wounds>() {
+                Some(mut wounds) => wounds.open(site, reach, cap),
+                None => {
+                    let mut wounds = Wounds::default();
+                    wounds.open(site, reach, cap);
+                    e.insert(wounds);
+                }
+            });
+        }
         wounded.write(Wounded {
             at: at_world,
             normal: normal_world,
@@ -1271,50 +1312,59 @@ fn bleed(
     dials: Res<GoreDials>,
     wet_settings: Option<Res<WetSettings>>,
     meshes: Res<Assets<Mesh>>,
-    mut sites: Query<(&Gore, &WoundSite, &Mesh3d, &GlobalTransform, &mut WetCanvas), Without<FloorTag>>,
+    mut sites: Query<(&Gore, &mut Wounds, &GlobalTransform, &mut WetCanvas), Without<FloorTag>>,
     mut floors: Query<(&Gore, &Mesh3d, &GlobalTransform, &mut WetCanvas), With<FloorTag>>,
 ) {
     let tick = clock.0;
     let edges = edge_settings(&dials, wet_settings.as_deref());
-    for (gore, site, mesh3d, xf, mut wet) in &mut sites {
-        let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
-        let Some(pulse) = crate::bloodstain::bleed::pulse_wound(&site.bleed, &site.wound, tick, dials.hz, &dials.blood) else {
-            continue;
-        };
-        let r = (site.wound.area / core::f32::consts::PI).sqrt().max(0.002) * (0.6 + pulse.severity);
-        let shape = StainShape {
-            major: r * 1.6,
-            minor: r,
-            spines: 0,
-            satellites: 0,
-            direction: [0.0, 1.0],
-            seed: site.bleed.seed ^ tick,
-        };
-        let texels = wet.size();
-        let _ = wet.paint_world_with(mesh, xf, site.from, site.dir, &shape_on(gore, &shape, texels), tick, &edges);
-        // What runs off falls straight down: one drip per systole under the wound, sized the way
-        // `crate::bloodstain::patterns::drip_trail` sizes a drip, onto every floor — so a pool grows under a
-        // wound that keeps bleeding, and the wetmap's own spread does the pooling.
-        let drop = crate::bloodstain::Droplet {
-            dir: [0.0, -1.0, 0.0],
-            speed: crate::bloodstain::patterns::DRIP_FALL_SPEED,
-            diameter: crate::bloodstain::patterns::DRIP_DIAMETER_M,
-        };
-        let radius = crate::bloodstain::stain::stain_radius(&drop, crate::bloodstain::patterns::DRIP_FALL_SPEED, &dials.blood);
-        let wobble = |k: u32| (crate::bloodstain::hash_f32(site.bleed.seed ^ tick.wrapping_mul(0x9E37_79B9) ^ k) - 0.5) * 0.04;
-        let at = Vec3::new(site.wound.at[0] + wobble(1), site.wound.at[1], site.wound.at[2] + wobble(2));
-        for (floor_gore, floor_mesh, floor_xf, mut floor_wet) in &mut floors {
-            let Some(floor_mesh) = meshes.get(&floor_mesh.0) else { continue };
-            let drip = StainShape {
-                major: radius * 2.0,
-                minor: radius * 2.0,
+    for (gore, mut wounds, xf, mut wet) in &mut sites {
+        // A wound whose perfusion envelope has reached zero can never pulse again: the driving
+        // stress is zero from then on, and no yield stress is below it.
+        let spent = |s: &WoundSite| crate::bloodstain::bleed::envelope(s.bleed.age(tick), &dials.blood) <= 0.0;
+        if wounds.0.iter().any(spent) {
+            wounds.0.retain(|s| !spent(s));
+        }
+        for site in &wounds.0 {
+            let Some(pulse) = crate::bloodstain::bleed::pulse_wound(&site.bleed, &site.wound, tick, dials.hz, &dials.blood) else {
+                continue;
+            };
+            let r = (site.wound.area / core::f32::consts::PI).sqrt().max(0.002) * (0.6 + pulse.severity);
+            let shape = StainShape {
+                major: r * 1.6,
+                minor: r,
                 spines: 0,
                 satellites: 0,
                 direction: [0.0, 1.0],
                 seed: site.bleed.seed ^ tick,
             };
-            let texels = floor_wet.size();
-            let _ = floor_wet.paint_world_with(floor_mesh, floor_xf, at, Vec3::NEG_Y, &shape_on(floor_gore, &drip, texels), tick, &edges);
+            let texels = wet.size();
+            wet.paint_uv_with(site.uv, &shape_on(gore, &shape, texels), tick, &edges);
+            // What runs off falls straight down from where the wound is now: one drip per systole,
+            // sized the way `crate::bloodstain::patterns::drip_trail` sizes a drip, onto every floor —
+            // so a pool grows under a wound that keeps bleeding, and the wetmap's own spread does the
+            // pooling.
+            let drop = crate::bloodstain::Droplet {
+                dir: [0.0, -1.0, 0.0],
+                speed: crate::bloodstain::patterns::DRIP_FALL_SPEED,
+                diameter: crate::bloodstain::patterns::DRIP_DIAMETER_M,
+            };
+            let radius = crate::bloodstain::stain::stain_radius(&drop, crate::bloodstain::patterns::DRIP_FALL_SPEED, &dials.blood);
+            let wobble = |k: u32| (crate::bloodstain::hash_f32(site.bleed.seed ^ tick.wrapping_mul(0x9E37_79B9) ^ k) - 0.5) * 0.04;
+            let now = xf.transform_point(site.at_local);
+            let at = Vec3::new(now.x + wobble(1), now.y, now.z + wobble(2));
+            for (floor_gore, floor_mesh, floor_xf, mut floor_wet) in &mut floors {
+                let Some(floor_mesh) = meshes.get(&floor_mesh.0) else { continue };
+                let drip = StainShape {
+                    major: radius * 2.0,
+                    minor: radius * 2.0,
+                    spines: 0,
+                    satellites: 0,
+                    direction: [0.0, 1.0],
+                    seed: site.bleed.seed ^ tick,
+                };
+                let texels = floor_wet.size();
+                let _ = floor_wet.paint_world_with(floor_mesh, floor_xf, at, Vec3::NEG_Y, &shape_on(floor_gore, &drip, texels), tick, &edges);
+            }
         }
     }
 }
@@ -1360,25 +1410,24 @@ fn linear(c: [f32; 3]) -> [f32; 3] {
     [d(c[0]), d(c[1]), d(c[2])]
 }
 
-/// **Widen every landing on cloth** along the Lucas–Washburn front until it stops moving.
+/// **Widen every landing on cloth** along the Lucas–Washburn front until it stops moving, at the UV
+/// it landed on, so a sheet that moves keeps soaking where the blood is.
 fn soak_cloth(
     clock: Res<GoreClock>,
     dials: Res<GoreDials>,
     wet_settings: Option<Res<WetSettings>>,
-    meshes: Res<Assets<Mesh>>,
-    mut cloth: Query<(&Gore, &Mesh3d, &GlobalTransform, &mut Soaking, &mut WetCanvas)>,
+    mut cloth: Query<(&Gore, &mut Soaking, &mut WetCanvas)>,
 ) {
     let tick = clock.0;
     let sheet = crate::bloodstain::wick::Sheet::default();
     let edges = edge_settings(&dials, wet_settings.as_deref());
-    for (gore, mesh3d, xf, mut soaking, mut wet) in &mut cloth {
+    for (gore, mut soaking, mut wet) in &mut cloth {
         if soaking.landings.is_empty() {
             continue;
         }
-        let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
         let hz = dials.hz.max(1) as f32;
         let mut keep = Vec::with_capacity(soaking.landings.len());
-        for (from, dir, shape, landed) in soaking.landings.drain(..) {
+        for (uv, shape, landed) in soaking.landings.drain(..) {
             let t_s = tick.wrapping_sub(landed) as f32 / hz;
             // Every fourth tick, to keep the stamping cheap; the front is √t so it barely moves late.
             if tick.wrapping_sub(landed) % 4 == 0 {
@@ -1393,10 +1442,10 @@ fn soak_cloth(
                 let texels = wet.size();
                 // Stamped with the current tick: the tick is the upload budget's sort key, and a
                 // landing-tick stamp would let a sheet jump the queue by up to `SOAK_SECONDS`.
-                let _ = wet.paint_world_with(mesh, xf, from, dir, &shape_on(gore, &grown, texels), tick, &edges);
+                wet.paint_uv_with(uv, &shape_on(gore, &grown, texels), tick, &edges);
             }
             if t_s < SOAK_SECONDS {
-                keep.push((from, dir, shape, landed));
+                keep.push((uv, shape, landed));
             }
         }
         soaking.landings = keep;
@@ -1501,7 +1550,7 @@ mod tests {
         assert!(tangents, "a dressed skin's mesh has the tangents its crater normal map needs");
         app.world_mut().write_message(GoreHit::impact(body, Vec3::new(0.0, 0.0, 2.0), Vec3::NEG_Z, 0.03, 5.0));
         app.world_mut().run_schedule(FixedUpdate);
-        let site = app.world().get::<WoundSite>(body).copied();
+        let site = app.world().get::<Wounds>(body).and_then(|w| w.0.first().copied());
         assert!(site.is_some(), "a hit opens a wound");
         if let Some(site) = site {
             // The ray came down −Z onto a sphere at the origin: the wound sits on its +Z face and faces +Z.
@@ -1510,6 +1559,57 @@ mod tests {
         }
         let wet = app.world().get::<WetCanvas>(body).map(|w| w.wetted_area()).unwrap_or(0.0);
         assert!(wet > 0.0, "the hit painted blood");
+    }
+
+    /// **A second hit on a part opens a second wound; it does not close the first.** Both stay open
+    /// and each sits where its own ray landed. A third hit inside the first wound reopens that one
+    /// instead of stacking a second schedule on the same hole.
+    #[test]
+    fn a_second_wound_does_not_close_the_first() {
+        let mut app = headless();
+        let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.6, 0.6, 0.2).mesh().build());
+        let body = app.world_mut().spawn((Mesh3d(mesh), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Torso))).id();
+        app.world_mut().run_schedule(FixedUpdate);
+        let (left, right) = (Vec3::new(-0.15, 0.1, 2.0), Vec3::new(0.15, -0.1, 2.0));
+        for from in [left, right] {
+            app.world_mut().write_message(GoreHit::impact(body, from, Vec3::NEG_Z, 0.02, 5.0));
+            app.world_mut().run_schedule(FixedUpdate);
+        }
+        let open: Vec<WoundSite> = app.world().get::<Wounds>(body).map(|w| w.0.clone()).unwrap_or_default();
+        assert_eq!(open.len(), 2, "the second hit closed the first wound");
+        assert!(open[0].at_local.x < -0.1 && open[1].at_local.x > 0.1, "each wound sits where its own ray landed: {:?}", open.iter().map(|s| s.at_local).collect::<Vec<_>>());
+        assert!(open[0].uv.distance(open[1].uv) > 0.1, "the two wounds share a spot on the canvas");
+        app.world_mut().write_message(GoreHit::impact(body, left + Vec3::new(0.005, 0.0, 0.0), Vec3::NEG_Z, 0.02, 5.0));
+        app.world_mut().run_schedule(FixedUpdate);
+        let open: Vec<WoundSite> = app.world().get::<Wounds>(body).map(|w| w.0.clone()).unwrap_or_default();
+        assert_eq!(open.len(), 2, "a hit inside an open wound stacked a second schedule on it");
+        assert!(open[1].at_local.x < -0.1 && open[1].bleed.opened_at > open[0].bleed.opened_at, "the left wound was not the one reopened");
+    }
+
+    /// **A body that moves after the hit bleeds exactly as one that stood still.** The wound is a
+    /// spot on the skin, so where the body went does not change what its wetmap receives. Before
+    /// 0.5.16 every pulse re-cast the hit's world ray, which here misses the moved body entirely.
+    #[test]
+    fn a_body_that_moves_keeps_bleeding_from_its_wound() {
+        let run = |moved: bool| {
+            let mut app = headless();
+            let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.6, 0.6, 0.2).mesh().build());
+            let body = app.world_mut().spawn((Mesh3d(mesh), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Torso))).id();
+            app.world_mut().run_schedule(FixedUpdate);
+            app.world_mut().write_message(GoreHit::impact(body, Vec3::new(0.0, 0.0, 2.0), Vec3::NEG_Z, 0.03, 5.0));
+            app.world_mut().run_schedule(FixedUpdate);
+            if moved {
+                let away = GlobalTransform::from(Transform::from_xyz(5.0, 0.0, 0.0).with_rotation(Quat::from_rotation_y(1.2)));
+                app.world_mut().entity_mut(body).insert(away);
+            }
+            for _ in 0..240 {
+                app.world_mut().run_schedule(FixedUpdate);
+            }
+            app.world().get::<WetCanvas>(body).map(|w| w.digest())
+        };
+        let still = run(false);
+        assert!(still.is_some(), "the body has no wetmap");
+        assert_eq!(run(true), still, "the moved body's wound bled differently from the one that stood still");
     }
 
     /// **A skin whose mesh is still streaming is dressed once it lands**, not before — so it is never
@@ -1656,7 +1756,7 @@ mod tests {
         for _ in 0..8 {
             app.world_mut().run_schedule(FixedUpdate);
         }
-        assert!(app.world().get::<WoundSite>(bruised).is_none() && app.world().get::<WoundSite>(burnt).is_none(), "neither bleeds");
+        assert!(app.world().get::<Wounds>(bruised).is_none() && app.world().get::<Wounds>(burnt).is_none(), "neither bleeds");
         let hours = app.world().get::<Bruising>(bruised).map(|b| b.bruise.hours()).unwrap_or(0.0);
         assert!(hours >= 6.0, "the bruise aged {hours} h");
         let dermis = app.world().get::<DermisCanvas>(bruised).map(|d| d.px.clone()).unwrap_or_default();

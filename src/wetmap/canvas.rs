@@ -402,10 +402,12 @@ impl WetCanvas {
     /// of `ATTRIBUTE_UV_0`. The ray is moved into mesh space by one inverse transform rather than the
     /// geometry being moved into world space.
     ///
-    /// Returns `false` when the ray misses, and `false` with **one warning per mesh** when the mesh
+    /// **Returns the UV it painted at**, so a caller can paint the same spot again by
+    /// [`paint_uv_with`](Self::paint_uv_with) after the actor has moved and the ray no longer lands
+    /// there. `None` when the ray misses, and `None` with **one warning per mesh** when the mesh
     /// cannot carry a wetmap at all — no `Float32x2` UV0, no `Float32x3` positions, or not a triangle
     /// list. That refusal is the point: a mesh without UVs makes every drop of blood a caller paints
-    /// land nowhere, and returning `true` after painting nothing would hide it.
+    /// land nowhere, and reporting a spot after painting nothing would hide it.
     pub fn paint_world(
         &mut self,
         mesh: &Mesh,
@@ -414,7 +416,7 @@ impl WetCanvas {
         dir: Vec3,
         shape: &StainShape,
         tick: u32,
-    ) -> bool {
+    ) -> Option<Vec2> {
         self.cast(mesh, xf, from, dir, shape, tick, 1)
     }
 
@@ -432,7 +434,7 @@ impl WetCanvas {
         shape: &StainShape,
         tick: u32,
         s: &WetSettings,
-    ) -> bool {
+    ) -> Option<Vec2> {
         self.cast(mesh, xf, from, dir, shape, tick, s.edge_span())
     }
 
@@ -447,16 +449,16 @@ impl WetCanvas {
         shape: &StainShape,
         tick: u32,
         span: u32,
-    ) -> bool {
+    ) -> Option<Vec2> {
         let inv = xf.affine().inverse();
         let origin = inv.transform_point3(from);
         let local_dir = inv.transform_vector3(dir);
         match ray_uv(mesh, origin, local_dir) {
             Pick::At(uv) => {
                 self.stamp(uv, shape, tick, span);
-                true
+                Some(uv)
             }
-            Pick::Miss => false,
+            Pick::Miss => None,
             Pick::Unusable => {
                 let key = mesh_key(mesh);
                 if !self.warned.contains(&key) {
@@ -469,7 +471,7 @@ impl WetCanvas {
                          list), so it cannot carry a wetmap; nothing was painted"
                     );
                 }
-                false
+                None
             }
         }
     }
@@ -957,14 +959,16 @@ mod tests {
         );
         let xf = GlobalTransform::default();
         for _ in 0..5 {
-            assert!(!c.paint_world(
-                &m,
-                &xf,
-                Vec3::new(0.2, 0.2, 1.0),
-                Vec3::new(0.0, 0.0, -1.0),
-                &blob(0.2),
-                0
-            ));
+            assert!(c
+                .paint_world(
+                    &m,
+                    &xf,
+                    Vec3::new(0.2, 0.2, 1.0),
+                    Vec3::new(0.0, 0.0, -1.0),
+                    &blob(0.2),
+                    0
+                )
+                .is_none());
         }
         // One memo entry, so one warning was emitted for five refusals.
         assert_eq!(c.warned.len(), 1);

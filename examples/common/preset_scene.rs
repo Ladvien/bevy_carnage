@@ -224,6 +224,13 @@ pub fn shot(torso: Entity, _n: u32) -> GoreHit {
     GoreHit::impact(torso, from, dir, 0.035, 9.0)
 }
 
+/// A shallow graze high on the chest, away from where [`shot`] lands, so the torso bleeds from two
+/// wounds at once: the graze keeps bleeding after the shots open the second.
+pub fn graze(torso: Entity) -> GoreHit {
+    let (from, dir) = ray_at(0, Vec3::new(-0.12, 0.18, 0.0));
+    GoreHit::impact(torso, from, dir, 0.02, 4.0)
+}
+
 /// A blow to the upper left arm: a bruise, no blood.
 pub fn blow(arm: Entity) -> GoreHit {
     let (from, dir) = ray_at(2, Vec3::new(0.0, 0.08, 0.0));

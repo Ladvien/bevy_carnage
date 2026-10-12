@@ -1,5 +1,9 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.16`: every wound bleeds, from where it is** (`AG-089`). `Wounds` holds every open wound on
+# a part, each found once as a UV and a mesh point; `WetCanvas::paint_world*` return the UV they
+# painted. `GoreDials::open_wounds` is new.
+#
 # **`0.5.15`: a textured character keeps its skin** (`AG-088`). The flesh shader composites the
 # flaymap over the authored skin instead of replacing its texture, and thrown pieces wear the hit
 # part's material. `FleshTables::material` takes `Option<&FlayCanvas>`; `set_flay` is gone.
@@ -88,7 +92,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.15"
+version = "0.5.16"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

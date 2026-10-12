@@ -76,6 +76,9 @@ fn main() {
                 if let Some(leg) = part(world, 4) {
                     world.write_message(preset_scene::slash(leg));
                 }
+                if let Some(torso) = part(world, 0) {
+                    world.write_message(preset_scene::graze(torso));
+                }
             }
             if frame >= 60 && (frame - 60) % 30 == 0 {
                 let n = (frame - 60) / 30;

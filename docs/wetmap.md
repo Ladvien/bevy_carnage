@@ -74,7 +74,9 @@ fn on_hit(
     settings: &WetSettings,
     tick: u32,
 ) {
-    canvas.paint_world(mesh, actor, muzzle, direction, shape, tick);
+    // `paint_world` returns the UV it painted. Keep it to paint the same spot again with
+    // `paint_uv_with` (a bleed, a soak) after the actor has moved and the ray no longer lands there.
+    let _wound_uv: Option<Vec2> = canvas.paint_world(mesh, actor, muzzle, direction, shape, tick);
     canvas.tick(tick, Vec2::new(0.0, 1.0), settings);
 }
 ```
@@ -91,7 +93,7 @@ fn on_hit(
 | Constant | `UV_SPAN_M` | How much world one UV unit is taken to be — see below. |
 | Re-export | `StainShape`, `bevy_carnage::bloodstain` | The silhouette `paint_*` takes, and the blood model it comes from. |
 
-`WetCanvas`: `new`, `albedo`, `roughness`, `paint_uv`, `paint_uv_with`, `paint_world`, `paint_world_with`, `tick`, `flush`, `digest`, `wetted_area`, plus the read-only `size`, `amount_at`, `age_at`, `is_dirty`, `dirty_since`.
+`WetCanvas`: `new`, `albedo`, `roughness`, `paint_uv`, `paint_uv_with`, `paint_world`, `paint_world_with`, `tick`, `flush`, `digest`, `wetted_area`, plus the read-only `size`, `amount_at`, `age_at`, `is_dirty`, `dirty_since`, `is_still`.
 
 ## The metallic-roughness image carries data, not just gloss
 

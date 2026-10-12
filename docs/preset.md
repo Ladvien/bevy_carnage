@@ -56,15 +56,20 @@ and breaks a body that can break.
   hit feedback, sound or a decal budget from it.
 - `BoneExposed` — once per canvas, the first hit to reach the cortex.
 - `GoreFractured` — a body came apart: its root and where the blow landed.
+- `Wounds`, a component on each hurt part: every wound it is bleeding, each a UV on its wetmap and
+  a point on its mesh. A hit away from the open wounds opens another, up to
+  `GoreDials::open_wounds` (16), and a hit inside one reopens it. A wound leaves the list once its
+  bleed has clotted.
 
 ## Known limits
 
-- **Wounds are anchored to the ray, against the bind pose.** The preset re-casts each wound's ray every
-  pulse, against the mesh asset placed by the entity's `GlobalTransform`. On a skinned, animated
-  mesh the ray can land somewhere other than where it first hit.
+- **A wound is found against the bind pose, once.** The hit's ray is cast against the mesh asset
+  placed by the entity's `GlobalTransform`, so on a skinned mesh posed far from its bind pose the
+  hit can land somewhere other than where it struck. After that the wound is a spot on the skin:
+  it bleeds from there, and drips from where that spot is now, however the body moves.
 - **A skin's roughness map and a crater's slope give way.** See *What a dressed skin keeps*.
-- **One open wound per mesh entity.** A second hit on the same entity replaces the first wound's
-  bleed. Split a body into a mesh per part, which you need for the canvases anyway.
+- **One ageing bruise per mesh entity.** A second blow on the same entity starts a new bruise, and
+  the first stops ageing where it was. Wounds have no such limit.
 - **One gravity direction per canvas.** On a mesh whose UV islands point different ways, blood runs
   correctly on the islands that agree with `gravity_uv`.
 

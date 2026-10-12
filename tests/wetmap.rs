@@ -191,28 +191,32 @@ fn a_mesh_with_no_uvs_is_refused_and_a_miss_is_refused_too() {
     );
     bare.insert_indices(bevy::mesh::Indices::U32(vec![0, 1, 2]));
     assert!(
-        !canvas.paint_world(
-            &bare,
-            &xf,
-            Vec3::new(0.2, 0.2, 1.0),
-            Vec3::new(0.0, 0.0, -1.0),
-            &blob(0.1),
-            0
-        ),
+        canvas
+            .paint_world(
+                &bare,
+                &xf,
+                Vec3::new(0.2, 0.2, 1.0),
+                Vec3::new(0.0, 0.0, -1.0),
+                &blob(0.1),
+                0
+            )
+            .is_none(),
         "a mesh with no UVs must be refused, not silently painted onto"
     );
     assert_eq!(coverage(&canvas), 0, "a refused mesh still painted something");
 
     let sphere = Sphere::new(0.5).mesh().uv(32, 18);
     assert!(
-        !canvas.paint_world(
-            &sphere,
-            &xf,
-            Vec3::new(0.0, 5.0, 0.0),
-            Vec3::new(0.0, 1.0, 0.0),
-            &blob(0.1),
-            0
-        ),
+        canvas
+            .paint_world(
+                &sphere,
+                &xf,
+                Vec3::new(0.0, 5.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                &blob(0.1),
+                0
+            )
+            .is_none(),
         "a ray pointing away from the mesh must miss"
     );
     assert_eq!(coverage(&canvas), 0, "a miss painted something");
@@ -237,15 +241,21 @@ fn a_hit_on_a_uv_sphere_lands_where_the_spheres_uvs_say_it_should() {
     let expected_u = aim.y.atan2(aim.x) / std::f32::consts::TAU;
     let expected_v = 0.5 - aim.z.asin() / std::f32::consts::PI;
 
-    // One texel of paint, so the wet centroid IS the stamp centre.
-    assert!(canvas.paint_world(
+    // One texel of paint, so the wet centroid IS the stamp centre — and the UV the paint reports is
+    // the spot it painted.
+    let painted = canvas.paint_world(
         &sphere,
         &xf,
         aim * 5.0,
         -aim,
         &blob(1.0 / size as f32),
         0
-    ));
+    );
+    let Some(painted) = painted else { panic!("the ray missed the sphere") };
+    assert!(
+        (painted.x - expected_u).abs() < 1.0 / size as f32 && (painted.y - expected_v).abs() < 1.0 / size as f32,
+        "reported {painted:?}, expected ({expected_u}, {expected_v})"
+    );
 
     let mut weight = 0f32;
     let mut cx = 0f32;
