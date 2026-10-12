@@ -23,7 +23,11 @@ const KEY: u64 = 1;
 fn main() {
     App::new()
         .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window { title: "bevy_fracture_modes".into(), ..default() }),
+            primary_window: Some(Window {
+                title: "bevy_fracture_modes".into(),
+                canvas: Some("#carnage-canvas".into()),
+                ..default()
+            }),
             ..default()
         })))
         .add_plugins(common::autopilot::Autopilot)

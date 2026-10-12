@@ -40,6 +40,7 @@ fn main() {
         .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_laceration — space to re-open".into(),
+                canvas: Some("#carnage-canvas".into()),
                 ..default()
             }),
             ..default()
