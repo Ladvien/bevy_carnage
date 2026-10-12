@@ -95,7 +95,9 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut
                     Mesh3d(meshes.add(Cuboid::new(half.x * 2.0, half.y * 2.0, half.z * 2.0))),
                     MeshMaterial3d(skin.clone()),
                     Transform::from_translation(centre),
-                    Gore::skin(region_of(i)).with_uv_per_metre(1.0 / face_m),
+                    // A `Cuboid`'s front face grows UV `v` up the face, so down is `-v` there; with
+                    // the glTF default `(0, 1)` every wound on this body bled upward.
+                    Gore::skin(region_of(i)).with_uv_per_metre(1.0 / face_m).with_gravity_uv(Vec2::new(0.0, -1.0)),
                     Part(i),
                 ));
             }

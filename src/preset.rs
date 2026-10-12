@@ -58,7 +58,16 @@ use crate::{CarnagePlugin, FractureCache, FractureSubject, Wounded};
 pub struct Gore {
     /// Which kind of surface, and so which canvases it gets.
     pub kind: GoreKind,
-    /// Which way blood runs on this mesh's atlas, in UV space. `(0, 1)` is down on most atlases.
+    /// **Which way blood runs on this mesh's atlas, in UV space.** `(0, 1)`, the default, is down on
+    /// a glTF atlas whose islands stand upright, because glTF puts `v = 0` at the top of the image.
+    ///
+    /// **Bevy's own primitives do not all agree with that, nor with each other.** A `Cuboid`'s front
+    /// (+Z) face grows `v` *up* the face, so down there is `(0, −1)`, while its back face grows `v`
+    /// down. A `Sphere::mesh().uv(..)` puts its poles on the mesh's Z axis, so it wants turning
+    /// pole-up before `(0, 1)` is down, and a `Plane3d` facing +Z grows `v` down the sheet. One
+    /// direction per canvas cannot be right on every face of a mesh whose islands disagree; set the
+    /// one for the faces that get hit, with [`Gore::with_gravity_uv`]. A wrong sign is easy to miss
+    /// in a still and obvious in motion: the drips climb.
     pub gravity_uv: Vec2,
     /// **How many UV units one metre of this surface covers.** The canvases take radii in UV space
     /// and assume one UV unit per metre; a mesh whose atlas spans a 40 cm limb from 0 to 1 packs
@@ -94,6 +103,11 @@ impl Gore {
     /// The same surface with its atlas density stated — see [`Gore::uv_per_metre`].
     pub fn with_uv_per_metre(mut self, uv_per_metre: f32) -> Self {
         self.uv_per_metre = if uv_per_metre.is_finite() && uv_per_metre > 0.0 { uv_per_metre } else { 1.0 };
+        self
+    }
+    /// The same surface with the way blood runs on its atlas stated — see [`Gore::gravity_uv`].
+    pub fn with_gravity_uv(mut self, gravity_uv: Vec2) -> Self {
+        self.gravity_uv = if gravity_uv.is_finite() { gravity_uv } else { Vec2::ZERO };
         self
     }
 }

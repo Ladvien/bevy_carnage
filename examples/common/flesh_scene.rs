@@ -100,7 +100,18 @@ pub fn setup(
     };
     let skin_params = FleshParams::for_layers(&layers, FleshMode::Canvas, scale.mm_per_unit);
     let skin_mat = flesh.add(tables.material(skin_base, skin_params, Some(wet.roughness()), Some(flay.roughness())));
-    commands.spawn((Mesh3d(sphere_mesh), MeshMaterial3d(skin_mat), Transform::from_xyz(0.05, 0.0, 0.0), flay, wet, Skin));
+    // **Turned pole-up.** Bevy's UV sphere has its poles on the mesh's Z axis, so unturned its pole
+    // faced the camera: every hit landed on the UV pole, where `u` collapses, and the crater drew as
+    // a thin slit while the blood ran away from the camera instead of down. Turned, the hit lands on
+    // the UV equator and `v` runs down the sphere, which is what the wetmap's `(0, 1)` gravity means.
+    commands.spawn((
+        Mesh3d(sphere_mesh),
+        MeshMaterial3d(skin_mat),
+        Transform::from_xyz(0.05, 0.0, 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
+        flay,
+        wet,
+        Skin,
+    ));
 
     // ---- The cloth: a hanging sheet, blood composited over its weave on the GPU. -------------
     let sheet = meshes.add(Plane3d::new(Vec3::Z, Vec2::new(0.32, 0.42)).mesh().build());

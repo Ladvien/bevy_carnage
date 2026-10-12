@@ -340,7 +340,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.11`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.12`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.12` changed: blood runs down, and wounds bleed
+
+`Gore::with_gravity_uv` is new, and `Gore::gravity_uv`'s documentation now says which way blood runs on Bevy's own meshes. The default, `(0, 1)`, is down on a glTF atlas. A `Cuboid`'s front face runs the other way, so on Bevy primitives a bleed climbed until the preset demo stated `(0, −1)`. A `Sphere`'s UV poles sit on its Z axis, so the flesh demo's sphere is now turned pole-up and its wound is a round crater instead of a slit. The flaymap demo's torso is dressed the way a game dresses skin, flaymap and wetmap under `FleshMaterial`, so a crater fills with blood that runs down the chest instead of reading as a fried egg. The affected GIFs are re-recorded.
 
 ### What `0.5.11` changed: a cut through the body reads as meat
 

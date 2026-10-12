@@ -1,5 +1,9 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.12`: blood runs down, and wounds bleed** (`AG-083`, `AG-084`). `Gore::with_gravity_uv` is new
+# and `Gore::gravity_uv` documents which way Bevy's primitives run; the demos' wounds bleed and drip
+# down rather than up.
+#
 # **`0.5.11` makes a cut through the body read as meat** (`AG-082`). Supplied faces flush against
 # another hull are joints, not skin; a trunk's deep cut samples mid-muscle, not the cortex's texel; a
 # strip carries four mip levels, not a full chain that blended the bands.
@@ -73,7 +77,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.11"
+version = "0.5.12"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
