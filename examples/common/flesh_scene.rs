@@ -86,12 +86,15 @@ pub fn setup(
     ));
 
     // ---- The skin: a sphere over a flaymap and a wetmap. ------------------------------------
-    let sphere_mesh = meshes.add(Sphere::new(0.34).mesh().uv(64, 36));
+    // Tangents, so the flaymap's normal image can slope the crater's walls.
+    let sphere = Sphere::new(0.34).mesh().uv(64, 36);
+    let sphere_mesh = meshes.add(sphere.clone().with_generated_tangents().unwrap_or(sphere));
     let flay = FlayCanvas::new(&mut images, CANVAS, Region::Limb, layers, [0.80, 0.62, 0.53], 0.55);
     let wet = WetCanvas::new(&mut images, CANVAS, [0.80, 0.62, 0.53], 0.55);
     let skin_base = StandardMaterial {
         base_color_texture: Some(flay.albedo()),
         metallic_roughness_texture: Some(flay.roughness()),
+        normal_map_texture: Some(flay.normal()),
         perceptual_roughness: 1.0,
         ..default()
     };

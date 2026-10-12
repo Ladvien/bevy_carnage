@@ -1,7 +1,7 @@
 //! **The canvas: one `Vec<u16>` of removed tissue, in row-major order, and three passes over it.**
 //!
-//! Everything a flaymap decides lives in this file, on the CPU, in integers. The two `Image`s exist so
-//! a renderer has something to sample; nothing in this crate ever reads one back.
+//! Everything a flaymap decides lives in this file, on the CPU, in integers. The three `Image`s exist
+//! so a renderer has something to sample; nothing in this crate ever reads one back.
 
 use bevy::asset::{Assets, Handle, RenderAssetUsages};
 use bevy::image::Image;
@@ -11,7 +11,7 @@ use bevy::mesh::Mesh;
 use bevy::prelude::Component;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::transform::components::GlobalTransform;
-use crate::cross_section::{Layer, Layers, Region, texel_at};
+use crate::cross_section::{Layer, Layers, Region, texel_at, texel_mean, value_noise};
 
 use crate::flaymap::digest::Fnv1a;
 use crate::flaymap::settings::FlaySettings;
@@ -47,6 +47,23 @@ const WARN_MEMO: usize = 16;
 /// because the buffer is the thing the digest folds: a float accumulation would make the wound depend
 /// on the order the hits were summed in.
 const HMM_PER_MM: f32 = 100.0;
+
+/// The tissue grain a texel has to resolve before it may show it, millimetres: fat lobules are two
+/// across and the perimysium net about three. See [`FlayCanvas::shade`].
+const GRAIN_MM: f32 = 2.0;
+
+/// Depth resolution of the grain-averaged tissue table, hundredths of a millimetre: 0.1 mm, a third
+/// of the thinnest thing the tissue model draws, the epidermis over the first 15 % of the skin.
+const TISSUE_BIN_HMM: u16 = 10;
+
+/// How far the colour lookup's depth is torn either way, at most, millimetres. See
+/// [`FlayCanvas::shade`]. Enough to rag the rings and the rim without blurring the order of the
+/// bands on the thick rows; on the head's 2 mm bands an edge can skip one.
+const RAGGED_MM: f32 = 3.0;
+
+/// The coarse octave's cell, millimetres — a few texels on a 128 canvas, so the tears are shapes
+/// rather than speckle.
+const RAGGED_CELL_MM: f32 = 24.0;
 
 /// **What a paint call found, and the one-shot handoff to whatever owns the skeleton.**
 ///
@@ -91,7 +108,7 @@ pub struct Handoff {
     pub normal: Option<Vec3>,
 }
 
-/// **Texture-space flaying for one actor.** Two images out, and the authority stays here.
+/// **Texture-space flaying for one actor.** Three images out, and the authority stays here.
 ///
 /// # The state is one buffer, and its order is the canonical order
 ///
@@ -128,10 +145,18 @@ pub struct FlayCanvas {
     mask: Vec<u8>,
     albedo_handle: Handle<Image>,
     rough_handle: Handle<Image>,
+    normal_handle: Handle<Image>,
     /// RGBA8 sRGB bytes: base colour where nothing is peeled, tissue where something is.
     albedo_px: Vec<u8>,
     /// RGBA8 **linear** bytes: G is roughness, B is metallic. See [`roughness`](Self::roughness).
     rough_px: Vec<u8>,
+    /// RGBA8 **linear** bytes: the tangent-space normal of the peeled surface. See
+    /// [`normal`](Self::normal).
+    normal_px: Vec<u8>,
+    /// The grain-averaged tissue per 0.1 mm of depth, filled on first use, and the
+    /// `(tile_mm bits, seed)` it was filled for. See [`shade`](Self::shade).
+    tissue: Vec<Option<([u8; 3], u8)>>,
+    tissue_key: (u32, u32),
     /// The intact surface, as bytes, so a texel at depth 0 does not re-encode it per shade.
     base_rgba: [u8; 4],
     /// The intact surface's roughness byte.
@@ -198,6 +223,8 @@ impl FlayCanvas {
         // and A are free for the depth buffer's own two numbers: R is how deep this texel is peeled
         // as a fraction of the layer table's span, A marks a peeled texel. Intact skin is 0 in both.
         let base_rough_rgba = [0, base_rough, 0, 0];
+        // A flat tangent-space normal, `(0, 0, 1)` encoded.
+        let flat_normal = [128, 128, 255, 255];
 
         let extent = Extent3d { width: size, height: size, depth_or_array_layers: 1 };
         // `MAIN_WORLD | RENDER_WORLD` because `flush` rewrites the pixels every time they change: with
@@ -222,6 +249,8 @@ impl FlayCanvas {
             TextureFormat::Rgba8Unorm,
             usage,
         );
+        // Linear for the same reason: a normal is a direction, not a colour.
+        let normal = Image::new_fill(extent, TextureDimension::D2, &flat_normal, TextureFormat::Rgba8Unorm, usage);
 
         let texels = (size as usize) * (size as usize);
         Self {
@@ -232,8 +261,12 @@ impl FlayCanvas {
             mask: Vec::new(),
             albedo_handle: images.add(albedo),
             rough_handle: images.add(rough),
+            normal_handle: images.add(normal),
             albedo_px: base_rgba.iter().copied().cycle().take(texels * 4).collect(),
             rough_px: base_rough_rgba.iter().copied().cycle().take(texels * 4).collect(),
+            normal_px: flat_normal.iter().copied().cycle().take(texels * 4).collect(),
+            tissue: Vec::new(),
+            tissue_key: (0, 0),
             base_rgba,
             base_rough,
             dirty_since: None,
@@ -280,6 +313,20 @@ impl FlayCanvas {
     /// `doi:10.1080/02699931.2010.496997`).
     pub fn roughness(&self) -> Handle<Image> {
         self.rough_handle.clone()
+    }
+
+    /// The tangent-space normal image, linear RGBA8. Feed it to
+    /// `StandardMaterial::normal_map_texture`, and give the mesh tangents
+    /// (`Mesh::generate_tangents`); without them Bevy draws the surface flat.
+    ///
+    /// **The crater's relief, from the depth buffer.** Each texel's normal is the slope of the peeled
+    /// surface, central differences of the removed depth over [`UV_SPAN_M`]'s millimetres per texel,
+    /// in glTF's convention (`+Y` up the image, as Bevy expects with `flip_normal_map_y` off). Intact
+    /// skin is flat, `(0, 0, 1)`. The walls tilt toward the crater's centre, so a light catches the
+    /// far wall and leaves the near one in shade, and the wound reads as a hole rather than a
+    /// painted disc.
+    pub fn normal(&self) -> Handle<Image> {
+        self.normal_handle.clone()
     }
 
     /// Edge length in texels.
@@ -515,19 +562,27 @@ impl FlayCanvas {
         warn!("{message}");
     }
 
-    /// **Recolour the wound from the cross-section palette.** The one pass that touches the pixels.
+    /// **Recolour the wound from the cross-section palette, and slope it.** The one pass that touches
+    /// the pixels.
     ///
-    /// Every texel with depth > 0 is `crate::cross_section::texel_at(layers, depth, u_mm, v_mm, tile_mm,
-    /// seed)` — the identical per-texel rule that bakes a cut face's strip, so a flayed patch and the
-    /// stump beside it are the same tissue at the same physical grain rather than two authored
+    /// Every texel with depth > 0 is the tissue `crate::cross_section` bakes a cut face's strip from,
+    /// so a flayed patch and the stump beside it are the same tissue rather than two authored
     /// palettes that drift. Texels at depth 0 keep the intact surface's bytes exactly.
     ///
-    /// The millimetre position of a texel is `texel · UV_SPAN_M · scale.mm_per_unit / size`, which is
-    /// what makes the grain a property of the **body** rather than of the texture resolution: double
-    /// the canvas and a fat lobule stays the same size on the actor and gets twice the texels. A
-    /// non-finite `mm_per_unit` collapses every texel onto one noise phase rather than producing NaNs;
-    /// there is no fallback scale, because a second answer to "how big is this body" is how two actors
-    /// end up with two grains.
+    /// **Filtered to the texel, because the grain is finer than one.** A texel is
+    /// `UV_SPAN_M · scale.mm_per_unit / size` across — 7.8 mm on a 128 canvas — and fascicles are
+    /// under one millimetre, lobules two. Point-sampling `texel_at` at that spacing put each texel on a
+    /// different feature, and the crater came out as a disc of red and yellow dots. So a texel holds
+    /// `texel_mean`, the tissue averaged over its grain, once a texel is twice the 2 mm grain or
+    /// coarser; at the grain or finer it holds `texel_at` at its position, and between the two it
+    /// blends. The mean is computed per 0.1 mm of depth on first use and kept.
+    ///
+    /// **The tissue is looked up at a ragged depth.** Depth is a smooth radial field, so read straight
+    /// it banded a crater into concentric rings — a target, not a wound. Two octaves of value noise
+    /// over the texel's millimetres, at most ±3 mm, tear the band edges and the rim. Only the colour
+    /// sees it: the buffer, the digest, the R channel and the normals keep the true depth.
+    ///
+    /// The normal image is rewritten in the same pass. See [`normal`](Self::normal).
     ///
     /// **Call it after the last paint of a tick and before `Update`**, where the plugin's budget will
     /// upload it. Calling it per paint is correct and merely wasteful; not calling it at all leaves
@@ -536,13 +591,21 @@ impl FlayCanvas {
         let per_texel = UV_SPAN_M * s.scale.mm_per_unit / self.size as f32;
         let mm = if per_texel.is_finite() { per_texel } else { 0.0 };
         let size = self.size as usize;
+        let detail = {
+            let t = ((2.0 * GRAIN_MM - mm) / GRAIN_MM).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+        let key = (s.tile_mm.to_bits(), s.seed);
+        if self.tissue_key != key {
+            self.tissue.clear();
+            self.tissue_key = key;
+        }
         // The depth fraction's denominator: the whole span the layer table describes, which is also
         // what the buffer saturates at. `max` so a degenerate table cannot divide by zero.
         let span = self.layers.span_mm().max(1.0e-3);
-        // Field-level borrows: the two pixel buffers are written while the depth buffer and the layer
-        // table are read, and they are disjoint fields of `self`.
-        let (layers, depth) = (&self.layers, &self.depth);
+        let (layers, depth, tissue) = (&self.layers, &self.depth, &mut self.tissue);
         let (base_rgba, base_rough) = (self.base_rgba, self.base_rough);
+        let tile = (size as f32 * mm / RAGGED_CELL_MM).max(1.0);
         let mut changed = false;
         for (i, (a, r)) in self
             .albedo_px
@@ -556,14 +619,41 @@ impl FlayCanvas {
             let (want_a, want_r) = if d == 0 {
                 (base_rgba, [0, base_rough, 0, 0])
             } else {
-                let (u, v) = ((i % size) as f32 * mm, (i / size) as f32 * mm);
                 let depth_mm = d as f32 / HMM_PER_MM;
-                let (c, rough) = texel_at(layers, depth_mm, u, v, s.tile_mm, s.seed);
+                let (xm, ym) = ((i % size) as f32 * mm, (i / size) as f32 * mm);
+                let coarse = value_noise(xm / RAGGED_CELL_MM, ym / RAGGED_CELL_MM, tile, s.seed ^ 0x7A6E);
+                let fine = value_noise(xm / (RAGGED_CELL_MM * 0.4), ym / (RAGGED_CELL_MM * 0.4), tile * 2.5, s.seed ^ 0x3E11);
+                let ragged = ((coarse - 0.5) * 1.4 + (fine - 0.5) * 0.6) * RAGGED_MM;
+                // Kept above zero so a peeled texel never shades as unpeeled skin.
+                let look_mm = (depth_mm + ragged).max(0.01);
+                let look = (look_mm * HMM_PER_MM).round().clamp(1.0, u16::MAX as f32) as u16;
+                let bin = (look / TISSUE_BIN_HMM) as usize;
+                if tissue.len() <= bin {
+                    tissue.resize(bin + 1, None);
+                }
+                let mean = match tissue.get(bin).copied().flatten() {
+                    Some(m) => m,
+                    None => {
+                        let at = (bin as u16 * TISSUE_BIN_HMM) as f32 / HMM_PER_MM;
+                        let (c, rough) = texel_mean(layers, at, s.tile_mm, s.seed);
+                        let m = ([enc(c[0]), enc(c[1]), enc(c[2])], enc(rough));
+                        if let Some(slot) = tissue.get_mut(bin) {
+                            *slot = Some(m);
+                        }
+                        m
+                    }
+                };
+                let (c, rough) = if detail > 0.0 {
+                    let (c, rough) = texel_at(layers, look_mm, xm, ym, s.tile_mm, s.seed);
+                    let mix = |m: u8, p: f32| enc(m as f32 / 255.0 + (p - m as f32 / 255.0) * detail);
+                    ([mix(mean.0[0], c[0]), mix(mean.0[1], c[1]), mix(mean.0[2], c[2])], mix(mean.1, rough))
+                } else {
+                    mean
+                };
                 // R and A are the depth buffer written where a shader can read it, per
-                // [`roughness`](Self::roughness): the depth as a fraction of the table's whole span,
-                // and the wound's own mask. `span` is the same `Layers::span_mm()` the buffer
-                // saturates at, so R = 255 is exactly a texel dug as deep as this crate models.
-                ([enc(c[0]), enc(c[1]), enc(c[2]), 255], [enc(depth_mm / span), enc(rough), 0, 255])
+                // [`roughness`](Self::roughness): the true depth as a fraction of the table's span,
+                // and the wound's own mask.
+                ([c[0], c[1], c[2], 255], [enc(depth_mm / span), rough, 0, 255])
             };
             // Compare before writing: a canvas whose depths did not move must not ask for an upload,
             // because a still scene should cost no bandwidth.
@@ -580,6 +670,31 @@ impl FlayCanvas {
                 }
             }
         }
+        // The slope of the peeled surface. `h = -depth`, so with glTF's `+Y` up the image (towards
+        // row 0) the normal is `(-dh/du, dh/dv, 1)` over twice a texel's millimetres.
+        let n = size as i64;
+        let two_mm = (2.0 * mm).max(1.0e-3);
+        let at = |x: i64, y: i64| -> f32 {
+            let (x, y) = (x.clamp(0, n - 1), y.clamp(0, n - 1));
+            depth.get((y * n + x) as usize).map_or(0.0, |&d| d as f32 / HMM_PER_MM)
+        };
+        for (i, px) in self.normal_px.chunks_exact_mut(4).enumerate() {
+            let (x, y) = ((i % size) as i64, (i / size) as i64);
+            let dx = (at(x + 1, y) - at(x - 1, y)) / two_mm;
+            let dy = -(at(x, y + 1) - at(x, y - 1)) / two_mm;
+            let want = if dx == 0.0 && dy == 0.0 {
+                [128, 128, 255, 255]
+            } else {
+                let k = 1.0 / (dx * dx + dy * dy + 1.0).sqrt();
+                [enc(dx * k * 0.5 + 0.5), enc(dy * k * 0.5 + 0.5), enc(k * 0.5 + 0.5), 255]
+            };
+            for (slot, w) in px.iter_mut().zip(want) {
+                if *slot != w {
+                    *slot = w;
+                    changed = true;
+                }
+            }
+        }
         if changed && self.dirty_since.is_none() {
             self.dirty_since = Some(self.painted_at);
         }
@@ -591,14 +706,15 @@ impl FlayCanvas {
     /// bandwidth. The per-frame budget *across* canvases is the plugin's — see
     /// [`FlaySettings::max_canvas_updates_per_tick`].
     ///
-    /// Also returns `false` without clearing the dirty flag if either image has gone or has been
+    /// Also returns `false` without clearing the dirty flag if any image has gone or has been
     /// resized under it, so the next flush retries rather than the canvas quietly diverging forever.
     pub fn flush(&mut self, images: &mut Assets<Image>) -> bool {
         if self.dirty_since.is_none() {
             return false;
         }
         let ok = upload(images, &self.albedo_handle, &self.albedo_px)
-            && upload(images, &self.rough_handle, &self.rough_px);
+            && upload(images, &self.rough_handle, &self.rough_px)
+            && upload(images, &self.normal_handle, &self.normal_px);
         if ok {
             self.dirty_since = None;
         }
@@ -860,42 +976,59 @@ mod tests {
     }
 
     #[test]
-    fn shaded_texels_are_the_cross_section_tissue() {
+    fn a_coarse_canvas_shows_the_grain_averaged_tissue() {
         let (_images, mut canvas) = scratch(32);
         let s = FlaySettings::default();
-        let uv = Vec2::new(0.5, 0.5);
-        canvas.paint_uv(uv, 0.2, 25.0, 0);
+        canvas.paint_uv(Vec2::new(0.5, 0.5), 0.2, 25.0, 0);
         canvas.shade(&s);
 
         let (cx, cy) = centre(&canvas);
         let depth = canvas.depth_at(cx, cy).unwrap_or(0.0);
         assert!(depth > 20.0, "the centre should be deep in muscle, got {depth} mm");
 
-        // The same call the crate makes, made again here rather than copied out of it.
-        let per_texel = UV_SPAN_M * s.scale.mm_per_unit / canvas.size() as f32;
-        let (want, want_rough) = texel_at(
-            &limb(),
-            depth,
-            cx as f32 * per_texel,
-            cy as f32 * per_texel,
-            s.tile_mm,
-            s.seed,
-        );
+        // 31 mm texels are far coarser than the grain, so the texel is the tissue's mean at one
+        // 0.1 mm bin — at the true depth torn by at most `RAGGED_MM` either way — not whichever
+        // fascicle its corner happens to land on.
         let i = (cy as usize * canvas.size() as usize + cx as usize) * 4;
-        let got = canvas.albedo_px.get(i..i + 4).unwrap_or(&[]);
-        assert_eq!(got, [enc(want[0]), enc(want[1]), enc(want[2]), 255], "wrong tissue at the centre");
-        let got_rough = canvas.rough_px.get(i..i + 4).unwrap_or(&[]);
+        let got = canvas.albedo_px.get(i..i + 4).map(|p| [p[0], p[1], p[2], p[3]]).unwrap_or([0; 4]);
+        let got_rough = canvas.rough_px.get(i..i + 4).map(|p| [p[0], p[1], p[2], p[3]]).unwrap_or([0; 4]);
+        let lo = ((depth - RAGGED_MM - 0.1).max(0.0) * 10.0) as u32;
+        let hi = ((depth + RAGGED_MM + 0.1) * 10.0) as u32;
+        let matches = (lo..=hi).any(|tenth| {
+            let (want, want_rough) = texel_mean(&limb(), tenth as f32 / 10.0, s.tile_mm, s.seed);
+            got == [enc(want[0]), enc(want[1]), enc(want[2]), 255] && got_rough[1] == enc(want_rough)
+        });
+        assert!(matches, "the centre {got:?} is not the grain-averaged tissue near {depth} mm");
         assert_eq!(
-            got_rough,
-            [enc(depth / limb().span_mm()), enc(want_rough), 0, 255],
-            "the rough pixel is not (depth fraction, roughness, dielectric, peeled)"
+            [got_rough[0], got_rough[2], got_rough[3]],
+            [enc(depth / limb().span_mm()), 0, 255],
+            "the rough pixel is not (true depth fraction, _, dielectric, peeled)"
         );
 
         // A texel the stamp never reached keeps the intact surface exactly — and reports no wound.
-        let far = 0usize * 4;
         assert_eq!(canvas.depth_at(0, 0), Some(0.0));
-        assert_eq!(canvas.albedo_px.get(far..far + 4), Some(&canvas.base_rgba[..]));
-        assert_eq!(canvas.rough_px.get(far..far + 4), Some(&[0, canvas.base_rough, 0, 0][..]));
+        assert_eq!(canvas.albedo_px.get(0..4), Some(&canvas.base_rgba[..]));
+        assert_eq!(canvas.rough_px.get(0..4), Some(&[0, canvas.base_rough, 0, 0][..]));
+        assert_eq!(canvas.normal_px.get(0..4), Some(&[128, 128, 255, 255][..]), "intact skin is flat");
+    }
+
+    /// **The crater's walls face its centre.** Left of the centre the normal leans `+X`, right of it
+    /// `-X`; above it (row 0 is the top of the image, glTF's `+Y`) it leans `-Y`, below it `+Y`.
+    #[test]
+    fn the_crater_walls_lean_toward_its_centre() {
+        let (_images, mut canvas) = scratch(64);
+        canvas.paint_uv(Vec2::new(0.5, 0.5), 0.25, 20.0, 0);
+        canvas.shade(&FlaySettings::default());
+        let (cx, cy) = centre(&canvas);
+        let px = |x: u32, y: u32| {
+            let i = (y as usize * canvas.size() as usize + x as usize) * 4;
+            canvas.normal_px.get(i..i + 4).map(|p| [p[0], p[1], p[2]]).unwrap_or([0, 0, 0])
+        };
+        assert!(px(cx - 8, cy)[0] > 128, "the left wall must lean right: {:?}", px(cx - 8, cy));
+        assert!(px(cx + 8, cy)[0] < 128, "the right wall must lean left: {:?}", px(cx + 8, cy));
+        assert!(px(cx, cy - 8)[1] < 128, "the top wall must lean down the image: {:?}", px(cx, cy - 8));
+        assert!(px(cx, cy + 8)[1] > 128, "the bottom wall must lean up the image: {:?}", px(cx, cy + 8));
+        assert_eq!(px(cx, cy)[..2], [128, 128], "the floor of a symmetric crater is level");
     }
 
     /// **The two data channels are the depth buffer, not a look.** A shader reading R gets

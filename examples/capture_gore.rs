@@ -60,7 +60,7 @@ fn main() {
     {
         let world = rec.world();
         world.spawn((
-            DirectionalLight { illuminance: 9_000.0, shadow_maps_enabled: false, ..default() },
+            DirectionalLight { illuminance: 9_000.0, shadow_maps_enabled: true, ..default() },
             Transform::from_xyz(3.0, 6.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y),
         ));
         let floor = world.resource_mut::<Assets<Mesh>>().add(Plane3d::default().mesh().size(4.0, 4.0).build());
@@ -77,9 +77,9 @@ fn main() {
     let mut digests = [0u64; 4];
 
     // ---- Phase 1: cross-section. The whole body exploded slowly. ----------------------------
-    let (leaves, _bake_solids) = bake_body(20, SEED);
+    let (leaves, regions, _bake_solids) = bake_body(20, SEED);
     aim(rec.world(), Vec3::new(1.1, 1.3, 1.5), Vec3::new(0.0, 0.85, 0.0));
-    spawn_pieces(rec.world(), &leaves, 1, false, |g| g.center_local.normalize_or_zero() * 0.22 + Vec3::Y * 0.05);
+    spawn_pieces(rec.world(), &leaves, &regions, 1, false, |g| g.center_local.normalize_or_zero() * 0.22 + Vec3::Y * 0.05);
     rec.warm_up(2);
     for frame in 0..90 {
         drift(rec.world(), frame);
@@ -89,7 +89,7 @@ fn main() {
     clear(rec.world(), 1);
 
     // ---- Phase 2: fracture modes. A blow on the shoulder. -----------------------------------
-    let (leaves, bake) = bake_body(20, SEED);
+    let (leaves, regions, bake) = bake_body(20, SEED);
     let shot = Vec3::new(-0.24, 0.20, 0.06);
     let mut thrown: Vec<(bevy_carnage::FragmentId, Vec3)> = Vec::new();
     if let Ok(modal) = modal::bake_modes(&bake.0, |id| bake.1.get(id.index()), &ModeSettings { k: 6, ..Default::default() }) {
@@ -139,10 +139,18 @@ fn main() {
             println!("gore: modes broke {} bond(s) into {} piece(s)", broken.len(), islands.len());
         }
     }
-    aim(rec.world(), Vec3::new(1.4, 1.4, 1.9), Vec3::new(0.0, 0.85, 0.0));
-    spawn_pieces(rec.world(), &leaves, 2, true, |g| thrown.iter().find(|(id, _)| *id == g.id).map(|(_, v)| *v).unwrap_or(Vec3::ZERO));
+    spawn_pieces(rec.world(), &leaves, &regions, 2, true, |g| thrown.iter().find(|(id, _)| *id == g.id).map(|(_, v)| *v).unwrap_or(Vec3::ZERO));
     rec.warm_up(2);
     for frame in 90..180 {
+        // The camera follows the body down: it starts on the standing figure and ends close on the
+        // heap the modes leave, which at the old fixed view was a small pile at the bottom edge.
+        let t = ((frame - 90) as f32 / 60.0).clamp(0.0, 1.0);
+        let t = t * t * (3.0 - 2.0 * t);
+        aim(
+            rec.world(),
+            Vec3::new(1.4, 1.4, 1.9).lerp(Vec3::new(0.65, 0.6, 1.0), t),
+            Vec3::new(0.0, 0.85, 0.0).lerp(Vec3::new(0.05, 0.15, 0.05), t),
+        );
         drift(rec.world(), frame);
         rec.shoot();
     }
@@ -150,12 +158,20 @@ fn main() {
     clear(rec.world(), 2);
 
     // ---- Phase 3: flaymap. The intact body; the torso is cratered every ten frames. ---------
+    // The hits wander a little, as shots do, so the crater grows ragged rather than as a target; the
+    // camera swings across the wound so the normal map's walls catch the light from both sides.
     spawn_intact(rec.world());
-    aim(rec.world(), Vec3::new(0.35, 1.15, 0.85), Vec3::new(0.05, 1.02, 0.14));
     rec.warm_up(2);
     for frame in 180..300 {
+        let swing = ((frame - 180) as f32 / 120.0 - 0.5) * 0.9;
+        let target = Vec3::new(0.05, 1.02, 0.14);
+        aim(rec.world(), target + Quat::from_rotation_y(swing) * Vec3::new(0.30, 0.16, 0.66), target);
         if frame % 10 == 0 {
-            peel(rec.world(), frame, 4.0 + (frame - 180) as f32 * 0.25);
+            // Shallow hits that deepen: skin and fat first, muscle by the middle of the clip, the rib
+            // only at the end. At the old 4 mm rising 2.5 mm a hit, the fourth reached bone and most
+            // of the clip's crater was rib and marrow.
+            let n = (frame - 180) / 10;
+            peel(rec.world(), frame, n, 2.0 + n as f32 * 0.35);
         }
         rec.shoot();
     }
@@ -163,9 +179,13 @@ fn main() {
 
     // ---- Phase 4: laceration. A slash across the thigh, opening. ---------------------------
     lacerate(rec.world());
-    aim(rec.world(), Vec3::new(0.1, 0.55, 0.75), Vec3::new(-0.13, 0.30, 0.12));
     rec.warm_up(2);
-    for _ in 300..420 {
+    for frame in 300..420 {
+        // A slow swing across the slash, so the lips and the trough's walls catch the light from
+        // both sides rather than reading as stripes painted on the thigh.
+        let swing = ((frame - 300) as f32 / 120.0 - 0.5) * 0.7;
+        let target = Vec3::new(-0.13, 0.30, 0.12);
+        aim(rec.world(), target + Quat::from_rotation_y(swing) * Vec3::new(0.23, 0.25, 0.63), target);
         rec.shoot();
     }
     digests[3] = fnv_positions(rec.world());
@@ -177,8 +197,10 @@ fn main() {
     );
 }
 
-/// Bake the blockout to `target` leaves; returns the leaf geometry and `(bond graph, cells)`.
-fn bake_body(target: usize, seed: u32) -> (Vec<FragmentGeometry>, (bevy_carnage::BondGraph, Vec<bevy_carnage::ProxyCell>)) {
+/// Bake the blockout to `target` leaves; returns the leaf geometry, the region each leaf's cap was
+/// banded for, and `(bond graph, cells)`.
+#[allow(clippy::type_complexity)]
+fn bake_body(target: usize, seed: u32) -> (Vec<FragmentGeometry>, Vec<Region>, (bevy_carnage::BondGraph, Vec<bevy_carnage::ProxyCell>)) {
     let subject = body::subject();
     let parts: Vec<(&Mesh, Mat4)> = subject.iter().map(|(m, x)| (m, *x)).collect();
     let proxy = body::proxy();
@@ -190,13 +212,14 @@ fn bake_body(target: usize, seed: u32) -> (Vec<FragmentGeometry>, (bevy_carnage:
     let mut leaves = bake.into_leaves();
     // Band every cap by the region of the part it came from.
     let settings = CrossSectionSettings::default();
+    let mut regions = Vec::with_capacity(leaves.len());
     for g in &mut leaves {
         let part = tree.root_of(g.id).unwrap_or(g.id).index();
         let region = region_of(part);
         g.annotate_cap(settings.layers(region), &settings.scale);
+        regions.push(region);
     }
-    let _ = Layers::for_region(Region::Limb);
-    (leaves, (bonds, cells))
+    (leaves, regions, (bonds, cells))
 }
 
 /// Point the recorder's camera at `at` from `from`.
@@ -207,7 +230,14 @@ fn aim(world: &mut World, from: Vec3, at: Vec3) {
     }
 }
 
-fn spawn_pieces(world: &mut World, leaves: &[FragmentGeometry], phase: u32, falls: bool, velocity: impl Fn(&FragmentGeometry) -> Vec3) {
+fn spawn_pieces(
+    world: &mut World,
+    leaves: &[FragmentGeometry],
+    regions: &[Region],
+    phase: u32,
+    falls: bool,
+    velocity: impl Fn(&FragmentGeometry) -> Vec3,
+) {
     let skin = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
         base_color: Color::srgb(0.62, 0.52, 0.48),
         perceptual_roughness: 0.7,
@@ -217,21 +247,12 @@ fn spawn_pieces(world: &mut World, leaves: &[FragmentGeometry], phase: u32, fall
         base_color: Color::srgb(0.55, 0.18, 0.18),
         ..default()
     });
-    for g in leaves {
+    for (g, &region) in leaves.iter().zip(regions) {
         let v = velocity(g);
         let at = Transform::from_translation(ORIGIN + g.center_local);
-        // The region comes back through the annotated UV span, which is why the cap material is
-        // looked up per piece rather than once.
-        let region = {
-            let part_guess = g.center_local;
-            if part_guess.y > 0.38 {
-                Region::Head
-            } else if part_guess.x.abs() < 0.23 && part_guess.y > -0.33 {
-                Region::Torso
-            } else {
-                Region::Limb
-            }
-        };
+        // **The strip the cap was banded for.** `annotate_cap` wrote `UV_1` against this region's
+        // thickness row; a material guessed from the piece's height put the head's strip on the
+        // upper torso, and its cuts showed skull where the trunk is muscle.
         let cap_material = world.resource::<CrossSectionAtlas>().material(region).unwrap_or_else(|| fallback.clone());
         if let Some(outer) = g.outer.clone() {
             let h = world.resource_mut::<Assets<Mesh>>().add(outer);
@@ -280,17 +301,27 @@ fn spawn_intact(world: &mut World) {
         if i == 0 {
             let canvas = {
                 let mut images = world.resource_mut::<Assets<Image>>();
-                FlayCanvas::new(&mut images, 128, Region::Torso, Layers::for_region(Region::Torso), [0.62, 0.52, 0.48], 0.7)
+                // 256, the crate's stated ceiling, because this clip fills the frame with one face of
+                // the torso: at 128 a texel was five pixels and the rim stair-stepped.
+                FlayCanvas::new(&mut images, 256, Region::Torso, Layers::for_region(Region::Torso), [0.62, 0.52, 0.48], 0.7)
             };
             let material = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
                 base_color_texture: Some(canvas.albedo()),
                 metallic_roughness_texture: Some(canvas.roughness()),
+                normal_map_texture: Some(canvas.normal()),
                 perceptual_roughness: 1.0,
                 ..default()
             });
+            // Tangents, or Bevy draws the normal map flat.
+            let mesh = mesh.clone().with_generated_tangents().unwrap_or(mesh);
             let h = world.resource_mut::<Assets<Mesh>>().add(mesh);
             world.spawn((Mesh3d(h), MeshMaterial3d(material), at, canvas, Torso, Phase(3)));
         } else {
+            // **The thigh under the slash is drawn without its front face**, and the skin patch
+            // takes that face's place. Laid proud of a closed cuboid, the patch's trough ran into
+            // the solid thigh and was hidden by its front face, so the wound showed only its upper
+            // walls — two yellow lines on the leg.
+            let mesh = if i == 4 { open_front(mesh) } else { mesh };
             let h = world.resource_mut::<Assets<Mesh>>().add(mesh);
             world.spawn((Mesh3d(h), MeshMaterial3d(flesh.clone()), at, Phase(3)));
             if i == 4 {
@@ -302,7 +333,7 @@ fn spawn_intact(world: &mut World) {
                 let source = world.resource_mut::<Assets<Mesh>>().add(patch.clone());
                 let drawn = world.resource_mut::<Assets<Mesh>>().add(patch);
                 // The patch is built facing +Y over [-0.5, 0.5]²; scale it to the face and turn it to +Z.
-                let xf = Transform::from_translation(ORIGIN + c + Vec3::Z * (hx.z + 0.012))
+                let xf = Transform::from_translation(ORIGIN + c + Vec3::Z * hx.z)
                     .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
                     .with_scale(Vec3::new(hx.x * 2.0, 1.0, hx.y * 2.0));
                 world.spawn((Mesh3d(drawn), MeshMaterial3d(flesh.clone()), xf, Phase(3), Thigh, IntactThigh(source)));
@@ -311,12 +342,39 @@ fn spawn_intact(world: &mut World) {
     }
 }
 
+/// `mesh` without the triangles that face `+Z` — a cuboid open at the front.
+fn open_front(mut mesh: Mesh) -> Mesh {
+    let kept: Option<Vec<u32>> = match (mesh.attribute(Mesh::ATTRIBUTE_NORMAL), mesh.indices()) {
+        (Some(bevy::mesh::VertexAttributeValues::Float32x3(normals)), Some(idx)) => {
+            let front = |i: usize| normals.get(i).is_some_and(|n| n[2] > 0.9);
+            let all: Vec<usize> = idx.iter().collect();
+            Some(
+                all.chunks_exact(3)
+                    .filter(|t| !(front(t[0]) && front(t[1]) && front(t[2])))
+                    .flat_map(|t| t.iter().map(|&i| i as u32))
+                    .collect(),
+            )
+        }
+        _ => None,
+    };
+    if let Some(kept) = kept {
+        mesh.insert_indices(bevy::mesh::Indices::U32(kept));
+    }
+    mesh
+}
+
 #[derive(Component)]
 struct IntactThigh(Handle<Mesh>);
 
-fn peel(world: &mut World, tick: u32, depth_mm: f32) {
+/// Peel the torso with hit `n`. Each hit lands a little off the last and a little wider or narrower,
+/// on a golden-angle spiral — deterministic, and enough to grow a ragged crater rather than rings.
+fn peel(world: &mut World, tick: u32, n: u32, depth_mm: f32) {
     let settings = world.get_resource::<FlaySettings>().cloned().unwrap_or_default();
-    let entry = Vec3::new(0.05, 0.10, 0.14) + ORIGIN;
+    // `libm`, not `std`: the hit positions reach the flaymap digest.
+    let a = n as f32 * 2.399_963;
+    let wander = 0.014 * (n as f32).sqrt();
+    let entry = Vec3::new(0.05 + libm::cosf(a) * wander, 0.10 + libm::sinf(a) * wander, 0.14) + ORIGIN;
+    let radius = 0.12 + 0.05 * (((n * 7) % 5) as f32 / 4.0);
     let mut q = world.query_filtered::<(&mut FlayCanvas, &Mesh3d, &GlobalTransform), With<Torso>>();
     let meshes = world.resource::<Assets<Mesh>>();
     let mut results = Vec::new();
@@ -327,7 +385,7 @@ fn peel(world: &mut World, tick: u32, depth_mm: f32) {
     let meshes_cloned: Vec<Option<(Mesh, GlobalTransform)>> = handles.iter().map(|(h, xf)| meshes.get(h).cloned().map(|m| (m, *xf))).collect();
     for ((mut canvas, _, _), slot) in q.iter_mut(world).zip(meshes_cloned.iter()) {
         let Some((mesh, xf)) = slot else { continue };
-        if let Some(handoff) = canvas.paint_world(mesh, xf, entry + Vec3::Z * 0.5, -Vec3::Z, 0.16, depth_mm, tick) {
+        if let Some(handoff) = canvas.paint_world(mesh, xf, entry + Vec3::Z * 0.5, -Vec3::Z, radius, depth_mm, tick) {
             results.push(handoff.bone_reached);
         }
         canvas.shade(&settings);
@@ -349,7 +407,9 @@ fn lacerate(world: &mut World) {
         gape: Gape { width_max: 0.16, open_ticks: 80 },
         tension: Tension { skin: 0.9, langer: Some([0.0, 1.0, 0.0]) },
         influence: 0.25,
-        bed_depth_mm: 14.0,
+        // Into the muscle, well short of the femur at 27.8 mm. At 14 mm the trough was half fat, and
+        // a slash read as yellow stripes on the thigh rather than as a cut.
+        bed_depth_mm: 24.0,
         region: Region::Limb,
         opened_at: now,
         source,

@@ -123,6 +123,44 @@ pub fn texel_at(layers: &Layers, depth_mm: f32, u_mm: f32, v_mm: f32, tile_mm: f
     texel(layer, frac, u_mm, v_mm, tile_mm.max(1.0e-3), seed, muscle_albedo())
 }
 
+/// **The tissue at `depth_mm`, averaged over its grain**: what [`texel_at`] looks like from far
+/// enough away that no single lobule, fascicle or canal is resolved.
+///
+/// For a texture-space consumer whose texels are coarser than the grain — a flaymap's canvas is
+/// several millimetres per texel, against fascicles under one — point-sampling `texel_at` lands each
+/// texel on a different feature, and the wound reads as salt and pepper. This is the value a texel
+/// that size should hold: the mean of an 8 × 8 grid across one `tile_mm` square, colour averaged in
+/// linear light and encoded back to sRGB, roughness averaged as stored. Deterministic, like the
+/// rest of the strip: a fixed grid, `libm` for the transfer curve.
+pub fn texel_mean(layers: &Layers, depth_mm: f32, tile_mm: f32, seed: u32) -> ([f32; 3], f32) {
+    const N: usize = 8;
+    let (layer, frac) = layers.at(depth_mm);
+    let tile = tile_mm.max(1.0e-3);
+    let muscle = muscle_albedo();
+    let mut lin = [0.0f32; 3];
+    let mut rough = 0.0;
+    for j in 0..N {
+        for i in 0..N {
+            let (u, v) = ((i as f32 + 0.5) * tile / N as f32, (j as f32 + 0.5) * tile / N as f32);
+            let (c, r) = texel(layer, frac, u, v, tile, seed, muscle);
+            for (acc, x) in lin.iter_mut().zip(c) {
+                *acc += srgb_to_linear(x);
+            }
+            rough += r;
+        }
+    }
+    let k = 1.0 / (N * N) as f32;
+    (lin.map(|l| linear_to_srgb(l * k)), rough * k)
+}
+
+pub(crate) fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 { c / 12.92 } else { libm::powf((c + 0.055) / 1.055, 2.4) }
+}
+
+pub(crate) fn linear_to_srgb(l: f32) -> f32 {
+    if l <= 0.003_130_8 { l * 12.92 } else { 1.055 * libm::powf(l, 1.0 / 2.4) - 0.055 }
+}
+
 /// Where each band lands in columns, from the layer table alone.
 fn bands_of(layers: &Layers, width: u32) -> Vec<Band> {
     let span = layers.span_mm().max(1.0e-3);
@@ -148,10 +186,15 @@ fn muscle_albedo() -> [f32; 3] {
 }
 
 /// Authored albedos, encoded sRGB. This crate's own; stated rather than hidden.
+///
+/// The dermis and the fat were retuned in 0.5.9 against how they read beside the muscle: a pale
+/// dermis (`0.90, 0.74, 0.70`) ringed every wound in white, and a saturated fat (`0.93, 0.80,
+/// 0.42`) — yolk rather than tallow — filled a torso crater with it. Cut dermis is pink with its
+/// own capillary bleeding; subcutaneous fat is a pale cream.
 const SKIN_EPIDERMIS: [f32; 3] = [0.72, 0.55, 0.47];
-const SKIN_DERMIS: [f32; 3] = [0.90, 0.74, 0.70];
-const FAT_LOBULE: [f32; 3] = [0.93, 0.80, 0.42];
-const FAT_SEPTUM: [f32; 3] = [0.88, 0.76, 0.70];
+const SKIN_DERMIS: [f32; 3] = [0.84, 0.58, 0.54];
+const FAT_LOBULE: [f32; 3] = [0.93, 0.85, 0.60];
+const FAT_SEPTUM: [f32; 3] = [0.86, 0.68, 0.62];
 const PERIMYSIUM: [f32; 3] = [0.86, 0.78, 0.76];
 const CORTEX: [f32; 3] = [0.91, 0.87, 0.77];
 const CANAL: [f32; 3] = [0.45, 0.25, 0.22];
@@ -182,13 +225,20 @@ fn texel(layer: Layer, frac: f32, u: f32, v: f32, tile: f32, seed: u32, muscle: 
         }
         Layer::Muscle => {
             // Fascicles ~0.7 mm across wrapped in perimysium at ~3 mm.
+            //
+            // **The net is drawn thin, and the widths are what the band averages to.** At ridge
+            // widths of 0.08 and 0.06 cell, and the fine net at 0.35 strength, the pale tissue was
+            // 11 % of the band. Averaged in linear light — what a mip level, a distant cut or a
+            // flaymap texel sees — that turned the band's dark red to rose-tan, and a cut face read
+            // as bread. At these widths the net is about 3 % and the band stays red from any
+            // distance, while up close the fascicles are still outlined.
             let (ff, fp) = snap(1.0 / 0.7, tile);
             let (f1, f2) = worley(u * ff, v * ff, fp, seed ^ 0x3A5);
             let (pf, pp) = snap(1.0 / 3.0, tile);
             let (p1, p2) = worley(u * pf, v * pf, pp, seed ^ 0x9C1);
             let fibre = 0.85 + 0.2 * (1.0 - f1).clamp(0.0, 1.0);
-            let fine_ridge = smoothstep((0.08 - (f2 - f1)) / 0.08) * 0.35;
-            let peri = smoothstep((0.06 - (p2 - p1)) / 0.06);
+            let fine_ridge = smoothstep((0.05 - (f2 - f1)) / 0.05) * 0.2;
+            let peri = smoothstep((0.03 - (p2 - p1)) / 0.03);
             let c = lerp3(shade(muscle, fibre), PERIMYSIUM, (peri + fine_ridge).min(1.0));
             (c, 0.22 + 0.3 * peri)
         }
@@ -256,7 +306,7 @@ fn lattice(x: i32, y: i32, py: i32, seed: u32) -> f32 {
 }
 
 /// Smooth value noise in `[0, 1]`, periodic along `y` with period `tile`.
-fn value_noise(x: f32, y: f32, tile: f32, seed: u32) -> f32 {
+pub(crate) fn value_noise(x: f32, y: f32, tile: f32, seed: u32) -> f32 {
     let py = tile.round().max(1.0) as i32;
     let (xi, yi) = (x.floor(), y.floor());
     let (fx, fy) = (smoothstep(x - xi), smoothstep(y - yi));
@@ -411,6 +461,11 @@ mod tests {
     /// (50 mm, not the depth axis' 5.1 mm), each noise frequency is snapped so that tile is a whole
     /// number of cells, and the plugin's default height went from 64 to 512 rows. 0.1.0's strips
     /// were stretched ~10× along the cut and seamed; these are not.
+    ///
+    /// Re-blessed again in 0.5.9: the muscle band's connective-tissue net is drawn at about a third
+    /// of its old area, because once the strip gained mip levels the old net averaged the band to
+    /// rose-tan; and the dermis and fat albedos were retuned (see the constants). Was
+    /// `[0xd55cec77866f8a74, 0xf6f9bd95d6256cca, 0xdfc4499c89d19840]`.
     #[test]
     fn the_strips_are_frozen() {
         let got: Vec<u64> = Region::ALL
@@ -418,6 +473,6 @@ mod tests {
             .map(|r| strip(&Layers::for_region(*r), 512, 512, TILE_MM, 0xC0FF_EE00).digest())
             .collect();
         println!("{got:x?}");
-        assert_eq!(got, vec![0xd55cec77866f8a74, 0xf6f9bd95d6256cca, 0xdfc4499c89d19840]);
+        assert_eq!(got, vec![0x31620f0b7e9e7e88, 0x7066b93f54d6cc2c, 0x7d5d385f1cdc1df0]);
     }
 }

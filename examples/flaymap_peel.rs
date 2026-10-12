@@ -85,6 +85,8 @@ fn setup(
     let material = materials.add(StandardMaterial {
         base_color_texture: Some(canvas.albedo()),
         metallic_roughness_texture: Some(canvas.roughness()),
+        // The crater's slope, so its walls take the light. Needs the mesh's tangents, below.
+        normal_map_texture: Some(canvas.normal()),
         // REQUIRED. Bevy multiplies this scalar by the texture
         // (`bevy_pbr-0.19.0/src/pbr_material.rs:157-163`), so the shipped default would scale the
         // roughness map away — and wet muscle against dry cortex is mostly a gloss difference.
@@ -93,7 +95,10 @@ fn setup(
     });
 
     commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 0.25).mesh())),
+        Mesh3d(meshes.add({
+            let slab = Cuboid::new(1.0, 1.0, 0.25).mesh().build();
+            slab.clone().with_generated_tangents().unwrap_or(slab)
+        })),
         MeshMaterial3d(material),
         // The canvas rides the entity it paints: `FlayCanvas` is a `Component`, and the plugin's
         // upload budget queries for it. Handing the images to a material and forgetting this is the
@@ -137,7 +142,7 @@ fn peel(
 
     if now % EVERY == 0 {
         for (entity, mut canvas) in &mut subjects {
-            let handoff = canvas.paint_uv(SPOT, RADIUS, BITE_MM, now);
+            let handoff = canvas.paint_uv(spot(now / EVERY), RADIUS, BITE_MM, now);
             // The crate never writes this message itself: only the caller knows whether the thing it
             // peeled has a skeleton something else owns.
             if let Some(msg) = BoneExposed::from_handoff(entity, &handoff) {
@@ -167,6 +172,13 @@ fn announce(mut inbox: MessageReader<BoneExposed>, mut peel: ResMut<Peel>) {
         );
     }
 }
+/// Where hit `n` lands: [`SPOT`], walked out on a golden-angle spiral, so the crater grows ragged the
+/// way a run of real shots would rather than as concentric rings.
+fn spot(n: u32) -> Vec2 {
+    let a = n as f32 * 2.399_963;
+    SPOT + Vec2::new(libm::cosf(a), libm::sinf(a)) * 0.012 * (n as f32).sqrt()
+}
+
 
 fn redraw_hud(
     peel: Res<Peel>,

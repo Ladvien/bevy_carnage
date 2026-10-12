@@ -6,7 +6,9 @@ mod strip;
 
 pub use depth::{Scale, SkinPlane, annotate_cap, depth_below_skin, uv1_at, uv1_at_core};
 pub use layers::{Layer, Layers, Region};
-pub use strip::{Band, Strip, strip, texel_at};
+pub use strip::{Band, Strip, strip, texel_at, texel_mean};
+pub(crate) use strip::value_noise;
+use strip::{linear_to_srgb, srgb_to_linear};
 
 
 use bevy::app::{App, Plugin, Startup};
@@ -141,8 +143,8 @@ fn bake_strips(
     for region in Region::ALL {
         let s = strip(settings.layers(region), settings.width, settings.height, tile_mm, settings.seed);
         let digest = s.digest();
-        let albedo = images.add(image_of(s.width, s.height, s.albedo, TextureFormat::Rgba8UnormSrgb));
-        let rough = images.add(image_of(s.width, s.height, s.rough, TextureFormat::Rgba8Unorm));
+        let albedo = images.add(image_of(s.width, s.height, s.albedo, TextureFormat::Rgba8UnormSrgb, true));
+        let rough = images.add(image_of(s.width, s.height, s.rough, TextureFormat::Rgba8Unorm, false));
         let material = materials.as_mut().map(|m| {
             m.add(StandardMaterial {
                 base_color_texture: Some(albedo.clone()),
@@ -158,21 +160,74 @@ fn bake_strips(
     }
 }
 
-/// A strip image: clamped along depth, repeating along the tile, linearly filtered.
-fn image_of(width: u32, height: u32, data: Vec<u8>, format: TextureFormat) -> Image {
-    let mut image = Image::new(
+/// A strip image: clamped along depth, repeating along the tile, trilinearly filtered over a full
+/// mip chain.
+///
+/// **The mip chain is what keeps a cut face from sparkling.** A strip draws its grain at physical
+/// size — fascicles 0.7 mm across, Haversian canals 0.35 mm apart — so on a cap a few hundred pixels
+/// wide one screen pixel covers several features. Sampled from level 0 alone, each pixel lands on a
+/// different one, and the cap reads as salt and pepper that crawls as the piece turns. The levels are
+/// box-filtered on the CPU, colour in linear light, so the bands keep their mean colour as the grain
+/// drops below a pixel. The digest is over level 0, the strip itself, and does not see them.
+fn image_of(width: u32, height: u32, data: Vec<u8>, format: TextureFormat, srgb: bool) -> Image {
+    let (data, levels) = mip_chain(width, height, data, srgb);
+    // `new_uninit` and then the bytes, because `Image::new` debug-asserts that the data is exactly one
+    // level's worth, and these carry the whole chain.
+    let mut image = Image::new_uninit(
         Extent3d { width, height, depth_or_array_layers: 1 },
         TextureDimension::D2,
-        data,
         format,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
+    image.data = Some(data);
+    image.texture_descriptor.mip_level_count = levels;
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::ClampToEdge,
         address_mode_v: ImageAddressMode::Repeat,
         mag_filter: ImageFilterMode::Linear,
         min_filter: ImageFilterMode::Linear,
+        mipmap_filter: ImageFilterMode::Linear,
         ..Default::default()
     });
     image
+}
+
+/// **Level 0 followed by every smaller level down to 1×1**, RGBA8, in the layer-major order Bevy
+/// uploads. Returns the bytes and the level count. Each level averages the 2×2 block above it (the
+/// last row or column repeated when a size is odd); `srgb` averages the colour channels in linear
+/// light, so a red-and-ivory grain fades to its mean rather than a darker colour.
+fn mip_chain(width: u32, height: u32, base: Vec<u8>, srgb: bool) -> (Vec<u8>, u32) {
+    let decode: [f32; 256] = std::array::from_fn(|b| if srgb { srgb_to_linear(b as f32 / 255.0) } else { b as f32 / 255.0 });
+    let (mut w, mut h) = (width.max(1) as usize, height.max(1) as usize);
+    if base.len() != w * h * 4 {
+        return (base, 1);
+    }
+    let mut out = base;
+    let mut start = 0;
+    let mut levels = 1;
+    while w > 1 || h > 1 {
+        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+        let mut next = Vec::with_capacity(nw * nh * 4);
+        for y in 0..nh {
+            for x in 0..nw {
+                let (x0, y0) = ((2 * x).min(w - 1), (2 * y).min(h - 1));
+                let (x1, y1) = ((2 * x + 1).min(w - 1), (2 * y + 1).min(h - 1));
+                for c in 0..4 {
+                    let at = |px: usize, py: usize| out.get(start + (py * w + px) * 4 + c).copied().unwrap_or(0);
+                    let quad = [at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1)];
+                    next.push(if c < 3 && srgb {
+                        let l = quad.iter().map(|&b| decode[b as usize]).sum::<f32>() * 0.25;
+                        (linear_to_srgb(l) * 255.0).round().clamp(0.0, 255.0) as u8
+                    } else {
+                        ((quad.iter().map(|&b| b as u32).sum::<u32>() + 2) / 4) as u8
+                    });
+                }
+            }
+        }
+        start = out.len();
+        out.extend_from_slice(&next);
+        (w, h) = (nw, nh);
+        levels += 1;
+    }
+    (out, levels)
 }

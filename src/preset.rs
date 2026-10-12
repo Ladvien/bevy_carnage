@@ -672,6 +672,10 @@ fn dress(
                     base_color: Color::WHITE,
                     base_color_texture: Some(flay.albedo()),
                     metallic_roughness_texture: Some(flay.roughness()),
+                    // The crater's slope, unless the caller's material carries a normal map of its own,
+                    // which is kept. Drawn only on a mesh with tangents; without them Bevy leaves the
+                    // normal map out and the wound shades flat.
+                    normal_map_texture: base.normal_map_texture.clone().or_else(|| Some(flay.normal())),
                     perceptual_roughness: 1.0,
                     ..base
                 };

@@ -340,7 +340,13 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.8`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.9`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.9` changed: a flayed wound looks like one
+
+A flaymap texel is millimetres across (7.8 mm on a 128 canvas) and the tissue grain under it is finer: fascicles under a millimetre, fat lobules two. `FlayCanvas::shade` point-sampled that grain, so every texel landed on a different feature, and a crater came out as a disc of red and yellow dots, banded in concentric rings like a target. Now a texel holds the tissue averaged over its grain (`cross_section::texel_mean`, new and public), the band edges are torn by up to ±3 mm of value noise, and **`FlayCanvas::normal`** is a third image, the crater's slope, for `normal_map_texture`. Give the mesh tangents (`Mesh::generate_tangents`) and the walls take the light. `preset` wires it in unless your skin material has a normal map of its own. The depth buffer, the digest and the depth channel are untouched, so no flaymap golden moved.
+
+The cut-face strips now carry a mip chain built on the CPU, so a cap seen from a distance holds its band colours instead of sparkling. The muscle band's connective-tissue net is a third of its old area, because averaged it had turned the red rose-tan, and the dermis and fat albedos are retuned (the dermis had read white, the fat yolk-yellow). `the_strips_are_frozen` is re-blessed for that, with the reason beside it. A flay canvas uploads three images now instead of two, 192 KB at 128.
 
 ### What `0.5.8` changed: the examples, not the library
 

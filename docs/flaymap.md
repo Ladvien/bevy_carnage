@@ -20,7 +20,7 @@ This one keeps the state on the CPU in integers and treats the GPU as **output o
 - **Nothing is read back, ever.** `Assets<Image>` is written by exactly one function (`FlayCanvas::flush`) and read by nobody.
 - **Bone exposure is gameplay, and it comes back as a value.** Every paint returns a `Handoff`, and the call that first reaches the cortex is the only one that says so. So "the skin is off, here is the bone" is a `Handoff`/`BoneExposed` a fracture system can act on, rather than a texture somebody has to look at.
 
-There is **no custom shader and no shipped asset.** The crate owns two `Image`s per actor and hands them to a plain `StandardMaterial`. The intact surface underneath is written *into* the canvas on the CPU, so there is nothing left to blend in WGSL.
+There is **no custom shader and no shipped asset.** The crate owns three `Image`s per actor — albedo, metallic-roughness and normal — and hands them to a plain `StandardMaterial`. The intact surface underneath is written *into* the canvas on the CPU, so there is nothing left to blend in WGSL.
 
 ## The layer model
 
@@ -36,7 +36,9 @@ Which tissue is showing at a texel is then a lookup, and the depths are not inve
 
 \* Cortical bone thickness is **not corpus-sourced** — see `cross_section`'s own note — and is that crate's stated own number. `FlayCanvas::new` takes the `Layers` by value so a caller overriding it overrides it in both places at once.
 
-The colour and roughness of a peeled texel are `bevy_carnage::cross_section::texel_at` at that depth: fat is lobules ~2 mm across in a septal net, muscle is fascicles wrapped in pale perimysium, cortex is ivory pierced by Haversian canals, marrow opens through a trabecular lattice. **The identical per-texel rule that bakes a cut face's strip**, so a flayed patch and the stump beside it are one tissue at one physical grain rather than two authored palettes that drift.
+The colour and roughness of a peeled texel come from `bevy_carnage::cross_section`'s tissue at that depth: fat is lobules ~2 mm across in a septal net, muscle is fascicles wrapped in pale perimysium, cortex is ivory pierced by Haversian canals, marrow opens through a trabecular lattice. **The same rule that bakes a cut face's strip**, so a flayed patch and the stump beside it are one tissue rather than two authored palettes that drift. A canvas texel is millimetres across (7.8 mm at 128) and the grain is finer, so a texel holds `texel_mean`, the tissue averaged over its grain: point-sampled, each texel landed on a different feature and the crater came out as a disc of red and yellow dots. A canvas fine enough to resolve the grain (2 mm a texel or less) gets `texel_at` again. The colour lookup also tears its depth by up to ±3 mm of value noise, so the bands come out ragged rather than as a target; the buffer, the digest and the depth channel keep the true depth.
+
+**The crater has relief.** `FlayCanvas::normal` is the slope of the peeled surface, central differences of the depth buffer in glTF's tangent-space convention. Hand it to `normal_map_texture` and give the mesh tangents (`Mesh::generate_tangents`), and the walls take the light. Without tangents Bevy leaves the normal map out and the wound shades flat.
 
 **A hit peels a crater, not a cylinder.** `paint_uv` adds its full depth at the centre and smoothstep-falls to zero at the radius. A flat disc would stack into a bore with a vertical wall and the bands would never show; with a falloff, the rim *is* the cross-section — skin at the edge, then fat, then muscle, then bone in the middle.
 
@@ -100,6 +102,8 @@ fn wire_up(
     let material = materials.add(StandardMaterial {
         base_color_texture: Some(canvas.albedo()),
         metallic_roughness_texture: Some(canvas.roughness()),
+        // The crater's slope. The mesh needs tangents, or Bevy draws it flat.
+        normal_map_texture: Some(canvas.normal()),
         // REQUIRED: Bevy multiplies this scalar by the texture, so the shipped value
         // would scale the map away. See `bevy_pbr-0.19.0/src/pbr_material.rs:157-163`.
         perceptual_roughness: 1.0,
@@ -158,7 +162,7 @@ fn on_hit(
 
 ## The upload budget
 
-A 128×128 canvas at `Rgba8UnormSrgb` is 64 KB, and this crate owns **two** images per actor, so one canvas is 128 KB of `Assets<Image>` writes each time it is flushed. At the shipped `max_canvas_updates_per_tick = 4` that is 512 KB per frame. An actor wearing this crate *and* `bevy_wetmap` pays it twice, which is the arithmetic behind keeping canvases small: **128 is the practical default and 256 the ceiling.**
+A 128×128 canvas at `Rgba8UnormSrgb` is 64 KB, and this crate owns **three** images per actor, so one canvas is 192 KB of `Assets<Image>` writes each time it is flushed. At the shipped `max_canvas_updates_per_tick = 4` that is 768 KB per frame. An actor wearing this crate *and* `wetmap` pays for both, which is the arithmetic behind keeping canvases small: **128 is the practical default and 256 the ceiling.**
 
 `flush` uploads **only when dirty**, and the plugin picks the oldest-dirty canvases first by a stable `(dirty_since, Entity)` key, so a canvas that has been waiting cannot be starved by one that keeps being hit.
 
