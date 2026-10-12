@@ -268,9 +268,12 @@ fn setup(
     let (marks, splats) = spray(&settings);
     info!("the kill: {} landed stains, {} screen marks", marks.len(), splats.len());
     commands.insert_resource(Kill { marks, splats, ..default() });
+    // Far enough back that the standing subject fits, head to feet, in the band between the
+    // eleven-line legend and the status block: closer in, the legend ran across the head and the
+    // feet were below the window (R1-18).
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(0.0, 1.05, 2.35).looking_at(body::ORIGIN + Vec3::Y * 0.08, Vec3::Y),
+        Transform::from_xyz(0.0, 1.0, 3.6).looking_at(body::ORIGIN + Vec3::Y * -0.1, Vec3::Y),
     ));
     // A fill, so an unlit cut face reads as shadowed rather than as a hole in the chunk.
     commands.insert_resource(GlobalAmbientLight {

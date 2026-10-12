@@ -261,9 +261,11 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    // Far enough back, and aimed a little above the bone, that the whole bone stands in the band
+    // between the legend and the status rather than behind them (R1-41).
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(0.34, 0.28, 0.44).looking_at(ORIGIN, Vec3::Y),
+        Transform::from_xyz(0.415, 0.306, 0.537).looking_at(ORIGIN + Vec3::Y * 0.037, Vec3::Y),
     ));
     // A fill, so an unlit cut face reads as shadowed rather than as a hole in the shard.
     commands.insert_resource(GlobalAmbientLight {
