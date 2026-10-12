@@ -214,8 +214,9 @@ fn redraw_hud(
     } else {
         String::from("digest        hidden  (D)\n")
     };
+    // ASCII only: the built-in UI font has no `—` and drew a missing-glyph box (R1-32).
     text.0 = format!(
-        "wetmap_paint — a wetmap you can hash\n\
+        "wetmap_paint - a wetmap you can hash\n\
          \n\
          {digest}\
          wetted area   {area:.6} m^2\n\

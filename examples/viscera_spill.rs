@@ -152,7 +152,7 @@ fn setup(
     commands.insert_resource(Show { gut, seed: SEED, tick: 0 });
 
     commands.spawn((
-        Text::new("spilling…"),
+        Text::new("spilling..."),
         TextFont { font_size: FontSize::Px(15.0), ..default() },
         Node { position_type: PositionType::Absolute, top: px(12), left: px(12), ..default() },
         Legend,
@@ -360,21 +360,23 @@ fn update_legend(
         let (node, _) = m.anchors.get(slot).copied()?;
         (node == HAND_NODE).then(|| m.torn.get(slot).copied().unwrap_or(false))
     });
+    // **ASCII only on screen.** Bevy's built-in UI font has no `—`, `·`, `×` or `…`, and drew each as a
+    // missing-glyph box (R1-32).
     let grip = match held {
-        None => "free — hold G to take the loose strand by its free end".to_string(),
+        None => "free - hold G to take the loose strand by its free end".to_string(),
         Some(false) => format!("holding node {HAND_NODE}, dragging at {GRAB_SPEED} m/s"),
-        Some(true) => "the grip's pin parted — release G and take hold again".to_string(),
+        Some(true) => "the grip's pin parted - release G and take hold again".to_string(),
     };
 
     for mut text in &mut legend {
         text.0 = format!(
             "SPACE  spill        G  hold: grab and drag the free end\n\
              T      tear the mesentery        R  reset (same seed)\n\n\
-             strands    {} · nodes {nodes}\n\
-             mesentery  {torn}/{links} links torn — monotone, a tear never heals\n\
+             strands    {} | nodes {nodes}\n\
+             mesentery  {torn}/{links} links torn - monotone, a tear never heals\n\
              grip       {grip}\n\
-             tick       {} · digest {digest:#018x}\n\
-             solver     {} substeps × {} iterations, gravity {}, seed {:#010x}",
+             tick       {} | digest {digest:#018x}\n\
+             solver     {} substeps x {} iterations, gravity {}, seed {:#010x}",
             digests.len(),
             show.tick,
             settings.substeps,
