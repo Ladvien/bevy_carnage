@@ -130,6 +130,23 @@ pub fn material(world: &mut World, color: Color, roughness: f32) -> Handle<Stand
     })
 }
 
+/// **The raw interior every cut face shows**, one material for every example that breaks something.
+///
+/// Dark, because bright red on a flat plane reads as paint, and glossy enough that a tumbling
+/// piece's highlight travels across it, which is most of what reads as wet. The reflectance is
+/// water's (F0 0.02, Bevy's 0.35) rather than the dielectric default's 0.04, and the roughness 0.5.
+/// At the default and 0.42, a broad cut face that came to rest at the sun's mirror angle washed out
+/// across its whole area to a pale pink tile, mean (158, 132, 133) where the same face with no
+/// specular is (114, 22, 22); at these values it is (131, 80, 81), still visibly wet.
+pub fn interior() -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::srgb(0.46, 0.07, 0.07),
+        perceptual_roughness: 0.5,
+        reflectance: 0.35,
+        ..default()
+    }
+}
+
 /// The logical width every on-screen legend was laid out for: the default window's.
 const HUD_WIDTH: f32 = 1280.0;
 

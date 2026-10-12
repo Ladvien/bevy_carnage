@@ -523,12 +523,8 @@ impl BodyMaterials {
         });
         BodyMaterials {
             skin: material(world, SKIN, 0.85),
-            // **Darker and much glossier than a "red material".** At roughness 0.55 a flat cut face
-            // is lit evenly across its whole area, which is what stone and ice look like; dropping it
-            // to 0.25 puts a moving highlight on each face instead, and that specular travel is most
-            // of what reads as wet. The colour goes down, not up: bright red on a flat plane reads as
-            // paint.
-            interior: material(world, Color::srgb(0.46, 0.07, 0.07), 0.42),
+            // See [`super::interior`] for why it is dark, glossy, and only as reflective as water.
+            interior: world.resource_mut::<Assets<StandardMaterial>>().add(super::interior()),
             aim,
         }
     }

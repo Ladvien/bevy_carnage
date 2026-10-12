@@ -233,7 +233,7 @@ fn break_it(rec: &mut Recorder, tint: Tint) {
 
     // The cut faces keep the raw interior whichever tint is in play: that contrast is what makes a
     // break read as a break, and losing it would make both GIFs worse for no gain.
-    let interior = material(world, Color::srgb(0.46, 0.07, 0.07), 0.42);
+    let interior = world.resource_mut::<Assets<StandardMaterial>>().add(common::interior());
     // One material per verdict, made once rather than per fragment. Under `Tint::Demo` all three
     // are the subject's own skin, so the verdict lookup below stays one code path either way.
     let skins: Vec<(Verdict, Handle<StandardMaterial>)> =

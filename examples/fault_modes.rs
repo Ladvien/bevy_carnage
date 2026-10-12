@@ -303,7 +303,7 @@ fn setup(
         cortical: skin(0.86, 0.84, 0.74, 0.55),
         trabecular: skin(0.78, 0.66, 0.48, 0.85),
         soft: skin(0.58, 0.33, 0.31, 0.75),
-        interior: skin(0.46, 0.07, 0.07, 0.42),
+        interior: materials.add(common::interior()),
     });
 
     commands.spawn((

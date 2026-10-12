@@ -291,11 +291,7 @@ fn setup(
             perceptual_roughness: 0.55,
             ..default()
         }),
-        interior: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.46, 0.07, 0.07),
-            perceptual_roughness: 0.42,
-            ..default()
-        }),
+        interior: materials.add(common::interior()),
     });
 
     commands.spawn((
