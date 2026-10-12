@@ -241,7 +241,7 @@ fn aspect_of(cell: &ProxyCell) -> Option<f32> {
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_carnage - fault modes".into(),
                 // The one web line, inert on native: the browser build draws into the page's canvas.
@@ -249,7 +249,7 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .init_resource::<Dials>()
         .init_resource::<Report>()

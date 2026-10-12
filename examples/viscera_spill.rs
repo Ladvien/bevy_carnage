@@ -84,14 +84,14 @@ struct Show {
 fn main() {
     App::new()
         .add_plugins((
-            DefaultPlugins.set(WindowPlugin {
+            common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "viscera_spill".into(),
                     canvas: Some("#carnage-canvas".into()),
                     ..default()
                 }),
                 ..default()
-            }),
+            })),
             VisceraPlugin,
         ))
         .add_plugins(common::autopilot::Autopilot)

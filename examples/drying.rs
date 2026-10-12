@@ -139,14 +139,14 @@ struct Readout;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_carnage - drying".into(),
                 canvas: Some("#carnage-canvas".into()),
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .insert_resource(Time::<Fixed>::from_hz(HZ as f64))
         .init_resource::<Scrub>()

@@ -171,7 +171,7 @@ struct LastBlow {
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_carnage — carnage (1-5 hit, 6 shoot through, arrows aim, R reset)"
                     .into(),

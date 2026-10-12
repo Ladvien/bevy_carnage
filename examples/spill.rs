@@ -41,7 +41,7 @@ struct Spawner {
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, VisceraPlugin))
+        .add_plugins((common::autopilot::plugins(DefaultPlugins), VisceraPlugin))
         .add_plugins(common::autopilot::Autopilot)
         // The crate is integer-tick at 60 Hz and never reads the clock; Bevy's default is 64.
         .insert_resource(Time::<Fixed>::from_hz(60.0))

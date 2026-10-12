@@ -62,14 +62,14 @@ struct HudStatus;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_carnage — ribbons (1-5 to hit, arrows to aim, R reset)".into(),
                 resolution: (960u32, 680u32).into(),
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         // The deterministic half is not needed here: `common::body` bakes through `fracture_mesh`,
         // the pure path. `CarnageVfxPlugin` is what brings in Hanabi and the ribbon systems.

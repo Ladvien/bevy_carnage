@@ -46,7 +46,7 @@ struct Hud;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             // `canvas` has no effect off the web (`bevy_window-0.19.0/src/window.rs:250`), so it is
             // inert on native rather than gated.
             primary_window: Some(Window {
@@ -55,7 +55,7 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .add_plugins(FlaymapPlugin)
         .init_resource::<Peel>()

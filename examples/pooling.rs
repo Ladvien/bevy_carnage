@@ -81,14 +81,14 @@ struct HudStatus;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_carnage — pooling (space to shoot, arrows to aim, R reset)".into(),
                 resolution: (960u32, 680u32).into(),
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .add_plugins(CarnageVfxPlugin)
         .insert_resource(Aim(Vec3::new(0.0, 0.10, 0.0)))

@@ -23,7 +23,7 @@ struct Tick(u32);
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_carnage — flesh".into(),
                 canvas: Some("#carnage-canvas".into()),
@@ -31,7 +31,7 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .add_plugins((CrossSectionPlugin, FlaymapPlugin, WetmapPlugin, FleshPlugin))
         .insert_resource(WetSettings { dry_ticks: 600, edge_samples: 4, ..default() })

@@ -187,14 +187,14 @@ struct Hit {
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "pattern_classes".into(),
                 canvas: Some("#carnage-canvas".into()),
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         // The blood dials are authored in ticks at 60 Hz, so the demo runs its mechanisms on a 60 Hz
         // fixed tick and counts integers. No clock is read anywhere in here.

@@ -145,14 +145,14 @@ impl Default for Status {
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_carnage — bullet holes (Space to fire, arrows to aim, R reset)".into(),
                 resolution: (960u32, 680u32).into(),
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .insert_resource(Aim(SHOTS[0].1))
         .init_resource::<Bores>()

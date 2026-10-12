@@ -56,7 +56,7 @@ struct Hud;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             // The settled shape for every demo on the site. `canvas` has no effect off the web
             // (`bevy_window-0.19.0/src/window.rs:250`), so it is inert on native rather than gated.
             primary_window: Some(Window {
@@ -65,7 +65,7 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .add_plugins(WetmapPlugin)
         // 60 Hz, because `WetSettings::dry_ticks` is quoted at 60 Hz. Bevy's default fixed rate is 64,

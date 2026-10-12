@@ -83,7 +83,7 @@ struct Soften(usize);
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_carnage — sever (1-5 to hit, arrows to aim, G granularity, R reset)"
                     .into(),

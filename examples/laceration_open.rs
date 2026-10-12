@@ -37,13 +37,13 @@ const LANGER: [f32; 3] = [0.0, 0.0, 1.0];
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_laceration — space to re-open".into(),
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .add_plugins(bevy_carnage::cross_section::CrossSectionPlugin)
         .add_plugins(LacerationPlugin)

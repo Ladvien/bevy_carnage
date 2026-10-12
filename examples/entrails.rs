@@ -111,14 +111,14 @@ struct Entrail {
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_carnage — entrails (1-5 to hit, arrows to aim, R reset)".into(),
                 resolution: (960u32, 680u32).into(),
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .add_plugins(VisceraPlugin)
         // **The crate is integer-tick at 60 Hz and never reads a clock**; Bevy's `Time<Fixed>`

@@ -46,18 +46,68 @@
 //!
 //! A shot is taken in `Update` of the frame it names and lands one or two frames later — readback is
 //! asynchronous — so put `exit` a few dozen frames after the last `shot`.
+//!
+//! # Why a scripted run opens no window
+//!
+//! A window on macOS presents only while it is on screen. When another window covers it, or it opens
+//! on another Space, or the screen is locked, every screenshot of it comes back pure black, HUD
+//! included. Worse, Bevy still acquires the window's surface every frame, and on a locked screen
+//! that blocks until wgpu gives up on the submission and panics. Round 1 lost whole runs to the
+//! first, pinning the window on top saved none of them, and the second was hit while fixing it.
+//!
+//! So a scripted run is built with [`plugins`], which swaps winit's runner for a plain loop. The
+//! primary window still exists as an entity, which is what the key injection addresses and the HUD
+//! lays out against, but nothing creates a surface for it. Every camera draws into an off-screen
+//! image at twice the window's logical size, the same 1920×1360 a Retina window gave round 1, and
+//! the shot reads that image back. It is the path the headless recorders take, and it needs no
+//! screen, so it runs on a build host with the lid shut.
+//!
+//! **Register it as `.add_plugins(common::autopilot::plugins(DefaultPlugins.set(..)))` and then
+//! `.add_plugins(common::autopilot::Autopilot)`.** Without a script `plugins` returns the group
+//! untouched, so an ordinary run gets an ordinary window.
+//!
+//! **Time advances a fixed 1/60 s per frame in a scripted run.** Off screen there is no vsync, so
+//! frames run as fast as the host allows. Under wall-clock time "120 frames after the key" would
+//! then mean a few hundredths of a second of scene time on a fast host and seconds on a slow one. A
+//! fixed step makes a script's frame numbers mean the same scene everywhere.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use bevy::{
+    app::{PluginGroupBuilder, ScheduleRunnerPlugin},
+    asset::RenderAssetUsages,
+    camera::{ImageRenderTarget, RenderTarget},
     input::{
         ButtonState, InputSystems,
         keyboard::{Key, KeyboardInput, NativeKey},
     },
     prelude::*,
-    render::view::screenshot::{Screenshot, save_to_disk},
-    window::PrimaryWindow,
+    render::{
+        render_resource::{Extent3d, PollType, TextureDimension, TextureFormat, TextureUsages},
+        renderer::RenderDevice,
+        view::screenshot::{Screenshot, save_to_disk},
+    },
+    time::TimeUpdateStrategy,
+    ui::IsDefaultUiCamera,
+    window::{PrimaryWindow, WindowRef},
+    winit::WinitPlugin,
 };
+
+/// The off-screen image's pixels per logical pixel. Fixed rather than read from a monitor, because a
+/// scripted run has none: 2.0 is what a Retina window gave round 1's shots, so they stay comparable.
+const SHOT_SCALE: f32 = 2.0;
+
+/// **`DefaultPlugins`, as a scripted run needs them.** With a script that parses, winit is swapped
+/// for a plain loop and no window surface is ever created; see the module header. With no script, or
+/// a malformed one, the group comes back untouched and the example opens its window as usual.
+pub fn plugins(base: impl PluginGroup) -> PluginGroupBuilder {
+    let base = base.build();
+    let scripted = std::env::var(SCRIPT_VAR)
+        .ok()
+        .is_some_and(|s| parse(&s, std::env::var_os(OUT_VAR).map(PathBuf::from).as_deref()).is_ok());
+    if scripted { base.disable::<WinitPlugin>().add(ScheduleRunnerPlugin::run_loop(Duration::ZERO)) } else { base }
+}
 
 /// The script. Absent means the plugin does nothing at all.
 const SCRIPT_VAR: &str = "CARNAGE_AUTOPILOT";
@@ -130,9 +180,10 @@ impl Plugin for Autopilot {
             out.as_deref().map(|o| format!(", shots to {}", o.display())).unwrap_or_default(),
         );
         app.insert_resource(script)
-            .add_systems(PreUpdate, inject.before(InputSystems))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
+            .add_systems(PreUpdate, (offscreen, inject.before(InputSystems)))
             .add_systems(Update, act)
-            .add_systems(Last, tick);
+            .add_systems(Last, (tick, settle));
     }
 }
 
@@ -247,6 +298,60 @@ fn key_code(name: &str) -> Option<KeyCode> {
     })
 }
 
+/// The off-screen image every camera draws into in a scripted run, and the scale factor the window
+/// had, so UI laid out against it keeps the size it would have had on screen.
+#[derive(Resource)]
+struct Offscreen {
+    target: Handle<Image>,
+    scale_factor: f32,
+}
+
+/// **Point every camera that draws to the primary window at the off-screen image.** See the module
+/// header for why. Runs every frame, so a camera an example spawns later, on a reset, moves too.
+///
+/// Bevy's UI draws through the camera that has [`IsDefaultUiCamera`], and failing that the
+/// highest-`order` camera *targeting the primary window*. Once every camera targets an image there is
+/// no such camera and every HUD would vanish, so the camera Bevy would have chosen is marked first.
+fn offscreen(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    existing: Option<Res<Offscreen>>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(Entity, &Camera, &RenderTarget, Has<IsDefaultUiCamera>)>,
+) {
+    let (target, scale_factor) = match existing {
+        Some(o) => (o.target.clone(), o.scale_factor),
+        None => {
+            let Ok(window) = window.single() else { return };
+            let px = |logical: f32| ((logical * SHOT_SCALE).round() as u32).max(1);
+            let mut image = Image::new_uninit(
+                Extent3d { width: px(window.width()), height: px(window.height()), depth_or_array_layers: 1 },
+                TextureDimension::D2,
+                TextureFormat::Rgba8UnormSrgb,
+                RenderAssetUsages::RENDER_WORLD,
+            );
+            image.texture_descriptor.usage |= TextureUsages::RENDER_ATTACHMENT;
+            let target = images.add(image);
+            let scale_factor = SHOT_SCALE;
+            commands.insert_resource(Offscreen { target: target.clone(), scale_factor });
+            (target, scale_factor)
+        }
+    };
+    let on_window = |t: &RenderTarget| matches!(t, RenderTarget::Window(WindowRef::Primary));
+    if !cameras.iter().any(|(.., default_ui)| default_ui)
+        && let Some((ui, ..)) = cameras.iter().filter(|(_, _, t, _)| on_window(t)).max_by_key(|(e, c, ..)| (c.order, *e))
+    {
+        commands.entity(ui).insert(IsDefaultUiCamera);
+    }
+    // Re-inserted rather than assigned in place, so whatever Bevy hooks onto a camera's target being
+    // set runs exactly as it would for a camera spawned with this target.
+    for (camera, _, t, _) in &cameras {
+        if on_window(t) {
+            commands.entity(camera).insert(RenderTarget::Image(ImageRenderTarget { handle: target.clone(), scale_factor }));
+        }
+    }
+}
+
 /// Write every key event that is due as the message a real keypress would have been. Runs before
 /// `InputSystems`, so `keyboard_input_system` folds it into `ButtonInput<KeyCode>` this frame.
 ///
@@ -272,16 +377,37 @@ fn inject(
 }
 
 /// Take the screenshots and quit, for every step that is due.
+///
+/// **`exit` waits for every shot still in flight.** A screenshot's readback lands frames after it is
+/// requested, and off screen nothing paces the frames, so the 30 frames a script leaves between its
+/// last shot and `exit` can pass before the GPU has answered. Round 2 lost the final shots of seven
+/// examples that way. Bevy keeps a [`Screenshot`] entity until its capture is saved, so `exit` stays
+/// due until there are none.
 fn act(
     mut script: ResMut<AutopilotScript>,
+    offscreen: Option<Res<Offscreen>>,
+    pending: Query<(), With<Screenshot>>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
     let frame = script.frame;
-    for (_, step) in script.steps.extract_if(.., |(due, _)| *due <= frame) {
+    let settled = pending.is_empty();
+    let due = |(at, step): &mut (u32, Step)| *at <= frame && (settled || !matches!(step, Step::Exit));
+    for (_, step) in script.steps.extract_if(.., due) {
         match step {
             Step::Shot(path) => {
-                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+                // Before the first `PreUpdate` has made the image there is nothing to read but the
+                // window, which is what a shot on frame 0 gets.
+                //
+                // **The same target the cameras draw into, scale factor included.** Bevy keys a
+                // screenshot's attachment by the whole target, and `ImageRenderTarget` compares its
+                // scale factor, so `Screenshot::image(handle)` (scale 1.0) names a different target
+                // from the cameras' (2.0) and reads back a texture nothing drew into: every shot pure
+                // black.
+                let shot = offscreen.as_ref().map_or_else(Screenshot::primary_window, |o| {
+                    Screenshot(RenderTarget::Image(ImageRenderTarget { handle: o.target.clone(), scale_factor: o.scale_factor }))
+                });
+                commands.spawn(shot).observe(save_to_disk(path));
             }
             Step::Exit => {
                 exit.write(AppExit::Success);
@@ -293,4 +419,14 @@ fn act(
 /// End of the frame: the next `Update` is the next frame number.
 fn tick(mut script: ResMut<AutopilotScript>) {
     script.frame = script.frame.saturating_add(1);
+}
+
+/// **Wait for the GPU before the next frame starts**, as the headless recorder does. With no vsync,
+/// frames are submitted far faster than they are drawn. The backlog is what stalled `carnage` and
+/// `rheology` past their timeout in round 2, and it is what a shot taken on frame N would otherwise
+/// race. Waiting here keeps the GPU at most one frame behind.
+fn settle(device: Res<RenderDevice>) {
+    if let Err(e) = device.wgpu_device().poll(PollType::Wait { submission_index: None, timeout: None }) {
+        warn!("autopilot: device poll failed, a shot may be torn: {e:?}");
+    }
 }

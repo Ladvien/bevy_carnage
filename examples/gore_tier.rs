@@ -220,7 +220,7 @@ fn blood_color(policy: &GorePolicy, s: &CarnageSettings, alpha: f32) -> Color {
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_carnage - gore tier".into(),
                 // The one web line, inert on native.
@@ -228,7 +228,7 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .insert_resource(Time::<Fixed>::from_hz(HZ as f64))
         .insert_resource(GorePolicy::for_tier(GoreTier::BloodAndGore))

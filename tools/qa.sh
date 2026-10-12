@@ -7,8 +7,8 @@
 #   1. builds every example (`cargo build --release -p bevy_carnage --examples`);
 #   2. runs the headless recorders, each into `<out>/<name>/frameNNNN.png`, log in `<out>/<name>.log`;
 #   3. runs the terminal examples, logs in `<out>/<name>.log` (`cross_section_strip` also writes a PNG);
-#   4. runs each windowed example ONE AT A TIME under `examples/common/autopilot.rs`, which makes the
-#      example press its own keys and screenshot itself (`CARNAGE_AUTOPILOT`, `CARNAGE_AUTOPILOT_OUT`);
+#   4. runs each windowed example under `examples/common/autopilot.rs`, which makes the example press
+#      its own keys and screenshot itself (`CARNAGE_AUTOPILOT`, `CARNAGE_AUTOPILOT_OUT`);
 #   5. builds contact sheets into `<out>/sheets/`;
 #   6. writes `<out>/warnings.txt`, `<out>/digests.txt` and `<out>/missing.txt`.
 #
@@ -18,16 +18,16 @@
 # before anything is built. The three summary files are rebuilt from the logs in `<out>`, so after a
 # partial run they cover every log there; `missing.txt` covers only what this run executed.
 #
-# **Windowed examples never run in parallel.** A covered window stops presenting and its screenshots
-# come back black, so each one runs alone and the machine must be left alone while they do.
+# **No screen is needed for any of it.** A scripted windowed example opens no window: the autopilot
+# swaps winit for a plain loop and renders every camera into an off-screen image, at a fixed 1/60 s
+# per frame (see its module header). That is what used to make whole runs come back black when a
+# window was covered or the screen locked. A round therefore runs on a build host with its lid shut.
 #
-# **Two hosts.** The build is the heavy part and a window needs a live display (a window on a Mac
-# with no active display presents black, so its screenshots are black). So the phases can be split:
-# `QA_PHASES` picks from `build recorders terminal windowed sheets` (default: all of them), `QA_BIN`
-# points at a directory of prebuilt example binaries, and `QA_KEEP_MISSING=1` appends to an existing
-# `missing.txt` instead of truncating it. Build and record on the fast host, `rsync` the out-dir and
-# the binaries to a machine with a screen, then run `QA_PHASES="windowed sheets" QA_BIN=<dir>
-# QA_KEEP_MISSING=1 tools/qa.sh <out-dir>` there. The binaries are portable between Macs of one OS.
+# **Phases.** `QA_PHASES` picks from `build recorders terminal windowed sheets` (default: all of
+# them), `QA_BIN` points at a directory of prebuilt example binaries, and `QA_KEEP_MISSING=1`
+# appends to an existing `missing.txt` instead of truncating it. Sheets need ImageMagick, which the
+# build host may not have: run `build recorders terminal windowed` there, `rsync` the out-dir, and
+# run `QA_PHASES=sheets QA_KEEP_MISSING=1 tools/qa.sh <out-dir>` where `magick` is.
 #
 # `QA_DRY=1` prints every command instead of running it, which is how this script is tested.
 #
@@ -387,7 +387,7 @@ for name in $TERMINAL; do
   fi
 done
 
-# 4. Windowed examples, strictly one at a time.
+# 4. Windowed examples, scripted and off screen.
 for name in $WINDOWED; do
   selected "$name" || continue
   IFS=' ' read -r -a KEYS <<<"$(keys_for "$name")"
@@ -427,16 +427,20 @@ summarise() {
   fi
 }
 
+# What counts as a digest line. Most recorders print `digest=`. `capture_gore` and `capture_family`
+# print one named hash per clip on a `<name>: frames=N ...` line instead, so that shape is matched too.
+DIGEST_RE='digest|^[a-z_]+: frames=[0-9]+ [a-z_]+=[0-9a-f]{16}'
+
 if [ "$DRY" -eq 1 ]; then
   say "+ grep -HE 'WARN|ERROR|panicked' $OUT/*.log | grep -v 'Skipped event Destroyed for unknown winit Window Id' > $OUT/warnings.txt"
-  say "+ grep -HiE 'digest' $OUT/*.log > $OUT/digests.txt"
+  say "+ grep -HiE '$DIGEST_RE' $OUT/*.log > $OUT/digests.txt"
   say "# missing.txt: any windowed example with fewer f*.png than its script's shot count, or that hit the ${TIMEOUT}s timeout; any run exiting non-zero"
   exit 0
 fi
 
 summarise 'WARN\|ERROR\|panicked' "$OUT/warnings.txt" 'Skipped event Destroyed for unknown winit Window Id'
 # `-i` is the one flag here that differs from the pattern style above, so spell it out.
-{ grep -HiE 'digest' "$OUT"/*.log || true; } >"$OUT/digests.txt"
+{ grep -HiE "$DIGEST_RE" "$OUT"/*.log || true; } >"$OUT/digests.txt"
 
 echo "qa.sh: done -> $OUT"
 echo "qa.sh: $(wc -l <"$OUT/warnings.txt" | tr -d ' ') warning lines, $(wc -l <"$OUT/digests.txt" | tr -d ' ') digest lines, $(wc -l <"$MISSING" | tr -d ' ') missing/failed lines"

@@ -115,7 +115,7 @@ struct Cycle {
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_carnage — prefracture and swap (Space to break)".into(),
                 // 0.19 takes physical pixels as `u32` — there is no `(f32, f32)` conversion.
@@ -123,7 +123,7 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .insert_resource(Cycle {
             timer: Timer::from_seconds(INTACT_SECS, TimerMode::Once),

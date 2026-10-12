@@ -126,14 +126,14 @@ struct Wall {
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "stain_morphology".into(),
                 canvas: Some("#carnage-canvas".into()),
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .add_systems(Startup, setup)
         .add_systems(Update, (sweep, hud).chain())

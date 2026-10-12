@@ -238,7 +238,7 @@ fn subject() -> (Mesh, Vec<ProxyCell>) {
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "bevy_carnage - fragment energy".into(),
                 // The one web line, inert on native.
@@ -246,7 +246,7 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .init_resource::<Dials>()
         .init_resource::<Report>()

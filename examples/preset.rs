@@ -23,10 +23,10 @@ use common::preset_scene::{self, Body, Part, Sheet, Slab, Sun};
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window { title: "bevy_carnage — preset".into(), ..default() }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .add_plugins(GorePlugin)
         .insert_resource(Time::<Fixed>::from_hz(60.0))

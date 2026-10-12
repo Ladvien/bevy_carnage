@@ -20,10 +20,10 @@ const SIDES: usize = 32;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window { title: "bevy_cross_section".into(), ..default() }),
             ..default()
-        }))
+        })))
         .add_plugins(common::autopilot::Autopilot)
         .add_plugins(CrossSectionPlugin)
         .add_systems(Startup, setup.after(bevy_carnage::cross_section::CrossSectionSystems))
