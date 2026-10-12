@@ -141,12 +141,16 @@ fn setup_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    // The same scene as `common::light_and_floor` builds for the recorders — light, fill, floor,
+    // skin and the exposure they are read at — spelled with `Commands`, so it takes that scene's
+    // constants rather than copies of them. Copies were how it missed `AG-049` and kept rendering its
+    // cut faces as cherry-red plastic.
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(2.25, 1.35, 2.95).looking_at(Vec3::new(0.0, 0.76, 0.0), Vec3::Y),
+        common::SCENE_EXPOSURE,
     ));
-    // A fill light, so an unlit cut face reads as shadowed rather than as a hole. See
-    // `common::light_and_floor`, where the same thing is done for the recorders.
+    // A fill light, so an unlit cut face reads as shadowed rather than as a hole.
     commands.insert_resource(GlobalAmbientLight {
         color: Color::srgb(0.62, 0.66, 0.78),
         brightness: 900.0,
@@ -161,7 +165,7 @@ fn setup_scene(
     commands.spawn((
         Mesh3d(meshes.add(Mesh::from(Plane3d::default().mesh().size(14.0, 14.0)))),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.16, 0.16, 0.18),
+            base_color: common::FLOOR,
             perceptual_roughness: 0.95,
             ..default()
         })),
@@ -169,7 +173,7 @@ fn setup_scene(
 
     let mats = DemoMaterials {
         skin: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.30, 0.42, 0.52),
+            base_color: body::SKIN,
             perceptual_roughness: 0.85,
             ..default()
         }),

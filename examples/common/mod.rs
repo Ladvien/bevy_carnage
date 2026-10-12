@@ -84,6 +84,12 @@ pub fn arg(flag: &str) -> Option<String> {
 /// albedo and reads as dark against them.
 pub const SCENE_EXPOSURE: bevy::camera::Exposure = bevy::camera::Exposure { ev100: bevy::camera::Exposure::EV100_BLENDER + 1.5 };
 
+/// **The shared scene's floor.** Raised with [`SCENE_EXPOSURE`] by a little more than its 2.83, because
+/// the constant specular share of a matte floor's brightness drops with the exposure and does not
+/// scale with albedo. A constant rather than a literal in [`light_and_floor`] because `explode` builds
+/// the same scene with `Commands` and must not drift from it, which it did once.
+pub const FLOOR: Color = Color::srgb(0.33, 0.33, 0.36);
+
 /// The furniture every recorded scene shares: a key light, a fill, a floor to land on, and the
 /// exposure the three are read at — set on every camera already spawned, so call this after them.
 pub fn light_and_floor(world: &mut World) {
@@ -108,9 +114,7 @@ pub fn light_and_floor(world: &mut World) {
         .resource_mut::<Assets<Mesh>>()
         .add(Mesh::from(Plane3d::default().mesh().size(14.0, 14.0)));
     let dark = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
-        // Raised with `SCENE_EXPOSURE` by a little more than its 2.83, because the constant specular
-        // share of a matte floor's brightness drops with the exposure and does not scale with albedo.
-        base_color: Color::srgb(0.33, 0.33, 0.36),
+        base_color: FLOOR,
         perceptual_roughness: 0.95,
         ..default()
     });

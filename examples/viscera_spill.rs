@@ -121,7 +121,12 @@ fn setup(
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(0.9, 1.4, 2.9).looking_at(Vec3::new(0.15, 0.7, 0.3), Vec3::Y),
-        AmbientLight { brightness: 260.0, ..default() },
+        // **The shared scene's exposure, because this is the shared scene's 9 000 lux key.** At Bevy's
+        // default the gut drew salmon pink where `entrails` draws the same colour maroon. The ambient
+        // and the floor and torso albedos rise by the same 2.83, so everything but the gut renders as
+        // before.
+        AmbientLight { brightness: 735.0, ..default() },
+        common::SCENE_EXPOSURE,
     ));
     commands.spawn((
         DirectionalLight { illuminance: 9_000.0, shadow_maps_enabled: true, ..default() },
@@ -130,12 +135,12 @@ fn setup(
 
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(12.0, 12.0))),
-        MeshMaterial3d(matte(&mut materials, [0.10, 0.10, 0.12], 0.95)),
+        MeshMaterial3d(matte(&mut materials, [0.245, 0.245, 0.28], 0.95)),
     ));
     // A blocked-out torso for the guts to leave. Geometry in code, no asset files.
     commands.spawn((
         Mesh3d(meshes.add(Cuboid::new(0.46, 0.72, 0.26))),
-        MeshMaterial3d(matte(&mut materials, [0.22, 0.20, 0.22], 0.8)),
+        MeshMaterial3d(matte(&mut materials, [0.39, 0.36, 0.39], 0.8)),
         Transform::from_xyz(0.0, 1.42, 0.0),
     ));
 

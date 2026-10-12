@@ -60,6 +60,11 @@ fn setup(
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(0.0, 1.5, 3.2).looking_at(Vec3::new(0.0, 0.85, 0.0), Vec3::Y),
+        // **Exposed for the 8 000 lux key**, where a white surface facing it renders at 1 rather than
+        // the 2.1 Bevy's default exposure gave. At the default the gut — an authored blood red — came
+        // out salmon pink and plastic, while the same colour under `entrails`' exposed scene reads
+        // maroon. The floor and torso are authored brighter by the same factor to render as before.
+        bevy::camera::Exposure { ev100: bevy::camera::Exposure::EV100_BLENDER + 1.35 },
     ));
     commands.spawn((
         DirectionalLight { illuminance: 8_000.0, shadow_maps_enabled: true, ..default() },
@@ -69,7 +74,7 @@ fn setup(
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(12.0, 12.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.10, 0.10, 0.12),
+            base_color: Color::srgb(0.235, 0.235, 0.27),
             perceptual_roughness: 0.95,
             ..default()
         })),
@@ -79,7 +84,7 @@ fn setup(
     commands.spawn((
         Mesh3d(meshes.add(Cuboid::new(0.46, 0.72, 0.26))),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.22, 0.20, 0.22),
+            base_color: Color::srgb(0.37, 0.34, 0.37),
             perceptual_roughness: 0.8,
             ..default()
         })),
