@@ -235,6 +235,37 @@ fn a_wider_gape_removes_at_least_as_many_faces() {
     assert!(widest > 0, "the widest gape in the sweep removed nothing at all");
 }
 
+/// **No skin is left across the cut.** A slash at an angle to the mesh crosses triangles that do not
+/// lie wholly inside the gape; kept, their vertices were pushed to opposite lips and each one was
+/// stretched over the gap, so the wound opened as a row of pits with skin bridging them. Every point
+/// of the path must be uncovered once the wound is open, at a gape narrower than a cell as well as
+/// one wider.
+#[test]
+fn no_skin_is_left_across_a_diagonal_cut() {
+    let patch = skin_patch(CELLS, SIZE);
+    // Not along a mesh line and not through its diagonals: 3 cells across for every 1.3 down.
+    let path = vec![Vec3::new(-0.36, 0.0, -0.17), Vec3::new(0.38, 0.0, 0.15)];
+    let layers = Layers::for_region(Region::Limb);
+    for half in [CELL * 0.3, CELL * 1.2] {
+        let torn = tear(&patch, &path, Vec3::Y, &shape(half), Region::Limb, &layers, &Scale::default())
+            .expect("a diagonal cut across a flat grid must tear");
+        let moved = positions(&torn.skin);
+        let flat = |i: u32| moved.get(i as usize).map(|v| (v.x, v.z));
+        for [a, b, c] in triples(&torn.skin) {
+            let (Some(a), Some(b), Some(c)) = (flat(a), flat(b), flat(c)) else {
+                panic!("a kept index is out of range");
+            };
+            for k in 0..=200 {
+                let p = path[0].lerp(path[1], k as f32 / 200.0);
+                let edge = |(x0, z0): (f32, f32), (x1, z1): (f32, f32)| (x1 - x0) * (p.z - z0) - (z1 - z0) * (p.x - x0);
+                let (e0, e1, e2) = (edge(a, b), edge(b, c), edge(c, a));
+                let covered = (e0 > 1.0e-9 && e1 > 1.0e-9 && e2 > 1.0e-9) || (e0 < -1.0e-9 && e1 < -1.0e-9 && e2 < -1.0e-9);
+                assert!(!covered, "at half-gape {half}, a kept triangle {a:?} {b:?} {c:?} lies over the cut at {p:?}");
+            }
+        }
+    }
+}
+
 #[test]
 fn bad_input_is_refused() {
     let patch = skin_patch(CELLS, SIZE);
@@ -294,10 +325,14 @@ fn bad_input_is_refused() {
 fn the_tear_is_frozen() {
     // Both halves of the output are frozen: `examples/laceration_curve.rs` prints exactly these two
     // lines, so a reader can check the crate against its own golden without running the suite.
-    const FROZEN: u64 = 0xafb3_d3cb_bc85_b028;
-    // Re-blessed in 0.1.1: the two end caps were wound against their normals in 0.1.0 and are now
-    // wound to them (`every_bed_face_is_wound_to_its_normal`). Only the cap index order moved.
-    const FROZEN_BED: u64 = 0x18da_2f85_86e7_9831;
+    // Re-blessed in 0.5.3 (`AG-048`), both halves. The skin: a triangle with a vertex in the gape and
+    // vertices on both lips is now clipped (this cut runs along a mesh line, so it grazes every
+    // triangle beside it), and every vertex on the mouth lands on one lip curve. The bed: its walls
+    // rise to that curve, follow the rail's wander and run past both ends as far as the clip did.
+    // Before, a diagonal cut opened as a row of pits bridged by skin, with nothing between the walls
+    // and the lips.
+    const FROZEN: u64 = 0xd8df_f15d_9bd8_3f00;
+    const FROZEN_BED: u64 = 0x7baa_cbd6_447e_feb3;
     let patch = skin_patch(CELLS, SIZE);
     let torn = tear(
         &patch,

@@ -15,15 +15,29 @@
 //!    the paper's tear is authored, and so is this one, which is why a gape can be driven from a
 //!    time curve instead of a stress solve.
 //! 2. **Faces inside the gap are clipped** (§3.1). Here: a triangle whose three vertices all lie
-//!    within `half_width` of the polyline is removed outright. The paper subdivides the partially
-//!    covered faces; this crate snaps their inside vertices to the rail instead, which keeps the
-//!    vertex buffer index-stable and therefore keeps skinning weights valid — see below.
+//!    within `half_width` of the polyline is removed outright, and so, once the wound is open at all,
+//!    is every triangle the path itself passes through. The paper subdivides the partially covered
+//!    faces; this crate snaps their inside vertices to the lip instead, which keeps the vertex buffer
+//!    index-stable and therefore keeps skinning weights valid — see below.
 //! 3. **Auxiliary particles displaced normal to and away from the tear segments** (§3.3.4), which is
 //!    what actually *opens* the wound rather than merely punching a hole in it. Here: every vertex
 //!    within [`TearShape::influence`] of the polyline moves along `±side` — the in-surface
 //!    perpendicular `normal × segment_direction` — by `half_width · (1 - d/influence)²`, so the
 //!    displacement falls to zero with a zero derivative at the edge of the influence radius and the
 //!    surface does not crease there.
+//!
+//! # Where the lip is, and why the bed meets it exactly
+//!
+//! **A vertex on the mouth lands on one curve, the lip**: the rail, pushed by the same falloff a
+//! vertex sitting at the rail would get. That is every vertex inside the gape and every vertex of a
+//! clipped triangle within the influence radius. The bed's walls rise to that same curve, sampled
+//! finely enough to follow the rail's wander, and run `half_width` past each end of the path, where
+//! the clipped slot reaches.
+//!
+//! Both halves were measured wrong before. Clipping only triangles with all three vertices inside
+//! left every triangle the cut crossed diagonally in place, stretched across the gap as a bridge, so
+//! a diagonal slash on 5 mm cells opened as a dashed row of pits. And the walls stopped at the rail
+//! while the lip had been pushed past it, so a strip of nothing showed on both sides of the trough.
 //!
 //! The lips do not spring back: a laceration is the ductile case of O'Brien, Bargteil & Hodgins,
 //! *"Graphical modeling and animation of ductile fracture"*, SIGGRAPH 2002,
@@ -48,7 +62,7 @@
 
 use bevy::asset::RenderAssetUsages;
 use bevy::log::warn_once;
-use bevy::math::Vec3;
+use bevy::math::{Vec2, Vec3};
 use bevy::mesh::{Indices, Mesh, PrimitiveTopology, VertexAttributeValues};
 use crate::cross_section::{Layers, Region, Scale, SkinPlane, uv1_at};
 
@@ -97,7 +111,7 @@ pub struct Torn {
     /// The subject's surface, minus the cleared faces, with the surviving lips pushed apart. Carries
     /// every attribute the input had, at the same vertex count.
     pub skin: Mesh,
-    /// The wound bed: two walls and a floor per path segment, `UV_1` banded by depth so
+    /// The wound bed: two walls rising to the lip and meeting at a floor along the path, `UV_1` banded by depth so
     /// `bevy_cross_section`'s strip material paints skin, fat and muscle at their measured depths.
     pub bed: Mesh,
     /// Triangles the gap swallowed.
@@ -192,76 +206,109 @@ pub fn tear(
     // Pass one: measure. Every later decision reads these, so the distance is computed once.
     let near: Vec<Option<Near>> = verts.iter().map(|v| nearest(*v, &segs, n)).collect();
 
-    // Pass two: move. The snap opens the mouth out to the rail; the falloff is the bulge behind it.
+    // Pass two: read the triangles. The clip decides which vertices end up on the lip, so it runs
+    // before anything moves.
+    let mut tris: Vec<[u32; 3]> = Vec::new();
+    let mut u16_indices = false;
+    match mesh.try_indices_option() {
+        Ok(Some(Indices::U32(idx))) => {
+            tris.extend(idx.chunks_exact(3).filter_map(|t| <[u32; 3]>::try_from(t).ok()));
+        }
+        Ok(Some(Indices::U16(idx))) => {
+            u16_indices = true;
+            tris.extend(idx.chunks_exact(3).filter_map(|t| match *t {
+                [a, b, c] => Some([u32::from(a), u32::from(b), u32::from(c)]),
+                _ => None,
+            }));
+        }
+        Ok(None) => {
+            // Unindexed: the triples are implicit, and the output gains an index buffer.
+            tris.extend((0..(verts.len() / 3) as u32).map(|t| [t * 3, t * 3 + 1, t * 3 + 2]));
+        }
+        Err(e) => {
+            warn_once!("bevy_laceration: cannot read indices ({e}) — author the source mesh with RenderAssetUsages::default()");
+            return None;
+        }
+    }
+
+    // Pass three: clip. A triangle entirely inside the gap has nothing left to draw, and neither has
+    // one the cut runs through, or one with a vertex in the gape and vertices on both lips — a path
+    // through a mesh vertex grazes that vertex's triangles without entering them. Kept, any of these
+    // would have its vertices pushed to opposite lips and be stretched across the gap as a bridge of
+    // skin. A closed wound clips nothing.
+    let open = shape.half_width > 0.0;
+    let inside = |i: u32| near.get(i as usize).and_then(|n| n.as_ref()).is_some_and(|n| n.dist < shape.half_width);
+    let plane = Plane2::new(n);
+    let flat: Vec<Vec2> = verts.iter().map(|v| plane.at(*v)).collect();
+    let cut: Vec<[Vec2; 2]> = segs.iter().map(|s| [plane.at(s.a), plane.at(s.a + s.dir * s.len)]).collect();
+    let crossed = |t: &[u32; 3]| {
+        let [Some(a), Some(b), Some(c)] = t.map(|i| flat.get(i as usize).copied()) else { return false };
+        cut.iter().any(|[p, q]| segment_enters_triangle(*p, *q, [a, b, c]))
+    };
+    let sign = |i: u32| near.get(i as usize).and_then(|n| n.as_ref()).map(|n| n.sign);
+    let straddles = |t: &[u32; 3]| {
+        t.iter().any(|i| inside(*i)) && {
+            let s = t.map(sign);
+            s.contains(&Some(1.0)) && s.contains(&Some(-1.0))
+        }
+    };
+    let mut kept: Vec<u32> = Vec::with_capacity(tris.len() * 3);
+    let mut removed = 0u32;
+    let mut on_mouth = vec![false; verts.len()];
+    for t in &tris {
+        if open && (t.iter().all(|i| inside(*i)) || crossed(t) || straddles(t)) {
+            removed += 1;
+            for i in t {
+                if let Some(m) = on_mouth.get_mut(*i as usize) {
+                    *m = true;
+                }
+            }
+        } else {
+            kept.extend_from_slice(t);
+        }
+    }
+
+    // How far the clipped slot runs past each end of the path, so the bed can run as far: whatever
+    // the clip took, measured, rather than a guess at the mesh's cell size. Vertices move only
+    // sideways, so this is the same before and after the move.
+    let mut reach = [0.0f32; 2];
+    if let (Some(first), Some(last)) = (segs.first(), segs.last()) {
+        let end = last.a + last.dir * last.len;
+        for (v, _) in verts.iter().zip(on_mouth.iter()).filter(|(_, m)| **m) {
+            reach[0] = reach[0].max((first.a - *v).dot(first.dir));
+            reach[1] = reach[1].max((*v - end).dot(last.dir));
+        }
+    }
+
+    // Pass four: move. A vertex on the mouth lands on the lip; every other vertex within the
+    // influence radius is pushed by the falloff, which is the bulge behind the lip.
     let inv_influence = if shape.influence > 1.0e-9 { shape.influence.recip() } else { 0.0 };
     let mut moved = 0u32;
     let mut out: Vec<[f32; 3]> = Vec::with_capacity(verts.len());
-    for (v, near) in verts.iter().zip(near.iter()) {
+    for (i, (v, near)) in verts.iter().zip(near.iter()).enumerate() {
         let mut p = *v;
         if let Some(near) = near {
             let lateral = near.sign * n.cross(near.dir);
-            if near.dist < shape.half_width {
+            let mouth = near.dist < shape.half_width
+                || (on_mouth.get(i).copied().unwrap_or(false) && near.dist < shape.influence);
+            if open && mouth {
                 // **Pushed sideways only, never repositioned.** Setting the vertex to
-                // `nearest + rail·lateral` would look right in the middle of the cut and pinch at
+                // `nearest + lip·lateral` would look right in the middle of the cut and pinch at
                 // its ends, where the nearest point is the last path vertex and every vertex beyond
                 // it would be dragged back onto that one point. Moving along `lateral` until the
-                // lateral coordinate *is* the rail leaves the along-path and out-of-surface
+                // lateral coordinate *is* the lip leaves the along-path and out-of-surface
                 // components exactly as authored, so a slash ends in a slot rather than a purse.
+                // A clipped triangle's outside vertex can sit past the lip, and comes back to it.
                 let lat = (*v - near.point).dot(lateral);
-                let want = rail(shape.half_width, near.along, near.sign, seed, &scale);
-                if lat < want {
-                    p += lateral * (want - lat);
-                }
-            }
-            if inv_influence > 0.0 && near.dist < shape.influence {
-                let falloff = 1.0 - near.dist * inv_influence;
-                p += lateral * (shape.half_width * falloff * falloff);
+                p += lateral * (lip(shape, inv_influence, near.along, near.sign, seed, &scale) - lat);
+            } else if near.dist < shape.influence {
+                p += lateral * (shape.half_width * falloff(near.dist, inv_influence).powi(2));
             }
         }
         if p != *v {
             moved += 1;
         }
         out.push(p.to_array());
-    }
-
-    // Pass three: clip. A triangle entirely inside the gap has nothing left to draw.
-    let inside = |i: usize| near.get(i).and_then(|n| n.as_ref()).is_some_and(|n| n.dist < shape.half_width);
-    let mut kept: Vec<u32> = Vec::new();
-    let mut removed = 0u32;
-    let mut u16_indices = false;
-    let mut walk = |a: u32, b: u32, c: u32| {
-        if inside(a as usize) && inside(b as usize) && inside(c as usize) {
-            removed += 1;
-        } else {
-            kept.extend_from_slice(&[a, b, c]);
-        }
-    };
-    match mesh.try_indices_option() {
-        Ok(Some(Indices::U32(idx))) => {
-            for tri in idx.chunks_exact(3) {
-                if let [a, b, c] = *tri {
-                    walk(a, b, c);
-                }
-            }
-        }
-        Ok(Some(Indices::U16(idx))) => {
-            u16_indices = true;
-            for tri in idx.chunks_exact(3) {
-                if let [a, b, c] = *tri {
-                    walk(u32::from(a), u32::from(b), u32::from(c));
-                }
-            }
-        }
-        Ok(None) => {
-            // Unindexed: the triples are implicit, and the output gains an index buffer.
-            for t in 0..(verts.len() / 3) as u32 {
-                walk(t * 3, t * 3 + 1, t * 3 + 2);
-            }
-        }
-        Err(e) => {
-            warn_once!("bevy_laceration: cannot read indices ({e}) — author the source mesh with RenderAssetUsages::default()");
-            return None;
-        }
     }
 
     // The skin is the input with two buffers rewritten, so every other attribute — normals, `UV_0`,
@@ -275,7 +322,7 @@ pub fn tear(
         skin.try_insert_indices(Indices::U32(kept)).ok()?;
     }
 
-    let bed = bed_mesh(&segs, n, shape, seed, layers, &scale);
+    let bed = bed_mesh(&segs, n, shape, inv_influence, reach, seed, layers, &scale);
     Some(Torn { skin, bed, removed_faces: removed, displaced_vertices: moved })
 }
 
@@ -435,9 +482,75 @@ fn nearest(v: Vec3, segs: &[Seg], normal: Vec3) -> Option<Near> {
     best
 }
 
-/// Where the lip actually sits: `half_width` plus the outward wander at this arc length.
+/// Where the rail sits: `half_width` plus the outward wander at this arc length.
 fn rail(half_width: f32, along: f32, sign: f32, seed: u32, scale: &Scale) -> f32 {
     half_width * (1.0 + wander(along, lip_seed(seed, sign), scale))
+}
+
+/// **Where the lip sits**: the rail, pushed by the falloff a vertex at the rail would get. A vertex
+/// just outside the gape is pushed by about the same amount, so the skin stays in order across the
+/// lip, and the bed's walls rise to exactly this curve.
+fn lip(shape: &TearShape, inv_influence: f32, along: f32, sign: f32, seed: u32, scale: &Scale) -> f32 {
+    let r = rail(shape.half_width, along, sign, seed, scale);
+    r + shape.half_width * falloff(r, inv_influence).powi(2)
+}
+
+/// `1 - d/influence`, floored at zero, and zero when there is no influence radius at all.
+fn falloff(d: f32, inv_influence: f32) -> f32 {
+    if inv_influence > 0.0 { (1.0 - d * inv_influence).max(0.0) } else { 0.0 }
+}
+
+/// **The surface plane as 2-D coordinates**, so "does the cut pass through this triangle" is asked
+/// where the clip measures distance: in the plane of the normal, ignoring height.
+struct Plane2 {
+    u: Vec3,
+    w: Vec3,
+}
+
+impl Plane2 {
+    fn new(n: Vec3) -> Plane2 {
+        let u = n.any_orthonormal_vector();
+        Plane2 { u, w: n.cross(u) }
+    }
+
+    fn at(&self, p: Vec3) -> Vec2 {
+        Vec2::new(p.dot(self.u), p.dot(self.w))
+    }
+}
+
+/// **Whether the segment `p → q` passes through the triangle's interior**, by clipping it against the
+/// three edges. Strict: a path lying along an edge, or grazing a vertex, does not enter, so a cut that
+/// follows a mesh line clips the triangles beside it only by the inside rule.
+fn segment_enters_triangle(p: Vec2, q: Vec2, tri: [Vec2; 3]) -> bool {
+    let [a, mut b, mut c] = tri;
+    let area = (b - a).perp_dot(c - a);
+    if area == 0.0 || !area.is_finite() {
+        return false;
+    }
+    if area < 0.0 {
+        std::mem::swap(&mut b, &mut c);
+    }
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (e0, e1) in [(a, b), (b, c), (c, a)] {
+        let edge = e1 - e0;
+        // Signed distance inside the edge, with a margin in proportion to it so that a vertex
+        // exactly on the line does not count as inside by a rounding error.
+        let margin = edge.length() * 1.0e-5;
+        let fp = edge.perp_dot(p - e0) / edge.length().max(f32::MIN_POSITIVE) - margin;
+        let fq = edge.perp_dot(q - e0) / edge.length().max(f32::MIN_POSITIVE) - margin;
+        if fp <= 0.0 && fq <= 0.0 {
+            return false;
+        }
+        if fp < 0.0 || fq < 0.0 {
+            let t = fp / (fp - fq);
+            if fp < 0.0 {
+                t0 = t0.max(t);
+            } else {
+                t1 = t1.min(t);
+            }
+        }
+    }
+    t1 > t0
 }
 
 /// **A ragged margin, frozen.** Smooth 1-D value noise over `crate::bloodstain::hash_f32` — the one random
@@ -486,7 +599,8 @@ struct BedVert {
     across: f32,
 }
 
-/// The trough behind the hole: two walls and a floor per segment, capped at both ends.
+/// The trough behind the hole: two walls meeting at a floor, in 2 mm pieces along each segment,
+/// running past both ends as far as `reach` says the clip did, capped there, with a wedge at each bend.
 ///
 /// **`UV_1` is `bevy_cross_section`'s**, computed through [`uv1_at`] against a skin plane through the
 /// surface point directly above each vertex — so a rail reads depth `0` (it *is* on the skin) and the
@@ -497,42 +611,86 @@ struct BedVert {
 /// **Normals face into the gap**, and the winding is chosen to match rather than corrected
 /// afterwards — a wound bed is seen from outside the body, so the walls a viewer sees are the ones
 /// whose fronts point at each other.
-fn bed_mesh(segs: &[Seg], n: Vec3, shape: &TearShape, seed: u32, layers: &Layers, scale: &Scale) -> Mesh {
+#[allow(clippy::too_many_arguments)]
+fn bed_mesh(segs: &[Seg], n: Vec3, shape: &TearShape, inv_influence: f32, reach: [f32; 2], seed: u32, layers: &Layers, scale: &Scale) -> Mesh {
     let depth = (shape.bed_depth_mm / scale.mm_per_unit).max(0.0);
+    // A quarter of the wander's sample spacing, so the walls follow the smoothstep between samples
+    // instead of cutting straight across the ragged lip they are meant to meet.
+    let step = (WANDER_MM * 0.25 / scale.mm_per_unit).max(1.0e-6);
     let mut b = Bed::default();
     let last = segs.len().saturating_sub(1);
+    // The previous segment's far section and its `side`, for the wedge on the outside of a bend.
+    let mut previous: Option<([BedVert; 3], Vec3)> = None;
     for (i, seg) in segs.iter().enumerate() {
         let side = n.cross(seg.dir);
-        let far = seg.along + seg.len;
-        let end = seg.a + seg.dir * seg.len;
-        let hl0 = rail(shape.half_width, seg.along, 1.0, seed, scale);
-        let hl1 = rail(shape.half_width, far, 1.0, seed, scale);
-        let hr0 = rail(shape.half_width, seg.along, -1.0, seed, scale);
-        let hr1 = rail(shape.half_width, far, -1.0, seed, scale);
-
-        let l0 = BedVert { p: seg.a + side * hl0, surface: seg.a, along: seg.along, across: hl0 };
-        let l1 = BedVert { p: end + side * hl1, surface: end, along: far, across: hl1 };
-        let r0 = BedVert { p: seg.a - side * hr0, surface: seg.a, along: seg.along, across: -hr0 };
-        let r1 = BedVert { p: end - side * hr1, surface: end, along: far, across: -hr1 };
-        let f0 = BedVert { p: seg.a - n * depth, surface: seg.a, along: seg.along, across: 0.0 };
-        let f1 = BedVert { p: end - n * depth, surface: end, along: far, across: 0.0 };
-
-        // Left wall, wound counter-clockwise about `h·n - depth·side`, which points at the trough's
-        // axis: down and inward from the `+side` lip.
-        b.quad([&l0, &f0, &f1, &l1], (n * shape.half_width - side * depth).normalize_or_zero(), n, layers, scale);
-        // Right wall, the mirror: `h·n + depth·side`.
-        b.quad([&r0, &r1, &f1, &f0], (n * shape.half_width + side * depth).normalize_or_zero(), n, layers, scale);
+        // The clip can take skin past each end of the path — everything within `half_width`, and
+        // the triangles the path ends inside — so the bed runs on as far as `tear` measured it did;
+        // an end cap at the path's own end would leave the tip of the slot open.
+        let start = if i == 0 { -reach[0] } else { 0.0 };
+        let stop = seg.len + if i == last { reach[1] } else { 0.0 };
+        let pieces = ((stop - start) / step).ceil().clamp(1.0, MAX_BED_PIECES) as u32;
+        let section = |s: f32| -> [BedVert; 3] {
+            let surface = seg.a + seg.dir * s;
+            let along = seg.along + s;
+            let hl = lip(shape, inv_influence, along, 1.0, seed, scale);
+            let hr = lip(shape, inv_influence, along, -1.0, seed, scale);
+            [
+                BedVert { p: surface + side * hl, surface, along, across: hl },
+                BedVert { p: surface - side * hr, surface, along, across: -hr },
+                BedVert { p: surface - n * depth, surface, along, across: 0.0 },
+            ]
+        };
+        let mut near_end = section(start);
         // The end caps: `side = n × dir`, so `(r − l) × (f − l)` is `+dir` at the near end and the
         // far cap is its mirror. Wound to agree with the authored normal, because a back-face-culled
         // cap is invisible from exactly where a wound is looked at — inside the trough.
         if i == 0 {
-            b.tri([&l0, &r0, &f0], seg.dir, n, layers, scale);
+            let [l, r, f] = &near_end;
+            b.tri([l, r, f], seg.dir, n, layers, scale);
+        }
+        if let Some((before, side_before)) = &previous {
+            wedge(&mut b, before, &near_end, (*side_before + side).normalize_or_zero(), n, depth, layers, scale);
+        }
+        for k in 1..=pieces {
+            let far_end = section(start + (stop - start) * k as f32 / pieces as f32);
+            let [l0, r0, f0] = &near_end;
+            let [l1, r1, f1] = &far_end;
+            // Left wall, wound counter-clockwise about `h·n - depth·side`, which points at the
+            // trough's axis: down and inward from the `+side` lip.
+            b.quad([l0, f0, f1, l1], (n * l0.across - side * depth).normalize_or_zero(), n, layers, scale);
+            // Right wall, the mirror: `h·n + depth·side`.
+            b.quad([r0, r1, f1, f0], (n * -r0.across + side * depth).normalize_or_zero(), n, layers, scale);
+            near_end = far_end;
         }
         if i == last {
-            b.tri([&l1, &f1, &r1], -seg.dir, n, layers, scale);
+            let [l, r, f] = &near_end;
+            b.tri([l, f, r], -seg.dir, n, layers, scale);
         }
+        previous = Some((near_end, side));
     }
     b.finish()
+}
+
+/// **The most pieces one path segment's bed is cut into.** A bound, not a tuning: at the 2 mm the
+/// wander asks for it is an 8 m segment, and a caller with a longer straight cut gets coarser walls
+/// rather than an unbounded mesh.
+const MAX_BED_PIECES: f32 = 4096.0;
+
+/// **The wedge on the outside of a bend.** Two segments' walls meet at the corner on the inside of the
+/// turn and splay apart on the outside, leaving a triangle of nothing between them. One triangle per
+/// wall closes it; the inside one would be wound backwards, so a wedge is drawn only where its own
+/// winding agrees with the way a wall there faces.
+#[allow(clippy::too_many_arguments)]
+fn wedge(b: &mut Bed, before: &[BedVert; 3], after: &[BedVert; 3], side: Vec3, n: Vec3, depth: f32, layers: &Layers, scale: &Scale) {
+    let ([lp, rp, f], [ln, rn, _]) = (before, after);
+    let left = (n * lp.across - side * depth).normalize_or_zero();
+    if (f.p - lp.p).cross(ln.p - lp.p).dot(left) > 0.0 {
+        b.tri([lp, f, ln], left, n, layers, scale);
+    }
+    let right = (n * -rp.across + side * depth).normalize_or_zero();
+    if (rn.p - rp.p).cross(f.p - rp.p).dot(right) > 0.0 {
+        b.tri([rp, rn, f], right, n, layers, scale);
+    }
 }
 
 /// Accumulator for [`bed_mesh`]. Vertices are duplicated per face on purpose: the walls meet the

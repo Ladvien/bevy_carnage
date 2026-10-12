@@ -21,8 +21,8 @@ All three of those are cheap. This crate does them on the CPU, from an intact so
 **A tear is authored, then opened.** Kamarianakis, Protopsaltis et al. (2022) describe progressive tearing as a user-defined width along a sampled path, faces in the gap clipped, and auxiliary particles displaced *normal to and away from* the tear segments so the wound opens over time. That is exactly the three passes of `tear`:
 
 1. measure every vertex's in-surface distance to the polyline;
-2. remove any triangle whose three vertices are all inside `half_width`;
-3. snap the surviving inside vertices out to the rail, and displace everything within `influence` along `±(normal × segment_direction)` by `half_width · (1 - d/influence)²` — zero value *and* zero slope at the edge of the influence radius, so the surface does not crease where the displacement stops.
+2. once the wound is open at all, remove any triangle whose three vertices are all inside `half_width`, any triangle the path passes through, and any triangle with a vertex inside the gape and vertices on both sides of the path. Kept, those last two would be stretched across the gap as bridges of skin, and a slash at an angle to the mesh opened as a row of pits until 0.5.3;
+3. move every vertex on the mouth sideways to the **lip**, which is the rail pushed by the falloff a vertex at the rail would get, and displace everything else within `influence` along `±(normal × segment_direction)` by `half_width · (1 - d/influence)²` — zero value *and* zero slope at the edge of the influence radius, so the surface does not crease where the displacement stops.
 
 **The vertex buffer never changes length.** Only positions and indices are rewritten, so `ATTRIBUTE_JOINT_INDEX`, `ATTRIBUTE_JOINT_WEIGHT`, `UV_0`, normals, vertex colours and anything custom arrive untouched — a wound can be cut into a skinned character without invalidating its skinning.
 
@@ -35,6 +35,8 @@ gape(t) = width_max · skin_tension · anisotropy · (1 − e^(−3t/open_ticks)
 **The anisotropy is measured.** Ní Annaidh et al. (2012) tensile-tested excised human skin: ultimate tensile strength **21.6 ± 8.4 MPa**, failure strain **54 ± 17 %**, and an elastic modulus of **112.5 MPa parallel** to the Langer lines against **63.8 MPa perpendicular** (middle back). `anisotropy` interpolates between those two extremes on `sin²θ`, so a cut across the lines gapes at full width and one along them at `ALONG_LANGER_FACTOR = 63.8 / 112.5 = 0.567`.
 
 **The bed is anatomy, not a dark colour.** Every bed vertex gets `UV_1` from `bevy_carnage::cross_section::uv1_at`, so the rails read depth 0 and the floor reads exactly `bed_depth_mm` in that region's strip — skin, fat and muscle at the depths they were measured at, painted by the material the atlas already baked.
+
+**The bed meets the skin.** Its walls rise to the same lip curve the mouth's vertices land on, sampled every 2 mm so they follow the wander. It runs past each end of the path as far as the clip took skin, and a wedge fills the outside of each bend. Until 0.5.3 the walls stopped at the rail while the lips had been pushed past it, so a strip of nothing showed down both sides of the trough. What is left is measured from above: under 5 mm² on a 22 cm slash in 5 mm cells, at the inside corner of its bend, and hairline slivers on a coarse 24-cell patch where the skin's straight edge between two lip vertices cuts inside the walls' curve.
 
 ## What the crate made up, and says so
 

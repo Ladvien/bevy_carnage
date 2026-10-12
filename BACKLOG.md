@@ -819,6 +819,7 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
 | [x] | **AG-045 — a run that hangs once in about a hundred left nothing to diagnose it with.** `spill`, `carnage` and `rheology` each once saved every shot and then never exited. `spill` then ran clean four times in a row on its own, and all 24 examples ran clean through 72 more scripted runs. `qa.sh`'s watchdog now runs macOS `sample` on a run it is about to kill, into `<out>/<name>.hang.txt`, so the next occurrence leaves a stack for every thread. Not fixed: no hang has occurred since the sampler went in, so its cause is unknown. | S |
 | [x] | **AG-046 — the GPU spray was pink square confetti (R1-03, high).** Two separate faults made one look. Each droplet was a bare billboard, a square quad, and now carries Hanabi's `RoundModifier::ellipse`, so it is a round drop. And the colour every Hanabi effect drew with was `spectral::srgb`, the gamma-encoded triple the crate's *materials* take, while a particle gradient takes linear values. Encoded values read as linear display lighter and greyer, which is the dusty pink. The droplet and ribbon colours are now `spectral::linear_srgb` of the same two films, so the spray shows the blood the film model computes. | S |
 | [x] | **AG-047 — repeat shots never moved, so pools never merged (R1-05, high).** `qa.sh` fired `pooling`'s four shots and `bullet_holes`' five at one aim. A second identical bore reaches no proxy cell and changes nothing, so `pooling` showed one shot's six slicks four times over and never the merge it exists to show. `bullet_holes`' second and fourth shots were exact repeats, and no scripted blow ever reached a limb. The key lists now step the aim between shots, and `sever` gains a blade at the right arm and one at the right leg. The examples were right; the script was not. | S |
+| [x] | **AG-048 — a slash opened as a dashed row of pits (R1-04, high).** Three faults in `laceration::tear`, measured from above with a throwaway rasteriser. The clip removed only triangles with all three vertices inside the gape. A cut at an angle to the mesh crosses triangles that keep a vertex outside, and each was stretched across the gap as a bridge of skin. At a gape narrower than a cell, nothing was removed at all and the cut was invisible. The bed's walls stopped at the rail, while the falloff had pushed the lips past it, which left a strip of nothing down both sides. And the bed ended at the path's ends, while the clip took skin up to `half_width` past them. Now a triangle the path enters, or one with a vertex in the gape and vertices on both lips, is clipped too. Every vertex on the mouth lands on one lip curve, and the bed rises to that curve every 2 mm, runs as far past each end as the clip measurably did, and fills the outside of each bend. | M |
 
 > BLOCKED: bevy_hanabi has no bevy-0.20 release (crates.io 0.19.0; its main still declares bevy 0.19), and the game's avian3d 0.7 is on bevy 0.19 with no 0.20 release; the game consumes this crate by path, so the crate cannot move alone.
 
@@ -877,23 +878,38 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
   - `sever`'s new blows (f1760 to f2500): the marker sits on the right shoulder, then on the right thigh, as the arithmetic in `qa.sh` says it should.
 
   Reaching the limbs found two things for round 2, both at the coarsest granularity, where the body is its six parts. **A blade aimed at the right shoulder takes the head off and leaves the arm on.** `swept_triangle` breaks a bond when the segment joining the two fragments' centres crosses the blade. The torso-to-head segment runs straight up the middle and crosses a horizontal sweep at shoulder height, and the torso-to-arm segment sits below it. That reads wrong, and it is the crate's bond model, not the script. The blade at the thigh severs both legs and the body comes down, which is what a 1.8 m horizontal sweep at that height would do. Separately, `pooling`'s HUD counts 6, 36, 66 and 132 plugs thrown after its four shots, more than one shot's worth each time. `spawn_gore` throws only the tail past `Thrown`, so whether earlier plugs are being thrown again is not established.
+- **AG-048, measured and looked at.** The see-through area, from above at 0.1 mm a pixel, with nothing removed rendering at 0.4 mm² of the rasteriser's own crack noise:
+
+  | case | before | after |
+  |---|---|---|
+  | `laceration_open`'s 22 cm slash, 5 mm cells, tick 160 | 1 397 mm² | 4.9 mm² |
+  | the same, ticks 3 to 30 (gape 0.5 to 4 mm) | 0 triangles removed: no opening at all | 99 removed, open from the first tick |
+  | `capture_gore`'s thigh, 24 cells, tick 160 | 69 082 mm² | 602 mm² |
+
+  What is left: under 3 mm² at the inside corner of the bend early in the opening, where the skin's edge between a vertex pushed along one segment and one pushed along the other leaves both troughs. A triangle between the two walls cannot cover that, which was tried and measured unchanged. Closing it would take a mitred bed. On the coarse patch it is hairline slivers where the skin's straight edge between two lip vertices cuts inside the walls' curve.
+
+  `the_tear_is_frozen` is re-blessed, both halves, with the reason beside the constants; `laceration_curve` prints the new pair. The new test `no_skin_is_left_across_a_diagonal_cut` fails on the old kernel ("a kept triangle … lies over the cut") and passes on this one. Every other tear and plugin test passes unchanged: the gap is empty, the tear is local, the floor is at depth, every bed face is wound to its normal, and removal is monotone in the gape. `capture_gore`'s laceration digest hashes transforms and stays `0534427ef2693376`. Looked at against round 1:
+  - `laceration_open` f30 and f70: nothing visible before, a slit now. At f160, pits bridged by skin before, a continuous trough with a skin band at the lip and fat to the floor now. The f160 crop shows a closed tip and a seamless bend.
+  - `capture_gore` 310, 340 and 419: the thigh opened as the same dashed row of pits at 310, which round 1 never noticed. Now it is a slit, then a full gash with ragged, rounded lips.
+
+  `laceration.gif` is regenerated from those frames (recipe added to `docs/DEMOS.md`) and looked at in frames 5, 30, 70 and 119. `docs/laceration.md` describes the new clip and lip.
 
 ### Rounds
 
 | round | examples rendered | new defects | fixed | blocked | open |
 |---|---|---|---|---|---|
 | iter-01 | 12 recorders, 9 terminal, 24 windowed | 83 candidates, not yet re-inspected | 1 (R1-01, `AG-043`) | 0 | 82 |
-| iter-02 (partial) | 24 windowed off screen; the recorders `AG-043`, `AG-044` and `AG-046` touched; `pooling`, `bullet_holes` and `sever` rescripted | 4: 2 found while fixing R1-01, 2 once `AG-047` reached the limbs | R1-02 (`AG-044`), R1-03 (`AG-046`), R1-05 (`AG-047`) | 0 | 83 |
+| iter-02 (partial) | 24 windowed off screen; the recorders `AG-043`, `AG-044`, `AG-046` and `AG-048` touched; `pooling`, `bullet_holes` and `sever` rescripted | 4: 2 found while fixing R1-01, 2 once `AG-047` reached the limbs | R1-02 (`AG-044`), R1-03 (`AG-046`), R1-05 (`AG-047`), R1-04 (`AG-048`) | 0 | 82 |
 
 **Round 1 found 83 candidates.** The work then moved to performance (`AG-039` … `AG-041`,
 released as `0.5.1` and `0.5.2`, neither of which changed a pixel) and to the harness (`AG-042`).
-The deduplicated list is `docs/visual-pass-round-1.md`. Of its five high-severity rows, four are
-fixed and one is open:
+The deduplicated list is `docs/visual-pass-round-1.md`. All five of its high-severity rows are
+fixed:
 
 - ~~the torso staying at standing height after the legs go (six examples)~~, fixed by `AG-043`;
 - ~~viscera and blood strands launched as rigid body-length rods~~, fixed by `AG-044`;
 - ~~`carnage`'s GPU spray drawn as pink square confetti~~, fixed by `AG-046`;
-- `laceration_open`'s cut opening as a dashed row of pits rather than a trough;
+- ~~`laceration_open`'s cut opening as a dashed row of pits rather than a trough~~, fixed by `AG-048`;
 - ~~`pooling`'s repeat shots never merging, because the autopilot never moves the aim~~, fixed by `AG-047`.
 
 The harness defect that made all of this hard to see, windows presenting black, is gone with

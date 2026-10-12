@@ -544,6 +544,11 @@ mkdir -p frames-modes && for n in $(seq 90 179); do
   cp "frames-gore/frame$(printf %04d "$n").png" "frames-modes/frame$(printf %04d $((n - 90))).png"; done
 WIDTH=480 LEGEND=none tools/gif.sh frames-modes docs/fracture_modes.gif ""
 
+# `laceration.gif` is the same run's fourth clip, frames 300-419, renumbered the same way.
+mkdir -p frames-lac && for n in $(seq 300 419); do
+  cp "frames-gore/frame$(printf %04d "$n").png" "frames-lac/frame$(printf %04d $((n - 300))).png"; done
+WIDTH=480 LEGEND=none tools/gif.sh frames-lac docs/laceration.gif ""
+
 # `viscera.gif` is `capture_entrails` whole, every second frame at 30 fps.
 cargo run --release --example capture_entrails -- --out frames-entrails
 WIDTH=480 FPS=30 STRIDE=2 LEGEND=none tools/gif.sh frames-entrails docs/viscera.gif ""
