@@ -818,6 +818,7 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
 | [x] | **AG-044 — gut spilled as rigid red rods (R1-02, high).** `viscera::spill` laid every strand straight along its heading, 84 cm of ruler-straight tube. For the first frames after a blow that is a fan of poles, and on the floor a straight stick. Each strand is now laid with `Strand::curved`, which is new: it leaves the wound along its heading, turns toward the floor within about a quarter of its length, and meanders in a slow S with a phase of its own. Every segment is still laid at its rest length, so the solver starts it at rest. | S |
 | [x] | **AG-045 — a run that hangs once in about a hundred left nothing to diagnose it with.** `spill`, `carnage` and `rheology` each once saved every shot and then never exited. `spill` then ran clean four times in a row on its own, and all 24 examples ran clean through 72 more scripted runs. `qa.sh`'s watchdog now runs macOS `sample` on a run it is about to kill, into `<out>/<name>.hang.txt`, so the next occurrence leaves a stack for every thread. Not fixed: no hang has occurred since the sampler went in, so its cause is unknown. | S |
 | [x] | **AG-046 — the GPU spray was pink square confetti (R1-03, high).** Two separate faults made one look. Each droplet was a bare billboard, a square quad, and now carries Hanabi's `RoundModifier::ellipse`, so it is a round drop. And the colour every Hanabi effect drew with was `spectral::srgb`, the gamma-encoded triple the crate's *materials* take, while a particle gradient takes linear values. Encoded values read as linear display lighter and greyer, which is the dusty pink. The droplet and ribbon colours are now `spectral::linear_srgb` of the same two films, so the spray shows the blood the film model computes. | S |
+| [x] | **AG-047 — repeat shots never moved, so pools never merged (R1-05, high).** `qa.sh` fired `pooling`'s four shots and `bullet_holes`' five at one aim. A second identical bore reaches no proxy cell and changes nothing, so `pooling` showed one shot's six slicks four times over and never the merge it exists to show. `bullet_holes`' second and fourth shots were exact repeats, and no scripted blow ever reached a limb. The key lists now step the aim between shots, and `sever` gains a blade at the right arm and one at the right leg. The examples were right; the script was not. | S |
 
 > BLOCKED: bevy_hanabi has no bevy-0.20 release (crates.io 0.19.0; its main still declares bevy 0.19), and the game's avian3d 0.7 is on bevy 0.19 with no 0.20 release; the game consumes this crate by path, so the crate cannot move alone.
 
@@ -870,24 +871,30 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
   - `pooling` f200 is unchanged, as it should be.
 
   `carnage.gif` is regenerated from those frames and looked at in frames 30, 70, 100, 150 and 190. The floor stains stay lighter than the spray. Their colour path converts correctly, as above, so this ticket leaves them; why they read lighter is not established.
+- **AG-047, measured and looked at.** A key list only; no example changed. The three examples re-run on the build host, and none logs "reached no proxy cell", where round 1 logged it on every repeat.
+  - `pooling`, after each shot settled (f160, f420, f680, f940): 6, 15, 17 and 21 slicks, widest 0.115, 0.185, 0.208 and 0.239 m. The pools on the floor run together, and the entry wound widens shot by shot.
+  - `bullet_holes` (f160 … f1720): five distinct holes, the proxy growing 16, 32, 52, 69 and 100 cells, each shot with the calibre, shatter, jaggedness and flare its key had just set. `R` returns it to an unbored subject.
+  - `sever`'s new blows (f1760 to f2500): the marker sits on the right shoulder, then on the right thigh, as the arithmetic in `qa.sh` says it should.
+
+  Reaching the limbs found two things for round 2, both at the coarsest granularity, where the body is its six parts. **A blade aimed at the right shoulder takes the head off and leaves the arm on.** `swept_triangle` breaks a bond when the segment joining the two fragments' centres crosses the blade. The torso-to-head segment runs straight up the middle and crosses a horizontal sweep at shoulder height, and the torso-to-arm segment sits below it. That reads wrong, and it is the crate's bond model, not the script. The blade at the thigh severs both legs and the body comes down, which is what a 1.8 m horizontal sweep at that height would do. Separately, `pooling`'s HUD counts 6, 36, 66 and 132 plugs thrown after its four shots, more than one shot's worth each time. `spawn_gore` throws only the tail past `Thrown`, so whether earlier plugs are being thrown again is not established.
 
 ### Rounds
 
 | round | examples rendered | new defects | fixed | blocked | open |
 |---|---|---|---|---|---|
 | iter-01 | 12 recorders, 9 terminal, 24 windowed | 83 candidates, not yet re-inspected | 1 (R1-01, `AG-043`) | 0 | 82 |
-| iter-02 (partial) | 24 windowed off screen; the recorders `AG-043`, `AG-044` and `AG-046` touched | 2 found while fixing R1-01 | R1-02 (`AG-044`), R1-03 (`AG-046`) | 0 | 82 |
+| iter-02 (partial) | 24 windowed off screen; the recorders `AG-043`, `AG-044` and `AG-046` touched; `pooling`, `bullet_holes` and `sever` rescripted | 4: 2 found while fixing R1-01, 2 once `AG-047` reached the limbs | R1-02 (`AG-044`), R1-03 (`AG-046`), R1-05 (`AG-047`) | 0 | 83 |
 
 **Round 1 found 83 candidates.** The work then moved to performance (`AG-039` … `AG-041`,
 released as `0.5.1` and `0.5.2`, neither of which changed a pixel) and to the harness (`AG-042`).
-The deduplicated list is `docs/visual-pass-round-1.md`. Of its five high-severity rows, three are
-fixed and two are open:
+The deduplicated list is `docs/visual-pass-round-1.md`. Of its five high-severity rows, four are
+fixed and one is open:
 
 - ~~the torso staying at standing height after the legs go (six examples)~~, fixed by `AG-043`;
 - ~~viscera and blood strands launched as rigid body-length rods~~, fixed by `AG-044`;
 - ~~`carnage`'s GPU spray drawn as pink square confetti~~, fixed by `AG-046`;
 - `laceration_open`'s cut opening as a dashed row of pits rather than a trough;
-- `pooling`'s repeat shots never merging, because the autopilot never moves the aim.
+- ~~`pooling`'s repeat shots never merging, because the autopilot never moves the aim~~, fixed by `AG-047`.
 
 The harness defect that made all of this hard to see, windows presenting black, is gone with
 `AG-042`: a round now runs on the build host with its screen locked.

@@ -98,9 +98,13 @@ rec_args() {
 # (arrows, `[`/`]` on rheology, `G` on viscera_spill, `F` on gore_tier) needs a hold, and a hold must
 # stay under the 130-frame spacing so it ends before the next press. Blows are cumulative until `R`,
 # so the strike demos reset between blows or the later ones report "nothing left to break here".
+# **A repeat shot needs the aim moved first**: an identical bore reaches no proxy cell and changes
+# nothing, so `bullet_holes` and `pooling` step the aim between shots. The aim is not reset by `R`;
+# at the examples' 1.1 m/s, `ArrowRight*17` from `sever`'s (0, 0.25) lands on the right arm and
+# `ArrowLeft*10 ArrowDown*47` after it on the right leg.
 keys_for() {
   case "$1" in
-    bullet_holes) echo "Space KeyK Space BracketRight Space KeyJ Space KeyF Space KeyR" ;;
+    bullet_holes) echo "Space KeyK ArrowLeft*5 Space BracketRight ArrowRight*10 Space KeyJ ArrowDown*5 Space KeyF ArrowUp*10 Space KeyR" ;;
     carnage) echo "Digit6 KeyR Digit1 KeyR Digit2 KeyR Digit3 KeyR Digit4 KeyR Digit5 KeyR" ;;
     carnage_web) echo "Digit1 Digit2 Digit3 Digit4 Digit5 KeyH KeyR" ;;
     cross_section) echo ;;
@@ -115,11 +119,11 @@ keys_for() {
     gore_tier) echo "Space Digit1 Space Digit2 Space Digit3 Space Digit4 Space KeyA KeyF*90" ;;
     laceration_open) echo "Space" ;;
     pattern_classes) echo "Digit1 Digit2 Digit3 Digit4 Digit5 Digit5 Digit6 KeyC" ;;
-    pooling) echo "Space Space Space Space KeyR" ;;
+    pooling) echo "Space ArrowLeft*4 Space ArrowRight*8 Space ArrowDown*4 Space KeyR" ;;
     preset) echo "Digit1 Digit2 Digit3 Digit4 Digit1 Digit1 KeyR" ;;
     rheology) echo "Space ArrowRight*60 Space BracketRight*100 Space BracketRight*50 Space" ;;
     ribbons) echo "Digit1 KeyR Digit4 KeyR Digit2 KeyR Digit3 KeyR Digit5 KeyR" ;;
-    sever) echo "Digit1 KeyR Digit2 KeyR Digit3 KeyR Digit4 KeyR Digit5 KeyR KeyG KeyT KeyR" ;;
+    sever) echo "Digit1 KeyR Digit2 KeyR Digit3 KeyR Digit4 KeyR Digit5 KeyR KeyG KeyT KeyR ArrowRight*17 Digit3 KeyR ArrowLeft*10 ArrowDown*47 Digit3 KeyR" ;;
     spill) echo "Space Space KeyR" ;;
     stain_morphology) echo "ArrowRight ArrowUp KeyR KeyR KeyB" ;;
     viscera_spill) echo "Space KeyG*90 KeyT KeyR" ;;
