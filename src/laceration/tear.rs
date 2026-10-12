@@ -212,14 +212,11 @@ pub fn tear(
     let mut u16_indices = false;
     match mesh.try_indices_option() {
         Ok(Some(Indices::U32(idx))) => {
-            tris.extend(idx.chunks_exact(3).filter_map(|t| <[u32; 3]>::try_from(t).ok()));
+            tris.extend_from_slice(idx.as_chunks::<3>().0);
         }
         Ok(Some(Indices::U16(idx))) => {
             u16_indices = true;
-            tris.extend(idx.chunks_exact(3).filter_map(|t| match *t {
-                [a, b, c] => Some([u32::from(a), u32::from(b), u32::from(c)]),
-                _ => None,
-            }));
+            tris.extend(idx.as_chunks::<3>().0.iter().map(|t| t.map(u32::from)));
         }
         Ok(None) => {
             // Unindexed: the triples are implicit, and the output gains an index buffer.
