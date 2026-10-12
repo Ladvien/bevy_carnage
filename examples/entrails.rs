@@ -288,9 +288,11 @@ fn hud(
     let (links, torn) = guts.iter().fold((0usize, 0usize), |(l, t), m| {
         (l + m.anchors.len(), t + m.torn.iter().filter(|x| **x).count())
     });
+    // Two lines: on one, the status ran past the window's right edge and wrapped "heals)" onto a line
+    // of its own (R1-33).
     let text = format!(
-        "{} chunk(s) in play  |  {} of {} strand(s) streaming  |  {torn} of {links} mesenteric \
-         link(s) torn (a tear never heals)",
+        "{} chunk(s) in play  |  {} of {} strand(s) streaming\n\
+         {torn} of {links} mesenteric link(s) torn (a tear never heals)",
         flying.iter().count(),
         guts.iter().count(),
         MAX_GUTS,
