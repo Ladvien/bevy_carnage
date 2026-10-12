@@ -378,7 +378,7 @@ const RIBBON_RATE: f32 = 60.0;
 /// instance reserves its capacity inside a 65,536-particle slab, so 4096 would fit sixteen gibs.
 const RIBBON_CAPACITY: u32 = 64;
 
-/// **How wide a strand is at its head, metres**, tapering to zero at the tail.
+/// **How wide a strand is over its first half, metres**, tapering to zero at the tail.
 ///
 /// **This is the strand's whole width, and `Attribute::SIZE` cannot set it.** Hanabi's
 /// [`SizeOverLifetimeModifier`] *assigns* rather than scales — its generated vertex code is
@@ -391,9 +391,11 @@ const RIBBON_CAPACITY: u32 = 64;
 /// **one-metre-wide** sheet on a 1.8 m subject. Captured offscreen: each flying chunk read as a red
 /// fan the size of the torso, which is what "it doesn't look like organic carnage at all" was.
 ///
-/// 12 mm is a thread of blood at human scale — about a finger's width, an order of magnitude under
-/// the 0.14 m half-depth of the torso the gibs come out of.
-const RIBBON_WIDTH: f32 = 0.012;
+/// 20 mm is a dragged stream of blood at human scale, about a thumb's width — still an order of
+/// magnitude under the 0.14 m half-depth of the torso the gibs come out of. It was 12 mm tapering
+/// from the head, so most of every strand was thinner than a finger and read as fishing line from a
+/// few metres away (visual pass round 1, R1-23); the gradient now holds the width over the first half.
+const RIBBON_WIDTH: f32 = 0.020;
 
 /// **The blood ribbon a flying gib drags behind it.** One connected strand per instance, left in world
 /// space, thinning and darkening over [`RIBBON_LIFETIME`].
@@ -456,7 +458,13 @@ pub fn gib_ribbon() -> EffectAsset {
         // **The width, absolutely, because this modifier assigns rather than scales** — hence no
         // `SIZE` init above; one would be dead code. See [`RIBBON_WIDTH`].
         .render(SizeOverLifetimeModifier {
-            gradient: Gradient::linear(Vec3::splat(RIBBON_WIDTH), Vec3::ZERO),
+            gradient: {
+                let mut g = Gradient::new();
+                g.add_key(0.0, Vec3::splat(RIBBON_WIDTH));
+                g.add_key(0.5, Vec3::splat(RIBBON_WIDTH));
+                g.add_key(1.0, Vec3::ZERO);
+                g
+            },
             ..default()
         })
         // Darkens and fades rather than turning blue like the upstream demo — this is blood. The
