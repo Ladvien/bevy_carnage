@@ -578,8 +578,9 @@ fn hud(dials: Res<Dials>, report: Res<Report>, mut line: Query<&mut Text, With<H
         Some(s) => format!("{s:.1}x"),
         None => "n/a (one fragment)".to_string(),
     };
+    // Its own line: spliced into the target line it ran that line past the window's right edge.
     let trabecular = if dials.tissue == TissueClass::Trabecular {
-        "  (trabecular crushes: the crate also ceilings it at 3)"
+        "\n(trabecular crushes: the crate also ceilings it at 3)"
     } else {
         ""
     };
@@ -588,8 +589,8 @@ fn hud(dials: Res<Dials>, report: Res<Report>, mut line: Query<&mut Text, With<H
          kg/m3)\n\
          Grady size s = {:.1} mm    volume / s^3 = {:.1}    energy / (6 s^2 G_c) = {:.1}    \
          BINDING: {}\n\
-         grady_mott_target -> {} pieces, clamped to [{}, {}]{}    min(bounds) {:.1}    bake \
-         produced {} leaves\n\
+         grady_mott_target -> {} pieces, clamped to [{}, {}]    min(bounds) {:.1}    bake \
+         produced {} leaves{}\n\
          largest / smallest fragment volume {}   histogram spans 0 to {:.1} mm3\n\
          (Mott spread: many small, few large - the histogram's claim, measured)",
         dials.energy_j,
@@ -606,9 +607,9 @@ fn hud(dials: Res<Dials>, report: Res<Report>, mut line: Query<&mut Text, With<H
         report.target,
         fs.min_pieces,
         fs.max_pieces,
-        trabecular,
         report.by_rate.min(report.by_energy),
         report.leaves,
+        trabecular,
         spread,
         // m3 -> mm3, so the axis is readable at a bone's scale.
         report.vmax * 1.0e9,
