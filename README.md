@@ -340,7 +340,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.3`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.4`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.4` changed: a fix for `0.5.3`'s laceration
+
+`0.5.3`'s laceration removed every triangle a cut entered, which is right on a mesh fine enough for the wound to open across but deletes a whole face of a low-poly one: a slash across a blockout's leg made the leg look severed. Those triangles are now removed only when all three vertices are within the wound's influence radius, so their vertices can be moved onto the lip the bed meets. A coarser mesh keeps its skin, and its wound stays closed as in `0.5.2`. Fine meshes open exactly as in `0.5.3`, and the frozen tear digest did not move.
 
 ### What `0.5.3` changed: four things that looked wrong
 

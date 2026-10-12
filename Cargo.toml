@@ -1,5 +1,9 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.4` is a patch that fixes `0.5.3`.** Its new laceration clip removed every triangle a cut
+# entered, so a slash across a low-poly face deleted the face. The new rules now apply only where every
+# vertex is within the influence radius; a coarser mesh stays closed, as in `0.5.2`. Nothing else moved.
+#
 # **`0.5.3` is a patch: four things that looked wrong now look right.** A body with no footing comes
 # down; spilled gut drapes instead of standing out as rods; the GPU spray is round blood-red drops
 # rather than pink squares; and a slash opens as one trough instead of a dashed row of pits. One item
@@ -41,7 +45,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.3"
+version = "0.5.4"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
