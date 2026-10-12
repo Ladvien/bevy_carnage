@@ -340,7 +340,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.10`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.11`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.11` changed: a cut through the body reads as meat
+
+Cut faces on the trunk read as cheese, cream with a red streak, for three reasons, and all three are fixed. Where two proxy hulls meet, as an arm's against the torso's flank, their flush faces counted as skin, so a cut beside a joint was measured from a seam inside the body. The bake now marks those faces as joints, and `ProxyCell::skin_planes` leaves them out. The trunk has no bone, so a deep point was pinned just short of the cortex, inside the cortex's own strip texel. Texture filtering then blended bone into every deep trunk cut; it now samples the middle of the muscle band. And 0.5.9's full mip chain averaged across the bands as well as along the cut, so a strip now carries four mip levels, enough to stop the grain sparkling without blending skin, fat, muscle and bone into one colour. No geometry, collider or digest moved. The GIFs are re-recorded.
 
 ### What `0.5.10` changed: the preset gives a skin the tangents its wounds need
 

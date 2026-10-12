@@ -540,7 +540,11 @@ pub(crate) fn fracture(
     // boundary edges at every hole rim, so classifying it after the carve reads a bored solid as a
     // sheet and carries the whole subject to one fragment. See [`crate::bore::carve`].
     let (bored, prisms, plugs, landed_bores) = crate::bore::apply(proxy, bores);
-    let proxy: &[ProxyCell] = &bored;
+    // **Joints, before anything is cut.** A supplied face flush against another hull is inside the
+    // body; marked here, every piece cut from either cell carries the mark, and its caps measure depth
+    // from the real surface. See [`crate::proxy::mark_joints`].
+    let jointed = crate::proxy::mark_joints(&bored);
+    let proxy: &[ProxyCell] = &jointed;
     // One slot per landed prism, filled by the per-shell carve below with the skin that channel took.
     let mut torn: Vec<Soup> = (0..prisms.len()).map(|_| Soup::default()).collect();
     // Tier B assignment. Every triangle goes to the first cell containing its centroid — first, not

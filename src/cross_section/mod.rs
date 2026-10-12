@@ -160,17 +160,17 @@ fn bake_strips(
     }
 }
 
-/// A strip image: clamped along depth, repeating along the tile, trilinearly filtered over a full
-/// mip chain.
+/// A strip image: clamped along depth, repeating along the tile, trilinearly filtered over
+/// [`STRIP_MIP_LEVELS`] levels.
 ///
-/// **The mip chain is what keeps a cut face from sparkling.** A strip draws its grain at physical
+/// **The mip levels are what keep a cut face from sparkling.** A strip draws its grain at physical
 /// size — fascicles 0.7 mm across, Haversian canals 0.35 mm apart — so on a cap a few hundred pixels
 /// wide one screen pixel covers several features. Sampled from level 0 alone, each pixel lands on a
 /// different one, and the cap reads as salt and pepper that crawls as the piece turns. The levels are
-/// box-filtered on the CPU, colour in linear light, so the bands keep their mean colour as the grain
+/// box-filtered on the CPU, colour in linear light, so the grain averages to its mean colour as it
 /// drops below a pixel. The digest is over level 0, the strip itself, and does not see them.
 fn image_of(width: u32, height: u32, data: Vec<u8>, format: TextureFormat, srgb: bool) -> Image {
-    let (data, levels) = mip_chain(width, height, data, srgb);
+    let (data, levels) = mip_chain(width, height, data, srgb, STRIP_MIP_LEVELS);
     // `new_uninit` and then the bytes, because `Image::new` debug-asserts that the data is exactly one
     // level's worth, and these carry the whole chain.
     let mut image = Image::new_uninit(
@@ -192,11 +192,19 @@ fn image_of(width: u32, height: u32, data: Vec<u8>, format: TextureFormat, srgb:
     image
 }
 
-/// **Level 0 followed by every smaller level down to 1×1**, RGBA8, in the layer-major order Bevy
+/// **How many mip levels a strip carries: four, not a full chain.** A level averages across the
+/// depth axis as well as along the cut, so a small enough level averages the bands themselves —
+/// skin, fat, muscle and bone into one cream — and a cap that picked it, because the cut runs fast
+/// along `v` while depth barely changes across the face, read as cheese. At level 3 a texel spans 8
+/// of the 512 depth columns, 0.6 mm of a limb and less than a third of the thinnest band, while
+/// along the cut it already averages the fascicles and canals that sparkled.
+const STRIP_MIP_LEVELS: u32 = 4;
+
+/// **Level 0 followed by up to `max_levels − 1` smaller levels**, RGBA8, in the layer-major order Bevy
 /// uploads. Returns the bytes and the level count. Each level averages the 2×2 block above it (the
 /// last row or column repeated when a size is odd); `srgb` averages the colour channels in linear
 /// light, so a red-and-ivory grain fades to its mean rather than a darker colour.
-fn mip_chain(width: u32, height: u32, base: Vec<u8>, srgb: bool) -> (Vec<u8>, u32) {
+fn mip_chain(width: u32, height: u32, base: Vec<u8>, srgb: bool, max_levels: u32) -> (Vec<u8>, u32) {
     let decode: [f32; 256] = std::array::from_fn(|b| if srgb { srgb_to_linear(b as f32 / 255.0) } else { b as f32 / 255.0 });
     let (mut w, mut h) = (width.max(1) as usize, height.max(1) as usize);
     if base.len() != w * h * 4 {
@@ -205,7 +213,7 @@ fn mip_chain(width: u32, height: u32, base: Vec<u8>, srgb: bool) -> (Vec<u8>, u3
     let mut out = base;
     let mut start = 0;
     let mut levels = 1;
-    while w > 1 || h > 1 {
+    while (w > 1 || h > 1) && levels < max_levels {
         let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
         let mut next = Vec::with_capacity(nw * nh * 4);
         for y in 0..nh {

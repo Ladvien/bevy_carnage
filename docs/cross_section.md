@@ -20,6 +20,8 @@ The whole thing is CPU-side and deterministic: a strip is a pure function of the
 
 **Depth below skin is exact and cheap.** A cut face belongs to a convex cell whose supplied faces are the subject's own surface. For a point inside a convex polytope the distance to the boundary is the minimum over its faces of the distance to that face's plane — a handful of dot products per vertex. `depth_below_skin` does that, and `annotate_cap` writes the result into `ATTRIBUTE_UV_1` as `(depth / span, along / tile)` without touching `UV_0`, so nothing that hashed a cap before this crate existed moves.
 
+**A joint is not skin.** A body's proxy is several convex hulls side by side, and where two meet each has a supplied face flush against the other's: the arm's hull against the torso's flank, the legs' against its base. Those faces are inside the body. The bake marks every supplied face more than half covered by opposed faces of other hulls, within a tenth of a millimetre of its plane, as a joint, and `ProxyCell::skin_planes` leaves joints out. A cut through a hip or a shoulder then measures its depth from the real surface and reads as meat, where before it read as a hand's width of skin and fat. Nothing is drawn, cut or collided differently.
+
 **The bands are a table with sources.** `Layers::for_region` carries, per region:
 
 | Region | Skin | Fat | Muscle | Cortex | Sources |

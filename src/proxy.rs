@@ -36,7 +36,7 @@
 //! - Distances are signed positive on the `+normal` side, matching [`crate::soup`].
 
 use bevy::log::warn;
-use bevy::math::Vec3;
+use bevy::math::{Vec2, Vec3};
 use std::collections::HashMap;
 
 use crate::soup::{
@@ -96,6 +96,11 @@ const RELIEF_STRIDE: usize = 4;
 pub(crate) enum FaceKind {
     /// The caller's own hull. Never drawn — the render mesh covers that region far better.
     Supplied,
+    /// **A supplied face that lies flush against another hull** — where a convex decomposition put two
+    /// pieces side by side, such as an arm's hull against the torso's. Never drawn, like any supplied
+    /// face, and **not skin**: a cut beside it measures its depth from the body's real surface, not
+    /// from a seam inside the body. See [`mark_joints`].
+    Joint,
     /// A fracture plane's cut face. Drawn with the interior material, crumpled by `cap_relief`.
     Cut,
     /// A bore's barrel or pit floor. Drawn with the interior material, never crumpled.
@@ -267,7 +272,7 @@ impl ProxyCell {
     /// channel wall answers `true` here too, because for material purposes it is the same thing: raw
     /// interior the crate created. Only how it is *displaced* differs — see [`FaceKind`].
     pub fn face_is_cut(&self, fi: usize) -> bool {
-        self.face_kind.get(fi).is_some_and(|k| *k != FaceKind::Supplied)
+        self.face_kind.get(fi).is_some_and(|k| !matches!(k, FaceKind::Supplied | FaceKind::Joint))
     }
 
     /// Enclosed volume. Useful for mass properties: a solver wanting uniform density needs exactly
@@ -444,6 +449,10 @@ impl ProxyCell {
     /// plane is exactly its distance to the subject's surface. A cell with no supplied face (an
     /// interior fragment) returns none, and reads as skin-depth zero there, deliberately: the
     /// alternative is guessing at a surface the cell never touched.
+    ///
+    /// **A joint is not skin.** A supplied face the bake found flush against another hull
+    /// ([`mark_joints`]) is left out, so a cut through a hip or a shoulder reads as the meat it is
+    /// rather than as the skin and fat of a surface that is inside the body.
     pub fn skin_planes(&self) -> Vec<crate::cross_section::SkinPlane> {
         (0..self.faces.len())
             .filter(|&fi| self.face_kind[fi] == FaceKind::Supplied)
@@ -462,7 +471,7 @@ impl ProxyCell {
     /// property this whole tier exists to guarantee.
     pub(crate) fn append_cut_faces(&self, out: &mut crate::soup::Soup, seam: &[Vec3], relief: f32) {
         for (fi, f) in self.faces.iter().enumerate() {
-            if self.face_kind[fi] == FaceKind::Supplied {
+            if matches!(self.face_kind[fi], FaceKind::Supplied | FaceKind::Joint) {
                 continue;
             }
             let Some((origin, n)) = self.face_plane(fi) else { continue };
@@ -476,7 +485,7 @@ impl ProxyCell {
                 FaceKind::Bore => 0.0,
                 FaceKind::Tension => relief * 0.5,
                 FaceKind::Compression => relief * 2.0,
-                FaceKind::Cut | FaceKind::Supplied => relief,
+                FaceKind::Cut | FaceKind::Supplied | FaceKind::Joint => relief,
             };
             let ring: Vec<Vec3> = f.iter().map(|&v| self.verts[v as usize]).collect();
             let ring = weave_seam(&ring, n, origin, seam);
@@ -584,10 +593,129 @@ impl ProxyCell {
                 if (b - a).cross(c - a).length_squared() < 1.0e-12 {
                     continue;
                 }
-                out.push_tri(vtx(a), vtx(b), vtx(c), self.face_kind[fi] != FaceKind::Supplied);
+                out.push_tri(vtx(a), vtx(b), vtx(c), !matches!(self.face_kind[fi], FaceKind::Supplied | FaceKind::Joint));
             }
         }
     }
+}
+
+/// The share of a supplied face that must be covered by other hulls' faces for it to count as a
+/// [`FaceKind::Joint`]. Half: on the demo body the torso's flank is 58 % covered by the arm's hull
+/// and its base 78 % by the two legs' hulls, so both are joints; its front, which nothing touches, is
+/// skin.
+const JOINT_COVER: f32 = 0.5;
+
+/// How far apart two opposed faces may be and still be flush, in mesh units: a tenth of a millimetre
+/// at metres. A decomposition's pieces meet on a shared plane up to its own float error, and a real
+/// gap between two hulls is far wider than this.
+const JOINT_GAP: f32 = 1.0e-4;
+
+/// **Mark every supplied face that lies flush against another cell's as a [`FaceKind::Joint`].**
+///
+/// A convex decomposition of a body is several hulls side by side, and where two of them meet each
+/// has a supplied face against the other's. Those faces are inside the body, so a cut beside one is
+/// meat, not skin. Taken as skin they were measured from as if they were the surface: the cut face of
+/// a hip read as a band of skin and fat a hand wide.
+///
+/// A face is a joint when at least [`JOINT_COVER`] of its area is covered by opposed faces of other
+/// cells lying within [`JOINT_GAP`] of its plane. Coverage is the area of the convex intersection of
+/// the two polygons in the face's plane, summed over every opposed face. Fixed iteration order, no
+/// tolerance search, so two runs mark the same faces. Only [`ProxyCell::skin_planes`] reads the result:
+/// nothing is drawn, cut, collided or digested differently.
+pub(crate) fn mark_joints(cells: &[ProxyCell]) -> Vec<ProxyCell> {
+    let mut out: Vec<ProxyCell> = cells.to_vec();
+    for (a, cell) in cells.iter().enumerate() {
+        for fa in 0..cell.faces.len() {
+            if cell.face_kind.get(fa) != Some(&FaceKind::Supplied) {
+                continue;
+            }
+            let Some((pa, na)) = cell.face_plane(fa) else { continue };
+            let ring_a = face_ring(cell, fa);
+            let (u, v) = plane_basis(na);
+            let flat = |p: Vec3| Vec2::new((p - pa).dot(u), (p - pa).dot(v));
+            let poly_a: Vec<Vec2> = ring_a.iter().map(|&p| flat(p)).collect();
+            let area_a = polygon_area(&poly_a);
+            if area_a <= 0.0 {
+                continue;
+            }
+            let mut covered = 0.0f32;
+            for (b, other) in cells.iter().enumerate() {
+                if b == a {
+                    continue;
+                }
+                for fb in 0..other.faces.len() {
+                    if other.face_kind.get(fb) != Some(&FaceKind::Supplied) {
+                        continue;
+                    }
+                    let Some((pb, nb)) = other.face_plane(fb) else { continue };
+                    if na.dot(nb) > -0.999 || (pb - pa).dot(na).abs() > JOINT_GAP {
+                        continue;
+                    }
+                    let poly_b: Vec<Vec2> = face_ring(other, fb).iter().map(|&p| flat(p)).collect();
+                    covered += polygon_area(&clip_convex(&poly_a, &poly_b));
+                }
+            }
+            if covered >= JOINT_COVER * area_a
+                && let Some(kind) = out.get_mut(a).and_then(|c| c.face_kind.get_mut(fa))
+            {
+                *kind = FaceKind::Joint;
+            }
+        }
+    }
+    out
+}
+
+/// Face `fi`'s vertices in ring order; empty for an index out of range.
+fn face_ring(cell: &ProxyCell, fi: usize) -> Vec<Vec3> {
+    cell.faces
+        .get(fi)
+        .map(|ring| ring.iter().filter_map(|&i| cell.verts.get(i as usize).copied()).collect())
+        .unwrap_or_default()
+}
+
+/// Each edge of a closed ring, as `(from, to)`.
+fn edges(p: &[Vec2]) -> impl Iterator<Item = (Vec2, Vec2)> + '_ {
+    p.iter().copied().zip(p.iter().copied().cycle().skip(1))
+}
+
+/// Unsigned area of a simple polygon (shoelace).
+fn polygon_area(p: &[Vec2]) -> f32 {
+    if p.len() < 3 {
+        return 0.0;
+    }
+    (edges(p).map(|(a, b)| a.x * b.y - b.x * a.y).sum::<f32>() * 0.5).abs()
+}
+
+/// `subject ∩ clip` for two convex polygons of either winding (Sutherland–Hodgman), keeping the side
+/// of each `clip` edge its centroid is on.
+fn clip_convex(subject: &[Vec2], clip: &[Vec2]) -> Vec<Vec2> {
+    if clip.len() < 3 || subject.len() < 3 {
+        return Vec::new();
+    }
+    let centre = clip.iter().fold(Vec2::ZERO, |s, &p| s + p) / clip.len() as f32;
+    let mut out: Vec<Vec2> = subject.to_vec();
+    for (e0, e1) in edges(clip) {
+        let edge = e1 - e0;
+        let side = |p: Vec2| edge.perp_dot(p - e0);
+        let inside_sign = side(centre).signum();
+        if inside_sign == 0.0 {
+            continue;
+        }
+        let input = std::mem::take(&mut out);
+        for (cur, next) in edges(&input) {
+            let (dc, dn) = (side(cur) * inside_sign, side(next) * inside_sign);
+            if dc >= 0.0 {
+                out.push(cur);
+            }
+            if (dc >= 0.0) != (dn >= 0.0) {
+                out.push(cur + (next - cur) * (dc / (dc - dn)));
+            }
+        }
+        if out.len() < 3 {
+            return Vec::new();
+        }
+    }
+    out
 }
 
 /// A cell's face planes, in face order, as [`ProxyCell::halfspaces`] computed them. Holds no
@@ -1023,6 +1151,25 @@ mod tests {
         let first = unit_box().clip(&p, FaceKind::Cut);
         for _ in 0..3 {
             assert_eq!(unit_box().clip(&p, FaceKind::Cut), first, "the same cut produced different cells");
+        }
+    }
+
+    /// **A face flush against another hull is a joint and not skin; a face across a gap is skin.**
+    /// A torso box with an arm box against its flank, and a second arm box 5 cm away from the other
+    /// flank: the touching pair each lose that face from `skin_planes`, every other face stays.
+    #[test]
+    fn a_face_against_another_hull_is_a_joint_not_skin() {
+        let torso = ProxyCell::from_box(Vec3::ZERO, Vec3::new(0.22, 0.32, 0.14));
+        let arm = ProxyCell::from_box(Vec3::new(0.32, 0.06, 0.0), Vec3::new(0.10, 0.26, 0.10));
+        let far_arm = ProxyCell::from_box(Vec3::new(-0.37, 0.06, 0.0), Vec3::new(0.10, 0.26, 0.10));
+        let marked = mark_joints(&[torso, arm, far_arm]);
+        let skins: Vec<usize> = marked.iter().map(|c| c.skin_planes().len()).collect();
+        assert_eq!(skins, vec![5, 5, 6], "torso and arm each lose their shared face; the gapped arm keeps all six");
+        let torso_lost = marked.first().map(|c| c.skin_planes().iter().all(|p| p.normal.x < 0.5)).unwrap_or(false);
+        assert!(torso_lost, "the face the torso lost is its +X flank");
+        // Nothing a cut, a collider or a draw reads has moved.
+        for c in &marked {
+            assert!((0..6).all(|fi| !c.face_is_cut(fi)), "a joint is still the caller's hull, not a cut face");
         }
     }
 }

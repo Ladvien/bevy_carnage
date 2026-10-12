@@ -175,10 +175,16 @@ fn core_equivalent_mm(depth_mm: f32, d_core: f32, layers: &Layers) -> f32 {
     let bone = layers.bone_mm;
     // **No bone at all**: the trunk. Past the muscle there is a cavity this five-layer table cannot
     // name, and the nearest honest tissue is the muscle wall itself — so the meat fills the cut to
-    // its deepest point and no cortex or marrow is ever drawn. (Sampled just under the cortex start,
-    // where the strip is still muscle.)
+    // its deepest point and no cortex or marrow is ever drawn.
+    //
+    // **Sampled at the middle of the muscle band, not at its edge.** The strip is filtered: bilinearly
+    // within a level, and over a mip chain since 0.5.9. A sample 0.001 mm short of the cortex shares
+    // a texel with it, and every smaller mip level averages in more of the bone and marrow beyond. So
+    // every deep trunk cut read as speckled ivory without mips and as cream with them, where it should
+    // read as meat. From the band's middle the nearest bone is half the band away, 58 texels on the
+    // shipped torso strip.
     if bone == 0.0 {
-        return depth_mm.min((cortex_start - 1.0e-3).max(fat_end));
+        return depth_mm.min(((fat_end + cortex_start) * 0.5).max(fat_end));
     }
     // **Bone without end** — the skull: the shell begins at its measured depth and everything inside
     // is the depth-only rule, which is what a cranium cut through reads as.
@@ -328,14 +334,20 @@ mod tests {
             }
         }
         let torso = Layers::for_region(Region::Torso);
-        let cortex = torso.starts_mm()[3];
+        let (fat_end, cortex) = (torso.starts_mm()[2], torso.starts_mm()[3]);
+        let mid = (fat_end + cortex) * 0.5;
         for depth_mm in [0.0, 1.0, 10.0, 20.0, cortex, 40.0, 120.0] {
             let p = Vec3::new(0.0, -depth_mm / scale.mm_per_unit, 0.0);
             let uv = uv1_at_core(p, 0.25, &skin, &torso, &scale, 120.0);
             let (layer, _) = torso.at(uv.x * torso.span_mm());
             assert_ne!(layer, crate::cross_section::Layer::Cortex, "the trunk showed cortex at {depth_mm} mm");
             assert_ne!(layer, crate::cross_section::Layer::Marrow, "the trunk showed marrow at {depth_mm} mm");
-            if depth_mm < cortex {
+            // Filtered, not just looked up: a deep trunk sample sits well clear of the cortex column
+            // on the shipped 512-wide strip, so neither bilinear filtering nor a few mip levels blend
+            // bone into it.
+            let clear = (cortex / torso.span_mm() - uv.x) * 512.0;
+            assert!(clear >= 8.0, "at {depth_mm} mm the trunk samples {clear} texels from the cortex");
+            if depth_mm < mid {
                 let plain = uv1_at(p, 0.25, &skin, &torso, &scale);
                 assert_eq!(uv, plain, "the trunk's soft tissue moved at {depth_mm} mm");
             }
