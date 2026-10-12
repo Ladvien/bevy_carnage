@@ -1,5 +1,8 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.18`: the preset measures the atlas** (`AG-091`). An unstated `Gore::uv_per_metre` (now
+# `Option<f32>`) is measured from the mesh at its world scale when it is dressed, instead of `1.0`.
+#
 # **`0.5.17`: a broken body hands over its pieces** (`AG-090`). `GoreFractured` carries every
 # `GorePiece` (meshes, world transform, half extents, launch velocity, `PieceFate`) and both
 # materials, once per body, whether or not the preset spawns them.
@@ -96,7 +99,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.17"
+version = "0.5.18"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

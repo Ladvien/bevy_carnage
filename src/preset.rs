@@ -41,8 +41,9 @@
 //! the canvases' digests reproducible, and a game that wants the gore on its own step configures
 //! [`GoreSystems`] and drives the clock itself.
 
-use bevy::mesh::VertexAttributeValues;
+use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
+use bevy::transform::helper::TransformHelper;
 use crate::cross_section::{CrossSectionPlugin, CrossSectionSettings, Layers, Region};
 use crate::flaymap::{BoneExposed, FlayCanvas, FlaySettings, FlaymapPlugin, Layer};
 use crate::laceration::{Gape, Laceration, LacerationClock, LacerationPlugin, Tension};
@@ -69,11 +70,17 @@ pub struct Gore {
     /// one for the faces that get hit, with [`Gore::with_gravity_uv`]. A wrong sign is easy to miss
     /// in a still and obvious in motion: the drips climb.
     pub gravity_uv: Vec2,
-    /// **How many UV units one metre of this surface covers.** The canvases take radii in UV space
-    /// and assume one UV unit per metre; a mesh whose atlas spans a 40 cm limb from 0 to 1 packs
-    /// 2.5 UV per metre, and a 3 cm wound on it is `0.075` UV wide, not `0.03`. Set it from the
-    /// asset: `1 / (metres the atlas spans)`.
-    pub uv_per_metre: f32,
+    /// **How many UV units one metre of this surface covers.** The canvases take radii in UV space,
+    /// so a mesh whose atlas spans a 40 cm limb from 0 to 1 packs 2.5 UV per metre, and a 3 cm wound
+    /// on it is `0.075` UV wide, not `0.03`.
+    ///
+    /// **`None`, the default, has the preset measure it** when it dresses the mesh. The measure is the
+    /// square root of the mesh's total UV area over its total world area, the average over every
+    /// triangle, at the entity's world scale. The result is stored here, so a game can read what was
+    /// measured. State it with [`Gore::with_uv_per_metre`] when the average is wrong for where the
+    /// wounds land, as on an atlas that packs the face far denser than the body. Before 0.5.18 the
+    /// default was `1.0`, which on a typical character atlas shrank every wound to a dot.
+    pub uv_per_metre: Option<f32>,
 }
 
 /// The three surfaces the preset knows how to dress.
@@ -90,20 +97,26 @@ pub enum GoreKind {
 impl Gore {
     /// A body part of `region`.
     pub fn skin(region: Region) -> Self {
-        Self { kind: GoreKind::Skin(region), gravity_uv: Vec2::new(0.0, 1.0), uv_per_metre: 1.0 }
+        Self { kind: GoreKind::Skin(region), gravity_uv: Vec2::new(0.0, 1.0), uv_per_metre: None }
     }
     /// A fabric surface.
     pub fn cloth() -> Self {
-        Self { kind: GoreKind::Cloth, gravity_uv: Vec2::new(0.0, 1.0), uv_per_metre: 1.0 }
+        Self { kind: GoreKind::Cloth, gravity_uv: Vec2::new(0.0, 1.0), uv_per_metre: None }
     }
     /// A floor. Blood pools rather than runs, so its UV gravity is zero.
     pub fn floor() -> Self {
-        Self { kind: GoreKind::Floor, gravity_uv: Vec2::ZERO, uv_per_metre: 1.0 }
+        Self { kind: GoreKind::Floor, gravity_uv: Vec2::ZERO, uv_per_metre: None }
     }
-    /// The same surface with its atlas density stated — see [`Gore::uv_per_metre`].
+    /// The same surface with its atlas density stated — see [`Gore::uv_per_metre`]. A value that is
+    /// not a positive finite number leaves it to be measured.
     pub fn with_uv_per_metre(mut self, uv_per_metre: f32) -> Self {
-        self.uv_per_metre = if uv_per_metre.is_finite() && uv_per_metre > 0.0 { uv_per_metre } else { 1.0 };
+        self.uv_per_metre = (uv_per_metre.is_finite() && uv_per_metre > 0.0).then_some(uv_per_metre);
         self
+    }
+    /// The atlas density the canvases use: as stated or measured, and `1.0` only on a surface not
+    /// dressed yet or one whose mesh could not be measured.
+    fn density(&self) -> f32 {
+        self.uv_per_metre.unwrap_or(1.0)
     }
     /// The same surface with the way blood runs on its atlas stated — see [`Gore::gravity_uv`].
     pub fn with_gravity_uv(mut self, gravity_uv: Vec2) -> Self {
@@ -175,14 +188,50 @@ fn ray_hit(mesh: &Mesh, xf: &GlobalTransform, from: Vec3, dir: Vec3) -> Option<(
     best.map(|(_, uv, p, n)| (uv, p, n))
 }
 
+/// **A mesh's atlas density, UV units per metre**: the square root of its total UV area over its
+/// total world area, at `xf` and `mm_per_unit` millimetres per world unit. That is the average
+/// density over every triangle, so an atlas packed evenly measures exactly. `None` for a mesh with no
+/// `Float32x2` `UV_0`, no `Float32x3` positions, or no area to divide by.
+fn atlas_density(mesh: &Mesh, xf: &GlobalTransform, mm_per_unit: f32) -> Option<f32> {
+    let Ok(Some(VertexAttributeValues::Float32x3(positions))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_POSITION) else {
+        return None;
+    };
+    let Ok(Some(VertexAttributeValues::Float32x2(uvs))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_UV_0) else {
+        return None;
+    };
+    let affine = xf.affine();
+    let (mut uv_area, mut world_area) = (0.0f64, 0.0f64);
+    let mut triangle = |[a, b, c]: [usize; 3]| {
+        let (Some(pa), Some(pb), Some(pc), Some(ua), Some(ub), Some(uc)) =
+            (positions.get(a), positions.get(b), positions.get(c), uvs.get(a), uvs.get(b), uvs.get(c))
+        else {
+            return;
+        };
+        let [pa, pb, pc] = [pa, pb, pc].map(|p| affine.transform_point3(Vec3::from(*p)));
+        world_area += 0.5 * f64::from((pb - pa).cross(pc - pa).length());
+        let (ua, ub, uc) = (Vec2::from(*ua), Vec2::from(*ub), Vec2::from(*uc));
+        uv_area += 0.5 * f64::from((ub - ua).perp_dot(uc - ua).abs());
+    };
+    match mesh.try_indices_option() {
+        Ok(Some(Indices::U32(ix))) => ix.as_chunks::<3>().0.iter().for_each(|t| triangle(t.map(|i| i as usize))),
+        Ok(Some(Indices::U16(ix))) => ix.as_chunks::<3>().0.iter().for_each(|t| triangle(t.map(usize::from))),
+        Ok(None) => (0..positions.len() / 3).for_each(|t| triangle([3 * t, 3 * t + 1, 3 * t + 2])),
+        Err(_) => return None,
+    }
+    let metres_per_unit = f64::from(mm_per_unit) / 1000.0;
+    let world_m2 = world_area * metres_per_unit * metres_per_unit;
+    let density = (uv_area / world_m2).sqrt();
+    (world_m2 > 0.0 && uv_area > 0.0 && density.is_finite()).then_some(density as f32)
+}
+
 /// A stain silhouette in this surface's UV units, from one in metres — and never under a texel and
 /// a half across. A 2 mm droplet on a floor at 12 mm per texel is real and invisible; the floor of
 /// the stamp is a resolution fact, so a distant spatter reads as the dot it is rather than as nothing.
 fn shape_on(gore: &Gore, shape: &StainShape, texels: u32) -> StainShape {
     let floor_uv = 1.5 / texels.max(1) as f32;
     StainShape {
-        major: (shape.major * gore.uv_per_metre).max(floor_uv),
-        minor: (shape.minor * gore.uv_per_metre).max(floor_uv),
+        major: (shape.major * gore.density()).max(floor_uv),
+        minor: (shape.minor * gore.density()).max(floor_uv),
         ..*shape
     }
 }
@@ -726,6 +775,11 @@ fn advance_clock(mut clock: ResMut<GoreClock>, lac: Option<ResMut<LacerationCloc
 /// ones. A mesh that cannot have them (no normals, no UV0, not indexed) warns once and is dressed
 /// anyway, flat. **A skin whose mesh has not loaded yet is left undressed until it has** — still
 /// streaming, not absent — rather than dressed without the tangents it will need.
+///
+/// **A surface whose [`Gore::uv_per_metre`] is `None` gets it measured here**, from its mesh at its
+/// world scale, and waits for its mesh the same way. The scale comes from the `Transform` chain
+/// rather than `GlobalTransform`: a scene spawned this frame has not been propagated yet, and a
+/// glTF exported in centimetres carries its 0.01 in exactly that chain.
 #[allow(clippy::too_many_arguments)]
 fn dress(
     mut commands: Commands,
@@ -737,7 +791,8 @@ fn dress(
     standard: Option<Res<Assets<StandardMaterial>>>,
     flesh: Option<ResMut<Assets<FleshMaterial>>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
-    undressed: Query<(Entity, &Gore, &Mesh3d, Option<&MeshMaterial3d<StandardMaterial>>), Without<Dressed>>,
+    mut undressed: Query<(Entity, &mut Gore, &Mesh3d, Option<&MeshMaterial3d<StandardMaterial>>), Without<Dressed>>,
+    transforms: TransformHelper,
 ) {
     let (Some(mut images), Some(standard), Some(mut flesh)) = (images, standard, flesh) else {
         return;
@@ -748,7 +803,7 @@ fn dress(
     }
     let mut meshes = meshes;
     let scale = settings.as_ref().map(|s| s.scale).unwrap_or_default();
-    for (entity, gore, mesh3d, material) in &undressed {
+    for (entity, mut gore, mesh3d, material) in &mut undressed {
         if let (GoreKind::Skin(_), Some(meshes)) = (gore.kind, meshes.as_mut()) {
             match meshes.get(&mesh3d.0).map(|m| m.contains_attribute(Mesh::ATTRIBUTE_TANGENT)) {
                 None => continue,
@@ -763,6 +818,17 @@ fn dress(
                     }
                 }
                 Some(true) => {}
+            }
+        }
+        if gore.uv_per_metre.is_none() {
+            let Some(mesh) = meshes.as_ref().and_then(|m| m.get(&mesh3d.0)) else { continue };
+            let xf = transforms.compute_global_transform(entity).unwrap_or_default();
+            match atlas_density(mesh, &xf, dials.mm_per_unit) {
+                Some(density) => gore.uv_per_metre = Some(density),
+                None => bevy::log::warn_once!(
+                    "gore: a dressed mesh has no UV area or no world area to measure its atlas density by, \
+                     so its wounds are sized at one UV per metre; state it with Gore::with_uv_per_metre"
+                ),
             }
         }
         let base = material.and_then(|m| standard.get(&m.0).cloned()).unwrap_or_default();
@@ -889,7 +955,7 @@ fn take_hits(
         let xf = *xf;
         let xf = &xf;
         let Some(mesh) = meshes.get(&mesh3d.0).cloned() else { continue };
-        let radius_uv = (hit.radius_m * gore.uv_per_metre / crate::flaymap::UV_SPAN_M).max(0.0);
+        let radius_uv = (hit.radius_m * gore.density() / crate::flaymap::UV_SPAN_M).max(0.0);
         let region = match gore.kind {
             GoreKind::Skin(r) => r,
             _ => Region::Torso,
@@ -951,7 +1017,7 @@ fn take_hits(
                 crate::bloodstain::burn::Degree::Third => ([0.10, 0.06, 0.04], 1.0),
             };
             let radius_uv_burn = radius_uv;
-            let mm_per_uv = 1000.0 / gore.uv_per_metre.max(1.0e-6);
+            let mm_per_uv = 1000.0 / gore.density().max(1.0e-6);
             entity_ref.queue(move |mut e: EntityWorldMut| {
                 if let Some(mut dermis) = e.get_mut::<DermisCanvas>() {
                     dermis.paint_radial(uv, radius_uv_burn, mm_per_uv, |r_mm| {
@@ -1063,7 +1129,7 @@ fn take_hits(
             && let Ok(mut e) = commands.get_entity(hit.entity)
         {
             let site = WoundSite { uv, at_local, wound, bleed: crate::bloodstain::Bleed::new(tick, &wound) };
-            let (reach, cap) = (hit.radius_m * gore.uv_per_metre, dials.open_wounds);
+            let (reach, cap) = (hit.radius_m * gore.density(), dials.open_wounds);
             e.queue_silenced(move |mut e: EntityWorldMut| match e.get_mut::<Wounds>() {
                 Some(mut wounds) => wounds.open(site, reach, cap),
                 None => {
@@ -1423,7 +1489,7 @@ fn age_bruises(
         }
         bruising.carry -= steps as f32;
         bruising.bruise.advance(steps);
-        let mm_per_uv = 1000.0 / gore.uv_per_metre.max(1.0e-6);
+        let mm_per_uv = 1000.0 / gore.density().max(1.0e-6);
         let radius_uv = crate::bloodstain::bruise::RADIUS_MM / mm_per_uv;
         let uv = bruising.uv;
         let bruise = &bruising.bruise;
@@ -1629,6 +1695,27 @@ mod tests {
         let open: Vec<WoundSite> = app.world().get::<Wounds>(body).map(|w| w.0.clone()).unwrap_or_default();
         assert_eq!(open.len(), 2, "a hit inside an open wound stacked a second schedule on it");
         assert!(open[1].at_local.x < -0.1 && open[1].bleed.opened_at > open[0].bleed.opened_at, "the left wound was not the one reopened");
+    }
+
+    /// **An atlas density nobody stated is measured from the mesh, at its world scale.** A 3 m
+    /// floor whose UVs run 0 to 1 packs a third of a UV per metre, and under a parent scaled by 2 it
+    /// packs a sixth. This test never propagates a `GlobalTransform`, as a scene spawned this frame
+    /// has none yet, so the scale has to come from the `Transform` chain. A stated density is kept.
+    #[test]
+    fn an_unstated_atlas_density_is_measured_at_world_scale() {
+        let mut app = headless();
+        let plane = app.world_mut().resource_mut::<Assets<Mesh>>().add(Plane3d::new(Vec3::Y, Vec2::splat(1.5)).mesh().build());
+        let world = app.world_mut();
+        let alone = world.spawn((Mesh3d(plane.clone()), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::floor())).id();
+        let parent = world.spawn((Transform::from_scale(Vec3::splat(2.0)), GlobalTransform::IDENTITY)).id();
+        let scaled = world.spawn((Mesh3d(plane.clone()), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::floor(), ChildOf(parent))).id();
+        let stated = world.spawn((Mesh3d(plane), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::floor().with_uv_per_metre(0.5))).id();
+        app.world_mut().run_schedule(FixedUpdate);
+        let density = |e: Entity| app.world().get::<Gore>(e).and_then(|g| g.uv_per_metre);
+        let near = |got: Option<f32>, want: f32| got.is_some_and(|g| (g - want).abs() < 1.0e-4);
+        assert!(near(density(alone), 1.0 / 3.0), "a 3 m floor measured {:?}", density(alone));
+        assert!(near(density(scaled), 1.0 / 6.0), "the floor under a parent scaled by 2 measured {:?}", density(scaled));
+        assert_eq!(density(stated), Some(0.5), "a stated density was overwritten");
     }
 
     /// **A body that moves after the hit bleeds exactly as one that stood still.** The wound is a

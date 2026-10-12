@@ -75,7 +75,8 @@ fn wire(app: &mut App) {
 }
 
 fn dress(mut commands: Commands, torso: Entity, shirt: Entity, floor: Entity) {
-    commands.entity(torso).insert(Gore::skin(Region::Torso).with_uv_per_metre(2.5));
+    // Each mesh's atlas density is measured when it is dressed; state it only to override.
+    commands.entity(torso).insert(Gore::skin(Region::Torso));
     commands.entity(shirt).insert(Gore::cloth());
     commands.entity(floor).insert(Gore::floor().with_uv_per_metre(0.3));
 }
@@ -340,7 +341,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.17`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.18`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.18` changed: the preset measures the atlas
+
+`Gore::uv_per_metre` converts every wound's size from metres into the canvas's UV, and an unstated one was `1.0`, as if every atlas spanned a metre. A game that skipped the checklist got every wound at the wrong size. It is now `Option<f32>`. `None`, the default, has the preset measure the mesh when it dresses it: the square root of its UV area over its world area, at its world scale, read from the `Transform` chain so a scene spawned this frame measures right. The result is stored back in the component. A stated density is kept, and is still the way to override an average that is wrong where the wounds land. **API:** `Gore::uv_per_metre` is `Option<f32>`; `with_uv_per_metre` is unchanged.
 
 ### What `0.5.17` changed: a broken body hands over its pieces
 
