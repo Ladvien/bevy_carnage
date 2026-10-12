@@ -233,6 +233,11 @@ pub fn tear(
     // through a mesh vertex grazes that vertex's triangles without entering them. Kept, any of these
     // would have its vertices pushed to opposite lips and be stretched across the gap as a bridge of
     // skin. A closed wound clips nothing.
+    //
+    // **The last two only where every vertex is within `influence`**, because only those vertices are
+    // moved onto the lip the bed meets. A triangle bigger than the influence radius — a blockout's
+    // whole face — would leave a hole the bed cannot fill: `0.5.3` cut the face off a cuboid leg that
+    // way and the leg looked severed. Such a mesh is too coarse to open, and its wound stays closed.
     let open = shape.half_width > 0.0;
     let inside = |i: u32| near.get(i as usize).and_then(|n| n.as_ref()).is_some_and(|n| n.dist < shape.half_width);
     let plane = Plane2::new(n);
@@ -249,11 +254,14 @@ pub fn tear(
             s.contains(&Some(1.0)) && s.contains(&Some(-1.0))
         }
     };
+    let reachable = |t: &[u32; 3]| {
+        t.iter().all(|i| near.get(*i as usize).and_then(|n| n.as_ref()).is_some_and(|n| n.dist < shape.influence))
+    };
     let mut kept: Vec<u32> = Vec::with_capacity(tris.len() * 3);
     let mut removed = 0u32;
     let mut on_mouth = vec![false; verts.len()];
     for t in &tris {
-        if open && (t.iter().all(|i| inside(*i)) || crossed(t) || straddles(t)) {
+        if open && (t.iter().all(|i| inside(*i)) || (reachable(t) && (crossed(t) || straddles(t)))) {
             removed += 1;
             for i in t {
                 if let Some(m) = on_mouth.get_mut(*i as usize) {

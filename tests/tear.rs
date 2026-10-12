@@ -266,6 +266,21 @@ fn no_skin_is_left_across_a_diagonal_cut() {
     }
 }
 
+/// **A face bigger than the influence radius keeps its skin.** Its corners are too far from the cut
+/// to be moved onto the lip, so clipping it would leave a hole the bed cannot fill. `0.5.3` did, and a
+/// slash across a blockout's leg removed the leg's whole face, which read as a severed limb. A mesh
+/// that coarse is too coarse to open, and the wound stays closed.
+#[test]
+fn a_cut_across_a_face_coarser_than_the_influence_removes_nothing() {
+    // One cell: two triangles over a metre, with corners at least 0.5 m from a cut through the middle.
+    let patch = skin_patch(1, SIZE);
+    let path = vec![Vec3::new(-0.06, 0.0, -0.02), Vec3::new(0.06, 0.0, 0.02)];
+    let torn = tear(&patch, &path, Vec3::Y, &shape(0.004), Region::Limb, &Layers::for_region(Region::Limb), &Scale::default())
+        .expect("a cut across a flat patch must tear");
+    assert_eq!(torn.removed_faces, 0, "a face with every corner beyond `influence` was clipped");
+    assert_eq!(triples(&torn.skin).len(), triples(&patch).len(), "the coarse face lost a triangle");
+}
+
 #[test]
 fn bad_input_is_refused() {
     let patch = skin_patch(CELLS, SIZE);
