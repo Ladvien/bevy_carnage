@@ -177,6 +177,12 @@ fn setup(
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(0.01, 0.17, 0.18).looking_at(look, Vec3::Y),
+        // **Exposed for the light, not Bevy's default.** The key meets the floor at n·l = 0.69 and the
+        // fill adds about a sixth more, so a white floor is lit by roughly 10 600 lux. At the default
+        // EV100 9.7 that renders it at 3.4 rather than 1. The pools' colours come from the crate, so
+        // they were lifted with everything else, and a brown 0.26 0.11 0.08 crust drew as salmon
+        // (165, 95, 85). At 11.45 that floor renders at about 1, and the floor is authored to match.
+        bevy::camera::Exposure { ev100: bevy::camera::Exposure::EV100_BLENDER + 1.75 },
     ));
     // **The key light is placed so its reflection off the floor lands in the camera.** Roughness is
     // the channel that carries the wetness claim, and a specular channel with no specular highlight
@@ -198,7 +204,10 @@ fn setup(
 
     let floor = meshes.add(Mesh::from(Plane3d::default().mesh().size(2.0, 2.0)));
     let floor_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.17, 0.17, 0.19),
+        // Raised with the exposure: 3.4 times its old linear albedo, and 1.27 more for the specular
+        // share the exposure takes from a floor whose key is aimed to reflect into the camera, which
+        // is what the first render measured short.
+        base_color: Color::srgb(0.38, 0.38, 0.42),
         perceptual_roughness: 0.90,
         ..default()
     });
