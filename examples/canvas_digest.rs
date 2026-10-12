@@ -31,7 +31,7 @@ const HITS: [(f32, f32, u32); 3] = [(0.34, 0.18, 0), (0.58, 0.30, 12), (0.36, 0.
 fn main() {
     let settings = WetSettings::default();
 
-    println!("bevy_wetmap — the canvas is CPU state, so it has a number under it.\n");
+    println!("wetmap — the canvas is CPU state, so it has a number under it.\n");
     println!(
         "  canvas {SIZE}x{SIZE}, {TICKS} ticks, gravity +v, \
          drip {:.2} / spread {:.2} / dry {} ticks / absorb {:.2}\n",

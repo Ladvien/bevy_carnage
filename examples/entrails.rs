@@ -1,7 +1,7 @@
 //! **Guts stream out with the piece that took them.**
 //!
 //! `ribbons.rs` gives every flying chunk a thread of blood. This gives the ones that came out of the
-//! *torso* something with a solver behind it: `bevy_viscera` strands, tethered to the chunk itself, so
+//! *torso* something with a solver behind it: `viscera` strands, tethered to the chunk itself, so
 //! a gut pays out behind the piece as it flies, sags under its own weight, drags across the floor, and
 //! **tears loose** when the piece outruns what a fold of peritoneum can carry.
 //!
@@ -14,7 +14,7 @@
 //! # Why the tether follows the chunk, and why that is the caller's job
 //!
 //! [`Mesentery`] anchors are **world points the caller owns** — the crate never reads a transform and
-//! never spawns. `bevy_viscera`'s own `viscera_spill` example walks one anchor to make a hand; this
+//! never spawns. The `viscera_spill` example walks one anchor to make a hand; this
 //! walks a few of them to make a moving body. So the anchors are stored as offsets in the chunk's own
 //! frame and rewritten every tick **before** [`VisceraSystems`], which is the ordering the crate's set
 //! documents: the solve reads the anchors that were written this tick.
@@ -27,7 +27,7 @@
 //!
 //! A gut comes out of an abdomen, so only fragments whose root cell is the torso get one —
 //! [`body::part_of`] walks a fragment back to the body part it was cut from. An arm chunk trails blood
-//! in `ribbons.rs` and nothing here, which is correct: `bevy_viscera` knows what a strand is and has
+//! in `ribbons.rs` and nothing here, which is correct: `viscera` knows what a strand is and has
 //! no opinion about where a subject keeps its bowel.
 //!
 //! Needs a GPU.
@@ -52,7 +52,7 @@ const GRANULARITY: usize = body::GRANULARITIES.len() - 1;
 /// Rounded, so the chunks read as torn rather than as cleaved ice. Matches `ribbons.rs`.
 const SOFTEN: f32 = 0.5;
 
-/// Sides on the swept tube. Eight is what `bevy_viscera`'s own demo uses: 384 triangles per strand.
+/// Sides on the swept tube. Eight is what the `viscera_spill` demo uses: 384 triangles per strand.
 const SIDES: u32 = 8;
 
 /// Strands one torso chunk pulls out with it.
@@ -82,7 +82,7 @@ const PINNED_NODES: u32 = 3;
 /// all. Measured in `capture_entrails`: 24 of 24 links torn, eight straight rods left in the air.
 /// This pin is not a fold of peritoneum; it is the gut's own continuity with the piece of abdomen it
 /// is still inside, so it gets the one threshold [`Mesentery`] exposes set for what is actually
-/// holding it. Same reasoning `bevy_viscera`'s `viscera_spill` applies to a hand, which is not a
+/// holding it. Same reasoning the `viscera_spill` example applies to a hand, which is not a
 /// membrane either. At 8.0 the same clip parts none of them and the guts pay out.
 const CHUNK_TEAR_STRAIN: f32 = 8.0;
 

@@ -6,7 +6,7 @@
 //!
 //! Everything is at real scale: the patch is 30 cm across, the cut is 12 mm wide when fully open,
 //! and the bed floor sits 6 mm down — which is subcutaneous fat on a limb, so the trough is painted
-//! with `bevy_cross_section`'s banded strip rather than a flat dark colour. Press **Space** to close
+//! with `bevy_carnage::cross_section`'s banded strip rather than a flat dark colour. Press **Space** to close
 //! the wound and watch it open again.
 //!
 //! The Langer lines run along `z` here and the cut runs mostly along `x`, so this is the *across*
@@ -39,7 +39,7 @@ fn main() {
     App::new()
         .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "bevy_laceration — space to re-open".into(),
+                title: "bevy_carnage - laceration (space to re-open)".into(),
                 canvas: Some("#carnage-canvas".into()),
                 ..default()
             }),

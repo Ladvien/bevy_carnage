@@ -1117,7 +1117,7 @@ mod tests {
     /// The second half is the pairing that makes the default safe rather than a weakening: a
     /// **misspelled** field is still refused. Missing takes the shipped value; unknown is an error.
     /// **A layer table authored before `bone_mm` existed still loads, and bands as it did.** The
-    /// field arrived in `bevy_cross_section` 0.1.2 as a cargo-compatible patch, so a game that wrote
+    /// field arrived in the former `cross_section` crate's 0.1.2 as a cargo-compatible patch, so a game that wrote
     /// its thickness table to RON against 0.1.1 meets it on the next `cargo update`. Absent, it must
     /// read as `∞` — the depth-only model those files were authored against — not `0`, which is the
     /// trunk's statement, and not a refusal.

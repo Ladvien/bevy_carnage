@@ -5,7 +5,7 @@
 //!
 //! # One thing this file must set that `Recorder` does not
 //!
-//! **`TimeUpdateStrategy::ManualDuration` of exactly one fixed period.** `bevy_viscera` solves on
+//! **`TimeUpdateStrategy::ManualDuration` of exactly one fixed period.** `viscera` solves on
 //! `FixedUpdate` at 60 Hz and never reads a clock, but *how many* fixed steps a pumped frame runs is
 //! decided by `Time<Virtual>`, which a hand-pumped loop advances by however long the frame took. One
 //! period per pumped frame makes that exactly one solver tick per captured frame, so the fall is a
@@ -63,7 +63,7 @@ const PINNED_NODES: u32 = 3;
 /// measured, 24 of 24 links torn and eight straight rods left in the air. This pin is not a fold of
 /// peritoneum. It is the gut's own continuity with the piece of abdomen it is still inside, and it
 /// gets the one threshold [`Mesentery`] exposes set for what is actually holding it — the same
-/// reasoning `bevy_viscera`'s `viscera_spill` applies to a hand, which is not a membrane either.
+/// reasoning the `viscera_spill` example applies to a hand, which is not a membrane either.
 const CHUNK_TEAR_STRAIN: f32 = 8.0;
 
 /// `(frame, blow, where)` — abdomen height, so the pieces that come off are torso.

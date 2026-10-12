@@ -203,7 +203,7 @@ pub(crate) fn axis_or_down(dir: Vec3) -> Vec3 {
         Some(axis) => axis,
         None => {
             warn!(
-                "bevy_viscera: a strand direction of {dir:?} cannot be normalised; laying it straight \
+                "viscera: a strand direction of {dir:?} cannot be normalised; laying it straight \
                  down instead. Coincident nodes have no stretch gradient and would never separate."
             );
             Vec3::NEG_Y

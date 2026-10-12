@@ -16,14 +16,14 @@
 //!
 //! # What a hit does, in order
 //!
-//! 1. **Peels the skin** where it landed — `bevy_flaymap`, to the depth the hit asked for.
+//! 1. **Peels the skin** where it landed — `flaymap`, to the depth the hit asked for.
 //! 2. **Throws blood** — the wound's `crate::bloodstain::stain::stains` in closed form, painted onto every
 //!    [`Gore::floor`] they land on, and a stain at the wound on the body's own wetmap.
 //! 3. **Opens a bleed** — `crate::bloodstain::bleed`, pulsing more blood onto the wetmap each systole until
 //!    the clot, which the wetmap then runs under gravity and dries.
-//! 4. **A slash gapes** — [`GoreHit::slash`] lays a `bevy_laceration` along the cut instead of a
-//!    crater, and its bed is banded by `bevy_cross_section`.
-//! 5. **Guts spill** — a torso hit that reached muscle spawns `bevy_viscera` strands tethered to the
+//! 4. **A slash gapes** — [`GoreHit::slash`] lays a `laceration` along the cut instead of a
+//!    crater, and its bed is banded by `cross_section`.
+//! 5. **Guts spill** — a torso hit that reached muscle spawns `viscera` strands tethered to the
 //!    wound, when [`GoreDials::strands`] is nonzero.
 //! 6. **Bone hands off** — the first hit to show cortex forwards `BoneExposed`, and if the body is a
 //!    baked [`crate::FractureSubject`] the preset breaks it: the bake's leaves are thrown from the
@@ -205,7 +205,7 @@ pub struct GoreBreakable {
     pub leaves: Vec<crate::FragmentGeometry>,
     /// Which leaves touch which, so a blow parts islands rather than everything.
     pub bonds: crate::BondGraph,
-    /// The fracture modes over those bonds (`bevy_fracture_modes` through [`crate::modal`]), when
+    /// The fracture modes over those bonds (`fracture_modes` through [`crate::modal`]), when
     /// the bake could produce them. Without them every leaf flies.
     pub modes: Option<crate::modal::ModalSet>,
     /// The thickness row the caps are banded by.
@@ -453,7 +453,7 @@ pub struct GoreDials {
     pub floor_y: f32,
     /// Gravity for thrown pieces, world units per second squared.
     pub gravity: f32,
-    /// Supersamples along a stain's edge on the wetmap — `bevy_wetmap`'s `edge_samples`.
+    /// Supersamples along a stain's edge on the wetmap — `wetmap`'s `edge_samples`.
     pub edge_samples: u32,
     /// Canvas edge for a [`Gore::floor`], texels. Floors are metres across where a limb is
     /// centimetres, so they get the ceiling by default.
@@ -498,7 +498,7 @@ pub enum HitKind {
     /// Something went in: a crater `depth_mm` deep that bleeds. Past the cortex start it is a bone
     /// handoff.
     Impact { depth_mm: f32 },
-    /// Something was drawn across: a `bevy_laceration` along the blade's travel that gapes onto a
+    /// Something was drawn across: a `laceration` along the blade's travel that gapes onto a
     /// bed `depth_mm` deep.
     Slash { along: Vec3, depth_mm: f32 },
     /// Something hit without opening the skin: a `crate::bloodstain::bruise` that pools, spreads and turns

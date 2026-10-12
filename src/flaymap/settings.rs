@@ -28,7 +28,7 @@ pub struct FlaySettings {
     ///
     /// A 128×128 `Rgba8UnormSrgb` canvas is 64 KB, and this crate owns **two** images per canvas
     /// (albedo and metallic-roughness), so four canvases is 512 KB of `Assets<Image>` writes per
-    /// frame. The same budget `bevy_wetmap` ships, for the same reason and at the same cost: an
+    /// frame. The same budget `wetmap` ships, for the same reason and at the same cost: an
     /// actor wearing both crates pays it twice, which is the arithmetic behind keeping canvases
     /// small.
     pub max_canvas_updates_per_tick: u32,
@@ -49,7 +49,7 @@ pub struct FlaySettings {
     /// `crate::cross_section::texel_at`, keyed by integer lattice coordinates and this number. There is
     /// no RNG in this crate and no clock, so a wound is a pure function of the hits that made it.
     pub seed: u32,
-    /// Millimetres per mesh unit and the strip's along-axis tile, as `bevy_cross_section` states
+    /// Millimetres per mesh unit and the strip's along-axis tile, as `cross_section` states
     /// them. `Scale::default()` — `mm_per_unit: 1000.0`, i.e. a mesh authored in metres.
     ///
     /// Only `mm_per_unit` is read here, and it is read for exactly one thing: turning a texel index
@@ -74,8 +74,8 @@ impl Default for FlaySettings {
 
 /// **`crate::cross_section::Scale`'s missing serde derives, supplied here.**
 ///
-/// `Scale` carries no `serde` derive in `bevy_cross_section 0.1` and this crate is not allowed to
-/// grow one there, so without this mirror the `serde` feature could not round-trip [`FlaySettings`] —
+/// `Scale` carried no `serde` derive in the former `cross_section` crate's 0.1, and this crate was not
+/// allowed to grow one there, so without this mirror the `serde` feature could not round-trip [`FlaySettings`] —
 /// which is the one type in the crate a game authors in a config file rather than in code. Serde's
 /// documented remote-derive pattern is exactly this shape: a mirror struct with the same fields, used
 /// through `#[serde(with = ..)]`, and no `From` impl needed because both fields are public.

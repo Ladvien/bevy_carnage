@@ -1,4 +1,4 @@
-//! **Fracture modes over a bond graph** — `bevy_fracture_modes` composed onto this crate's own
+//! **Fracture modes over a bond graph** — `fracture_modes` composed onto this crate's own
 //! decomposition.
 //!
 //! A [`BondGraph`] is already a cell graph: fragments with a volume and a centre, joined by shared

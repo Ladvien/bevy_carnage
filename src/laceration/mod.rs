@@ -152,7 +152,7 @@ fn advance_clock(clock: Option<ResMut<LacerationClock>>) {
 /// Every resource is optional. `LacerationClock` this plugin owns, but the other three belong to
 /// plugins this crate does not add — and `CrossSectionSettings` being absent is a *supported*
 /// configuration, not an error: the bed then uses [`Layers::for_region`] and [`Scale::default`],
-/// which are the same numbers `bevy_cross_section` would have inited.
+/// which are the same numbers `cross_section` would have inited.
 ///
 /// **Query order decides nothing here.** Each entity writes only its own two mesh assets and its own
 /// component, so the order the query hands them over cannot change what any of them ends up as.
@@ -176,7 +176,7 @@ fn retear_lacerations(
         }
         if drawn.id() == lac.source.id() {
             warn_once!(
-                "bevy_laceration: {entity} draws its own source mesh — retearing would destroy the intact copy. \
+                "laceration: {entity} draws its own source mesh — retearing would destroy the intact copy. \
                  Give the entity `Mesh3d(meshes.add(intact.clone()))` and the component `source: meshes.add(intact)`."
             );
             continue;
@@ -207,14 +207,14 @@ fn retear_lacerations(
         };
 
         if meshes.insert(drawn.id(), torn.skin).is_err() {
-            warn_once!("bevy_laceration: {entity}'s mesh handle is stale; the wound cannot be drawn");
+            warn_once!("laceration: {entity}'s mesh handle is stale; the wound cannot be drawn");
             continue;
         }
 
         match lac.bed.and_then(|bed| beds.get(bed).ok()).map(|mesh| mesh.id()) {
             Some(id) => {
                 if meshes.insert(id, torn.bed).is_err() {
-                    warn_once!("bevy_laceration: {entity}'s wound bed handle is stale");
+                    warn_once!("laceration: {entity}'s wound bed handle is stale");
                 }
             }
             None => {

@@ -58,7 +58,7 @@ pub struct DetachedPart;
 /// **Which body region this subject's cut faces belong to** — a limb, a torso or a head.
 ///
 /// Optional beside [`FractureSubject`]. When present, every cap this crate materialises for the
-/// subject is annotated by `bevy_cross_section` with depth-below-skin in `UV_1`, so a
+/// subject is annotated by `bevy_carnage::cross_section` with depth-below-skin in `UV_1`, so a
 /// `CrossSectionAtlas::material(region)` on the cap draws skin, fat, muscle, cortex and marrow at
 /// the depths measured for that region. Absent, caps carry no `UV_1` and draw whatever material
 /// the caller gives them — exactly what they did before this component existed.

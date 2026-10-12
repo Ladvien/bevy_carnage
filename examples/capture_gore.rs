@@ -9,10 +9,10 @@
 //!
 //! | frames | crate | what |
 //! |---|---|---|
-//! | 0–89 | `bevy_cross_section` | the body exploded slowly, every cap banded by its region |
-//! | 90–179 | `bevy_fracture_modes` | a blow on the shoulder; the islands the modes part fly off |
-//! | 180–299 | `bevy_flaymap` | a hit every ten frames at one spot, cratering the torso to bone |
-//! | 300–419 | `bevy_laceration` | a slash across the thigh, gaping onto its bed |
+//! | 0–89 | `cross_section` | the body exploded slowly, every cap banded by its region |
+//! | 90–179 | `fracture_modes` | a blow on the shoulder; the islands the modes part fly off |
+//! | 180–299 | `flaymap` | a hit every ten frames at one spot, cratering the torso to bone |
+//! | 300–419 | `laceration` | a slash across the thigh, gaping onto its bed |
 //!
 //! Native only: it writes PNGs, and the recorder's `device.poll` has no browser equivalent.
 

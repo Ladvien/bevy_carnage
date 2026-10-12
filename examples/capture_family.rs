@@ -10,7 +10,7 @@
 //! | frames | crate | what |
 //! |---|---|---|
 //! | 0–149 | `bloodstain` | sixteen films, eight thicknesses by two oxygen saturations, ageing to dry |
-//! | 150–389 | `bevy_wetmap` | six shots on a pale sphere, running under gravity, spreading, drying |
+//! | 150–389 | `wetmap` | six shots on a pale sphere, running under gravity, spreading, drying |
 //!
 //! The first clip is the spectral model with nothing else in the frame: each swatch's colour is
 //! `bevy_carnage::bloodstain::spectral::srgb` for that film, and the ageing is `dry::appearance_of`, so a

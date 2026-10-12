@@ -22,7 +22,7 @@ fn main() {
     App::new()
         .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "bevy_cross_section".into(),
+                title: "bevy_carnage - cross section".into(),
                 canvas: Some("#carnage-canvas".into()),
                 ..default()
             }),

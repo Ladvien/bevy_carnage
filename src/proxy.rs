@@ -439,7 +439,7 @@ impl ProxyCell {
         (above.build(), below.build())
     }
 
-    /// **The supplied faces as outward planes — the skin.** What `bevy_cross_section` measures
+    /// **The supplied faces as outward planes — the skin.** What `cross_section` measures
     /// depth against: for a point inside this convex cell, the distance to the nearest supplied face's
     /// plane is exactly its distance to the subject's surface. A cell with no supplied face (an
     /// interior fragment) returns none, and reads as skin-depth zero there, deliberately: the

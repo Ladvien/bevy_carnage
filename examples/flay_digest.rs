@@ -32,7 +32,7 @@ fn main() {
     let layers = Layers::for_region(region);
     let starts = layers.starts_mm();
 
-    println!("bevy_flaymap — the wound is CPU state, so it has a number under it.\n");
+    println!("flaymap — the wound is CPU state, so it has a number under it.\n");
     println!(
         "  region {region:?}: skin 0-{:.1} mm, fat -{:.1}, muscle -{:.1}, cortex -{:.1}, then marrow",
         starts[1], starts[2], starts[3], starts[4]

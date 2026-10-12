@@ -31,7 +31,7 @@
 //! **A wet clear coat.** Fresh blood is a liquid film, and a film has a specular layer of its own
 //! above the diffuse colour beneath it. The wetness byte the wetmap writes (its `A` channel: fresh
 //! `255` → dry `0`) drives `StandardMaterial`'s clearcoat strength per pixel, with a roughness a
-//! caller dials. The film's *colour* is not recomputed here — `bevy_wetmap` already composites it on
+//! caller dials. The film's *colour* is not recomputed here — `wetmap` already composites it on
 //! the CPU from the same spectral model, and that CPU byte is what a golden hashes.
 //!
 //! **Blood on cloth.** Where the surface under the blood is a fabric rather than skin, the film
@@ -95,7 +95,7 @@ pub const BLOOD_LUT_MAX_MM: f32 = 1.0;
 /// What the shader is looking at, so it knows where the tissue index comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect)]
 pub enum FleshMode {
-    /// A cut face: the tissue is `UV_1.x` (depth over span) from `bevy_cross_section`'s annotation.
+    /// A cut face: the tissue is `UV_1.x` (depth over span) from `cross_section`'s annotation.
     Cap,
     /// A body canvas: tissue from the flaymap's depth byte, wetness from the wetmap's.
     Canvas,
@@ -179,10 +179,10 @@ pub struct FleshExtension {
     /// sixteen samplers with `StandardMaterial`'s and the view's already counted.
     #[texture(103)]
     pub blood_lut: Handle<Image>,
-    /// `bevy_wetmap`'s roughness image: `R` amount, `A` wetness. Unbound means dry.
+    /// `wetmap`'s roughness image: `R` amount, `A` wetness. Unbound means dry.
     #[texture(104)]
     pub wet: Option<Handle<Image>>,
-    /// `bevy_flaymap`'s roughness image: `R` depth over span, `A` peeled. Unbound means intact skin.
+    /// `flaymap`'s roughness image: `R` depth over span, `A` peeled. Unbound means intact skin.
     #[texture(105)]
     pub flay: Option<Handle<Image>>,
     /// The preset's dermis image: `rgb` the ratio the skin is multiplied by, `a` how much. Unbound

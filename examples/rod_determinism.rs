@@ -91,7 +91,7 @@ struct Run {
 fn main() {
     let settings = ViscSettings::default();
 
-    println!("bevy_viscera — deterministic rod solver");
+    println!("viscera — deterministic rod solver");
     println!(
         "  {} substeps x {} iterations at {FIXED_HZ} Hz, {TICKS} ticks, 6 strands of {SPILL_SEGMENTS} segments",
         settings.substeps, settings.iterations

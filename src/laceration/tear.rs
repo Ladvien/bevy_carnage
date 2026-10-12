@@ -112,7 +112,7 @@ pub struct Torn {
     /// every attribute the input had, at the same vertex count.
     pub skin: Mesh,
     /// The wound bed: two walls rising to the lip and meeting at a floor along the path, `UV_1` banded by depth so
-    /// `bevy_cross_section`'s strip material paints skin, fat and muscle at their measured depths.
+    /// `cross_section`'s strip material paints skin, fat and muscle at their measured depths.
     pub bed: Mesh,
     /// Triangles the gap swallowed.
     pub removed_faces: u32,
@@ -145,28 +145,28 @@ pub fn tear(
     scale: &Scale,
 ) -> Option<Torn> {
     if path.len() < 2 {
-        warn_once!("bevy_laceration: a tear needs at least two path points, got {}", path.len());
+        warn_once!("laceration: a tear needs at least two path points, got {}", path.len());
         return None;
     }
     if path.iter().any(|p| !p.is_finite()) {
-        warn_once!("bevy_laceration: the tear path holds a non-finite point; refusing to cut");
+        warn_once!("laceration: the tear path holds a non-finite point; refusing to cut");
         return None;
     }
     if !shape.half_width.is_finite() || shape.half_width < 0.0 {
-        warn_once!("bevy_laceration: half_width {} is not a width", shape.half_width);
+        warn_once!("laceration: half_width {} is not a width", shape.half_width);
         return None;
     }
     if !shape.influence.is_finite() || shape.influence < 0.0 || !shape.bed_depth_mm.is_finite() {
-        warn_once!("bevy_laceration: the tear shape holds a non-finite dial; refusing to cut");
+        warn_once!("laceration: the tear shape holds a non-finite dial; refusing to cut");
         return None;
     }
     let Some(n) = unit(normal) else {
-        warn_once!("bevy_laceration: the surface normal {normal:?} has no direction");
+        warn_once!("laceration: the surface normal {normal:?} has no direction");
         return None;
     };
     if mesh.primitive_topology() != PrimitiveTopology::TriangleList {
         warn_once!(
-            "bevy_laceration: only a TriangleList can be torn, this mesh is {:?}",
+            "laceration: only a TriangleList can be torn, this mesh is {:?}",
             mesh.primitive_topology()
         );
         return None;
@@ -175,29 +175,29 @@ pub fn tear(
     let positions = match mesh.try_attribute_option(Mesh::ATTRIBUTE_POSITION) {
         Ok(Some(VertexAttributeValues::Float32x3(p))) => p,
         Ok(Some(_)) => {
-            warn_once!("bevy_laceration: positions must be Float32x3; this mesh's are not");
+            warn_once!("laceration: positions must be Float32x3; this mesh's are not");
             return None;
         }
         Ok(None) => {
-            warn_once!("bevy_laceration: the mesh has no position attribute");
+            warn_once!("laceration: the mesh has no position attribute");
             return None;
         }
         Err(e) => {
             // The mesh was authored render-world-only and its vertex data is gone from the main
             // world. Bevy's `Mesh::attribute` would panic here; this crate refuses instead.
-            warn_once!("bevy_laceration: cannot read positions ({e}) — author the source mesh with RenderAssetUsages::default()");
+            warn_once!("laceration: cannot read positions ({e}) — author the source mesh with RenderAssetUsages::default()");
             return None;
         }
     };
     let verts: Vec<Vec3> = positions.iter().map(|p| Vec3::from_array(*p)).collect();
     if verts.is_empty() {
-        warn_once!("bevy_laceration: the mesh has no vertices");
+        warn_once!("laceration: the mesh has no vertices");
         return None;
     }
 
     let segs = segments(path, n);
     if segs.is_empty() {
-        warn_once!("bevy_laceration: every path segment is degenerate or parallel to the normal");
+        warn_once!("laceration: every path segment is degenerate or parallel to the normal");
         return None;
     }
     let scale = sane(scale);
@@ -223,7 +223,7 @@ pub fn tear(
             tris.extend((0..(verts.len() / 3) as u32).map(|t| [t * 3, t * 3 + 1, t * 3 + 2]));
         }
         Err(e) => {
-            warn_once!("bevy_laceration: cannot read indices ({e}) — author the source mesh with RenderAssetUsages::default()");
+            warn_once!("laceration: cannot read indices ({e}) — author the source mesh with RenderAssetUsages::default()");
             return None;
         }
     }
@@ -607,7 +607,7 @@ struct BedVert {
 /// The trough behind the hole: two walls meeting at a floor, in 2 mm pieces along each segment,
 /// running past both ends as far as `reach` says the clip did, capped there, with a wedge at each bend.
 ///
-/// **`UV_1` is `bevy_cross_section`'s**, computed through [`uv1_at`] against a skin plane through the
+/// **`UV_1` is `cross_section`'s**, computed through [`uv1_at`] against a skin plane through the
 /// surface point directly above each vertex — so a rail reads depth `0` (it *is* on the skin) and the
 /// floor reads exactly `bed_depth_mm`, whatever the mesh's unit scale. That is the whole point of
 /// going through that function rather than writing the fraction here: one definition of depth, shared

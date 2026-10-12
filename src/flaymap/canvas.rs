@@ -23,7 +23,7 @@ use crate::flaymap::uv::{Pick, mesh_key, ray_uv};
 /// unit square covers a face or a whole body — so the bridge from a texel index to the millimetre
 /// position [`crate::cross_section::texel_at`] wants has to be *stated somewhere*. It is stated here,
 /// once, as a constant: **one UV unit is one metre**, the same constant and the same argument
-/// `bevy_wetmap` makes for a stain's footprint.
+/// `wetmap` makes for a stain's footprint.
 ///
 /// A caller whose atlas covers a two-metre actor therefore has a canvas at half the texel density this
 /// constant implies, and either accepts the resolution or authors a bigger canvas. The alternative — a
@@ -168,7 +168,7 @@ impl FlayCanvas {
     /// is a bandwidth budget rather than a texture.
     ///
     /// `layers` is passed in rather than derived from `region` so a caller with its own thickness
-    /// table — the cortex row in particular is `bevy_cross_section`'s own number rather than a
+    /// table — the cortex row in particular is `cross_section`'s own number rather than a
     /// measured one — uses it here as well as in the cross-section bake. Pass
     /// `Layers::for_region(region)` for the measured rows.
     ///
@@ -343,7 +343,7 @@ impl FlayCanvas {
     /// bone at the centre. That is the whole visual of a flaymap.
     ///
     /// UVs outside `[0, 1]`, a non-finite UV, and a non-finite radius or depth are **refused** with one
-    /// warning per canvas and a [`Handoff`] that reports nothing. This differs from `bevy_wetmap`,
+    /// warning per canvas and a [`Handoff`] that reports nothing. This differs from `wetmap`,
     /// which clamps a stray UV to the edge, and deliberately: blood on the wrong texel is a cosmetic
     /// error, whereas peeling a body's edge texels down to bone because a ray came back with a UV of
     /// `1.4` is a gameplay one — the caller would then get a bone handoff for a hit that never landed.

@@ -35,7 +35,7 @@ use crate::bloodstain::{m, vec};
 /// measure real pools drying over **tens of minutes**; a game cannot hold a scene for 25 minutes to
 /// show a floor going matte, and a framework that shipped the physical constant would have every
 /// consumer divide it by an arbitrary factor in private. 1800 ticks is 30 s at 60 Hz — the same
-/// reference `bevy_wetmap`'s texel-scale `dry_ticks` uses, so blood on a wall and blood on a floor
+/// reference `wetmap`'s texel-scale `dry_ticks` uses, so blood on a wall and blood on a floor
 /// dry at one rate.
 ///
 /// The *shape* is the measured one. Only the clock is compressed.

@@ -3,7 +3,7 @@
 //! Möller & Trumbore, *"Fast, minimum storage ray-triangle intersection"*, Journal of Graphics Tools
 //! 2(1), 1997, `doi:10.1080/10867651.1997.10487468`. Reimplemented here rather than imported: it is
 //! thirty lines, and the two crates that already own a copy are both on the wrong side of this one.
-//! `bevy_carnage` composes this crate, so depending on it would invert the layering; `bevy_wetmap` is
+//! `bevy_carnage` composes this crate, so depending on it would invert the layering; `wetmap` is
 //! a **sibling**, not a base, and taking a dependency on it would mean an actor that only ever gets
 //! flayed still resolves a blood-drip model it never calls.
 //!
