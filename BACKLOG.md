@@ -864,7 +864,7 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
   - Windowed `entrails` blow 5: 34 chunks and 8 of 8 strands streaming, where round 1 showed 15 chunks and no guts at all.
 
   `sever.gif`, `carnage.gif`, `preset.gif` and `fracture_modes.gif` are regenerated, and the last now has a recipe in `docs/DEMOS.md`. `fracture_modes.md`'s alt text described a necked bar, but the GIF has always been this humanoid; it says so now. Looked at and kept: the new `fracture_modes.gif` shows faint Bayer-dither speckle where the torso used to be. Measured, the floor's mean colour equals the source frame's (99,96,93) and the background's standard deviation is 0.0066, so the encode is faithful. Found along the way and filed for round 2: a red cut face turned toward the sun washes out to pale pink (`capture_carnage` frame 380), and `ribbons` logs ten despawned-entity command warnings where round 1 logged six.
-- **AG-044, measured and looked at.** The 19 viscera tests pass unchanged. None pins a spill's layout; they compare a spill with itself across runs, orders and seeds, and `rod_determinism` still prints one digest twice. `capture_entrails` moves from `0xca5e2f523e020bf8` to `0x1905015392eac10c`. Before and after, side by side:
+- **AG-044, measured and looked at.** The 19 viscera tests pass unchanged. None pins a spill's layout; they compare a spill with itself across runs, orders and seeds, and `rod_determinism` still prints one digest twice — `cea7d2e3a3eb8b5c` now, `3287f1ba16201294` before, because it hashes six strands laid by `spill`. `capture_entrails` moves from `0xca5e2f523e020bf8` to `0x1905015392eac10c`. Before and after, side by side:
   - `capture_entrails` frames 10 and 14: a fan of six rigid rods is now drooping loops hanging down the front of the body.
   - `capture_preset` frames 120, 130 and 359: a fan of sticks is now hanging loops, ending coiled on the floor.
   - `viscera_spill` frames 70 and 160: the ruler-straight strand on the floor is now a coil.
@@ -894,7 +894,7 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
 
   What is left: under 3 mm² at the inside corner of the bend early in the opening, where the skin's edge between a vertex pushed along one segment and one pushed along the other leaves both troughs. A triangle between the two walls cannot cover that, which was tried and measured unchanged. Closing it would take a mitred bed. On the coarse patch it is hairline slivers where the skin's straight edge between two lip vertices cuts inside the walls' curve.
 
-  `the_tear_is_frozen` is re-blessed, both halves, with the reason beside the constants; `laceration_curve` prints the new pair. The new test `no_skin_is_left_across_a_diagonal_cut` fails on the old kernel ("a kept triangle … lies over the cut") and passes on this one. Every other tear and plugin test passes unchanged: the gap is empty, the tear is local, the floor is at depth, every bed face is wound to its normal, and removal is monotone in the gape. `capture_gore`'s laceration digest hashes transforms and stays `0534427ef2693376`. Looked at against round 1:
+  `the_tear_is_frozen` is re-blessed, both halves, with the reason beside the constants. `laceration_curve` prints the new pair: skin `d8dff15d9bd83f00` (was `afb3d3cbbc85b028`) and bed `7baacbd6447efeb3` (was `18da2f8586e79831`), with 72 faces removed where it was 66. The new test `no_skin_is_left_across_a_diagonal_cut` fails on the old kernel ("a kept triangle … lies over the cut") and passes on this one. Every other tear and plugin test passes unchanged: the gap is empty, the tear is local, the floor is at depth, every bed face is wound to its normal, and removal is monotone in the gape. `capture_gore`'s laceration digest hashes transforms and stays `0534427ef2693376`. Looked at against round 1:
   - `laceration_open` f30 and f70: nothing visible before, a slit now. At f160, pits bridged by skin before, a continuous trough with a skin band at the lip and fat to the floor now. The f160 crop shows a closed tip and a seamless bend.
   - `capture_gore` 310, 340 and 419: the thigh opened as the same dashed row of pits at 310, which round 1 never noticed. Now it is a slit, then a full gash with ragged, rounded lips.
 
@@ -923,6 +923,7 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
 |---|---|---|---|---|---|
 | iter-01 | 12 recorders, 9 terminal, 24 windowed | 83 candidates, not yet re-inspected | 1 (R1-01, `AG-043`) | 0 | 82 |
 | iter-02 (partial) | 24 windowed off screen; the recorders `AG-043`, `AG-044`, `AG-046` and `AG-048` touched; `pooling`, `bullet_holes` and `sever` rescripted; the 14 shared-scene examples after `AG-049`; `drying`, the three preset scenes and the two ribbon examples | 4: 2 found while fixing R1-01, 2 once `AG-047` reached the limbs (a fifth, the vertical strand under `AG-049`, was dismissed under `AG-053`) | R1-02 (`AG-044`), R1-03 (`AG-046`), R1-05 (`AG-047`), R1-04 (`AG-048`), R1-07 (`AG-050`, `AG-052`), R1-23 (`AG-053`); R1-06's colour half (`AG-049`); `AG-051`, a regression `AG-048` shipped in `0.5.3` | 0 | 80 |
+| iter-03 (round 2) | all 45 surfaces at `f370414` (`AG-053`): 12 recorders, 9 terminal, 24 windowed; 0 missing, no hang | 27 candidates, 0 high, 9 medium, 18 low (`docs/visual-pass-round-2.md`); R2-05 and R2-09 are two of iter-02's four | 11 round-1 rows confirmed fixed and 2 partly by eleven inspection agents; R2-05 by `AG-054`, after the render | 0 | 100: 72 round-1 rows, 26 of round 2's, and iter-02's pale cut face and shoulder blade |
 
 **Round 1 found 83 candidates.** The work then moved to performance (`AG-039` … `AG-041`,
 released as `0.5.1` and `0.5.2`, neither of which changed a pixel) and to the harness (`AG-042`).
@@ -937,6 +938,13 @@ fixed:
 
 The harness defect that made all of this hard to see, windows presenting black, is gone with
 `AG-042`: a round now runs on the build host with its screen locked.
+
+**Round 2 found nothing high.** Its list is `docs/visual-pass-round-2.md`. The nine medium rows are
+two scenes still lit three times too bright for their exposure (`explode`'s cut faces, the gut in
+`spill` and `viscera_spill`), stains biting the feet of a body standing in them, the chunks thrown
+highest trailing no ribbon, pools that stay separate where `DEMOS.md` promises one slick, a sheet the
+preset says is spattered and never is, `rheology`'s later rods drawn thinner, a fracture-modes clip that
+ends on a long still of a small heap, and the ribbons warnings `AG-054` has since removed.
 
 ---
 
