@@ -88,6 +88,18 @@ fn floor_colour() -> Color {
 /// one per distinct silhouette is free, and large enough that the spines are not visibly stepped.
 const MASK_SIZE: u32 = 64;
 
+/// **How far above a stain's plane it still paints, metres.** Bevy's forward decal fades as
+/// `1 − distance / depth_fade_factor` with the distance from the decal plane to whatever surface is
+/// behind it, so this is the reach of a floor stain up anything standing in it.
+///
+/// It was 1.0, and a body standing in its own blood had every stain painted up its legs at half
+/// opacity half a metre above the floor: vertical red streaks fringing the feet and a pale wash over
+/// the lower leg, which read as geometry eaten by the floor rather than as blood (visual pass round 2,
+/// R2-03). Four centimetres still covers a floor that is not quite where the stain was placed, and the
+/// sole of a foot standing in it. The cost is on the floor itself: a stain lifted 2 mm to clear
+/// z-fighting paints it at 95 % rather than 99.8 % opacity.
+const STAIN_DEPTH_FADE_M: f32 = 0.04;
+
 /// **Live masks, and therefore live render pipelines, before the cache starts reusing.**
 ///
 /// Each entry is one material, and a material is one pipeline specialisation. 32 distinct silhouettes
@@ -191,7 +203,7 @@ impl StainMasks {
                     alpha_mode: AlphaMode::Blend,
                     ..default()
                 },
-                extension: ForwardDecalMaterialExt { depth_fade_factor: 1.0 },
+                extension: ForwardDecalMaterialExt { depth_fade_factor: STAIN_DEPTH_FADE_M },
             });
             self.masks.push(StainMask { key, image, material: material.clone() });
             return material;
