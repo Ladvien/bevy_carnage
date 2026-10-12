@@ -117,6 +117,14 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut
         Transform::from_xyz(-1.5, 4.0, 3.0).looking_at(Vec3::new(0.0, 0.8, 0.0), Vec3::Y),
         Sun,
     ));
+    // **A fill from the far side**, a quarter of the sun and unshadowed. With the sun alone the orbit's
+    // back half saw only ambient, and the whole body read as one flat dark brown with no face of it
+    // telling from another (R1-12). Marked `Sun` so a reset despawns it with the rest of the scene.
+    commands.spawn((
+        DirectionalLight { illuminance: 2_750.0, shadow_maps_enabled: false, ..default() },
+        Transform::from_xyz(1.5, 2.5, -3.0).looking_at(Vec3::new(0.0, 0.8, 0.0), Vec3::Y),
+        Sun,
+    ));
 }
 
 /// A ray onto the front face of a part, offset from its centre by `offset` (subject-local).
