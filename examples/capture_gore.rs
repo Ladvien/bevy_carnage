@@ -117,7 +117,7 @@ fn main() {
             let lowest = |id: &bevy_carnage::FragmentId| {
                 bake.1.get(id.index()).map_or(f32::INFINITY, |c| c.points().iter().map(|p| p.y).fold(f32::INFINITY, f32::min))
             };
-            let floor = bake.0.members().iter().map(|id| lowest(id)).fold(f32::INFINITY, f32::min);
+            let floor = bake.0.members().iter().map(&lowest).fold(f32::INFINITY, f32::min);
             let stands = keep.and_then(|k| islands.get(k)).is_some_and(|island| island.iter().any(|id| lowest(id) <= floor + 1.0e-3));
             for (i, island) in islands.iter().enumerate() {
                 if Some(i) == keep && stands {
