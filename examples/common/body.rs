@@ -625,6 +625,17 @@ pub fn wipe(world: &mut World) {
     if let Some(mut pools) = world.get_resource_mut::<Pools>() {
         pools.0.clear();
     }
+    // **And the blood still in the air.** Every spray the `vfx` plugin spawns carries `EffectTtl`,
+    // and its droplets fly for up to 1.4 s after the blow, so a reset that despawned only what lies
+    // on the floor left them falling onto "an intact, unstained subject" (R1-08).
+    #[cfg(feature = "vfx")]
+    {
+        let sprays: Vec<Entity> =
+            world.query_filtered::<Entity, With<bevy_carnage::EffectTtl>>().iter(world).collect();
+        for e in sprays {
+            world.entity_mut(e).despawn();
+        }
+    }
 }
 
 /// **Throw whatever the latest bake ejected and has not been thrown yet.**

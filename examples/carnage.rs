@@ -229,7 +229,14 @@ fn main() {
                 hud,
                 draw_aim,
             )
-                .chain(),
+                .chain()
+                // **Before the particles read this frame's wounds.** Unordered, the `vfx` plugin
+                // could read a heartbeat the frame after `bleed_wounds` wrote it, and its spawn was
+                // applied after `strike` had already reset the scene: a reset despawned every spray
+                // in the air and then the chunks' last heartbeat sprayed from where they had lain
+                // (R1-08). Ordered, the reset frame has no wound left to read, and every other frame
+                // draws its wounds in the frame they open, not the next.
+                .before(bevy_carnage::CarnageVfxSystems),
         )
         .run();
 }
