@@ -36,6 +36,17 @@ pub fn region_of(part: usize) -> Region {
     }
 }
 
+/// **The exposure the preset scene is lit for**: EV100 11.5, where a white surface facing the 11 000
+/// lux sun renders at 1. At Bevy's default 9.7 it rendered at 3.6, so the skin, authored as a plausible
+/// 0.80 0.62 0.53, came out nearly white. Everything the preset paints was lifted the same way: wounds
+/// went pink, stains went pink, and dried stains went paler rather than browner (R1-07). The props keep
+/// their albedos and now render as authored.
+pub const EXPOSURE: bevy::camera::Exposure = bevy::camera::Exposure { ev100: bevy::camera::Exposure::EV100_BLENDER + 1.8 };
+
+/// **The ambient that goes with [`EXPOSURE`]**: the old 260 raised by the same 3.5, so the side the sun
+/// does not reach renders as it did rather than three and a half times darker.
+pub const AMBIENT: f32 = 910.0;
+
 /// Spawn everything. `skin` is the body's own material; the preset dresses over it.
 pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
     let skin = materials.add(StandardMaterial {
@@ -86,11 +97,13 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut
         Sheet,
     ));
 
-    // The slab.
+    // The slab, at a concrete's albedo. It was 0.34 0.33 0.32, about 9 % — dark asphalt — which only
+    // read as pale because `EXPOSURE` was not set; exposed for the light, blood needs a lighter
+    // surface than that to read against.
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(1.5)).mesh().build())),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.34, 0.33, 0.32),
+            base_color: Color::srgb(0.55, 0.54, 0.52),
             perceptual_roughness: 0.9,
             ..default()
         })),

@@ -47,7 +47,7 @@ fn main() {
         let world = rec.world();
         let mut cam = world.query_filtered::<Entity, With<Camera3d>>();
         if let Some(entity) = cam.iter(world).next() {
-            world.entity_mut(entity).insert(AmbientLight { brightness: 260.0, ..default() });
+            world.entity_mut(entity).insert((AmbientLight { brightness: preset_scene::AMBIENT, ..default() }, preset_scene::EXPOSURE));
         }
     }
 

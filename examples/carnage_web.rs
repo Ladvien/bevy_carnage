@@ -72,7 +72,8 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(1.1, 1.5, 2.9).looking_at(Vec3::new(0.15, 0.7, 0.0), Vec3::Y),
-        AmbientLight { brightness: 260.0, ..default() },
+        AmbientLight { brightness: preset_scene::AMBIENT, ..default() },
+        preset_scene::EXPOSURE,
         Orbit,
     ));
     preset_scene::spawn(&mut commands, &mut meshes, &mut materials);
