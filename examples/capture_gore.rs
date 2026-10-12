@@ -17,10 +17,12 @@
 //! Native only: it writes PNGs, and the recorder's `device.poll` has no browser equivalent.
 
 use bevy::prelude::*;
-use bevy_carnage::cross_section::{CrossSectionAtlas, CrossSectionPlugin, CrossSectionSettings, Layers, Region};
+use bevy_carnage::cross_section::{CrossSectionAtlas, CrossSectionPlugin, CrossSectionSettings, Layers, Region, Scale};
 use bevy_carnage::flaymap::{FlayCanvas, FlaySettings, FlaymapPlugin};
+use bevy_carnage::flesh::{FleshMaterial, FleshMode, FleshParams, FleshPlugin, FleshTables};
 use bevy_carnage::fracture_modes::ModeSettings;
 use bevy_carnage::laceration::{Gape, Laceration, LacerationClock, LacerationPlugin, Tension};
+use bevy_carnage::wetmap::{StainShape, WetCanvas, WetSettings, WetmapPlugin};
 use bevy_carnage::{BondSet, CutSettings, FragmentGeometry, fracture_mesh, modal};
 
 mod common;
@@ -51,7 +53,11 @@ fn main() {
     let out = common::arg("--out").unwrap_or_else(|| "frames-gore".to_string());
     let camera = Transform::from_xyz(1.9, 1.5, 2.3).looking_at(Vec3::new(0.0, 0.85, 0.0), Vec3::Y);
     let Some(mut rec) = Recorder::new_with(640, 480, camera, &out, |app| {
-        app.add_plugins((CrossSectionPlugin, FlaymapPlugin, LacerationPlugin));
+        // The flaymap clip's torso is dressed the way a game dresses skin: the flaymap for what is
+        // peeled, the wetmap for the blood over it, and `FleshMaterial` to composite the two. Blood
+        // stays wet for the whole clip, so `dry_ticks` is longer than it.
+        app.add_plugins((CrossSectionPlugin, FlaymapPlugin, LacerationPlugin, WetmapPlugin, FleshPlugin))
+            .insert_resource(WetSettings { dry_ticks: 900, edge_samples: 4, ..default() });
     }) else {
         return;
     };
@@ -172,6 +178,16 @@ fn main() {
             // of the clip's crater was rib and marrow.
             let n = (frame - 180) / 10;
             peel(rec.world(), frame, n, 2.0 + n as f32 * 0.35);
+        }
+        // The blood runs: one wetmap tick per frame, down the face. On a `Cuboid`'s side faces `v`
+        // grows *up* the face, so down the body is `-v`; with `+v` the drips climbed the chest.
+        {
+            let world = rec.world();
+            let settings = world.get_resource::<WetSettings>().cloned().unwrap_or_default();
+            let mut wets = world.query::<&mut WetCanvas>();
+            for mut wet in wets.iter_mut(world) {
+                wet.tick(frame, Vec2::new(0.0, -1.0), &settings);
+            }
         }
         rec.shoot();
     }
@@ -299,23 +315,31 @@ fn spawn_intact(world: &mut World) {
     for (i, (mesh, xf)) in body::subject().into_iter().enumerate() {
         let at = Transform::from_matrix(Mat4::from_translation(ORIGIN) * xf);
         if i == 0 {
-            let canvas = {
+            const SKIN: [f32; 3] = [0.62, 0.52, 0.48];
+            let layers = Layers::for_region(Region::Torso);
+            let (flay, wet) = {
                 let mut images = world.resource_mut::<Assets<Image>>();
                 // 256, the crate's stated ceiling, because this clip fills the frame with one face of
                 // the torso: at 128 a texel was five pixels and the rim stair-stepped.
-                FlayCanvas::new(&mut images, 256, Region::Torso, Layers::for_region(Region::Torso), [0.62, 0.52, 0.48], 0.7)
+                (
+                    FlayCanvas::new(&mut images, 256, Region::Torso, layers, SKIN, 0.7),
+                    WetCanvas::new(&mut images, 256, SKIN, 0.7),
+                )
             };
-            let material = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
-                base_color_texture: Some(canvas.albedo()),
-                metallic_roughness_texture: Some(canvas.roughness()),
-                normal_map_texture: Some(canvas.normal()),
+            let base = StandardMaterial {
+                base_color_texture: Some(flay.albedo()),
+                metallic_roughness_texture: Some(flay.roughness()),
+                normal_map_texture: Some(flay.normal()),
                 perceptual_roughness: 1.0,
                 ..default()
-            });
+            };
+            let params = FleshParams::for_layers(&layers, FleshMode::Canvas, Scale::default().mm_per_unit);
+            let material = world.resource::<FleshTables>().material(base, params, Some(wet.roughness()), Some(flay.roughness()));
+            let material = world.resource_mut::<Assets<FleshMaterial>>().add(material);
             // Tangents, or Bevy draws the normal map flat.
             let mesh = mesh.clone().with_generated_tangents().unwrap_or(mesh);
             let h = world.resource_mut::<Assets<Mesh>>().add(mesh);
-            world.spawn((Mesh3d(h), MeshMaterial3d(material), at, canvas, Torso, Phase(3)));
+            world.spawn((Mesh3d(h), MeshMaterial3d(material), at, flay, wet, Torso, Phase(3)));
         } else {
             // **The thigh under the slash is drawn without its front face**, and the skin patch
             // takes that face's place. Laid proud of a closed cuboid, the patch's trough ran into
@@ -366,29 +390,44 @@ fn open_front(mut mesh: Mesh) -> Mesh {
 #[derive(Component)]
 struct IntactThigh(Handle<Mesh>);
 
-/// Peel the torso with hit `n`. Each hit lands a little off the last and a little wider or narrower,
-/// on a golden-angle spiral — deterministic, and enough to grow a ragged crater rather than rings.
+/// Peel the torso with hit `n`, and bleed into it. Each hit lands a little off the last and a little
+/// wider or narrower, on a golden-angle spiral — deterministic, and enough to grow a ragged crater
+/// rather than rings.
 fn peel(world: &mut World, tick: u32, n: u32, depth_mm: f32) {
     let settings = world.get_resource::<FlaySettings>().cloned().unwrap_or_default();
+    let wet_settings = world.get_resource::<WetSettings>().cloned().unwrap_or_default();
     // `libm`, not `std`: the hit positions reach the flaymap digest.
     let a = n as f32 * 2.399_963;
     let wander = 0.014 * (n as f32).sqrt();
     let entry = Vec3::new(0.05 + libm::cosf(a) * wander, 0.10 + libm::sinf(a) * wander, 0.14) + ORIGIN;
     let radius = 0.12 + 0.05 * (((n * 7) % 5) as f32 / 4.0);
-    let mut q = world.query_filtered::<(&mut FlayCanvas, &Mesh3d, &GlobalTransform), With<Torso>>();
+    // The wound's blood: a stain a little smaller than the crater, so the rim stays readable and the
+    // floor fills.
+    let shape = StainShape {
+        major: radius * 0.75,
+        minor: radius * 0.55,
+        spines: 5,
+        satellites: 3,
+        direction: [0.0, 1.0],
+        seed: 0x5EED_u32 ^ n.wrapping_mul(0x9E37_79B9),
+    };
+    let mut q = world.query_filtered::<(&mut FlayCanvas, Option<&mut WetCanvas>, &Mesh3d, &GlobalTransform), With<Torso>>();
     let meshes = world.resource::<Assets<Mesh>>();
     let mut results = Vec::new();
     // Two borrows of the world cannot overlap, so the mesh is cloned out first.
-    let handles: Vec<(Handle<Mesh>, GlobalTransform)> = q.iter(world).map(|(_, m, xf)| (m.0.clone(), *xf)).collect();
+    let handles: Vec<(Handle<Mesh>, GlobalTransform)> = q.iter(world).map(|(_, _, m, xf)| (m.0.clone(), *xf)).collect();
     // One slot per canvas, `None` where the handle does not resolve — never filtered, or the zip
     // below would pair every later canvas with the next entity's mesh.
     let meshes_cloned: Vec<Option<(Mesh, GlobalTransform)>> = handles.iter().map(|(h, xf)| meshes.get(h).cloned().map(|m| (m, *xf))).collect();
-    for ((mut canvas, _, _), slot) in q.iter_mut(world).zip(meshes_cloned.iter()) {
+    for ((mut canvas, wet, _, _), slot) in q.iter_mut(world).zip(meshes_cloned.iter()) {
         let Some((mesh, xf)) = slot else { continue };
         if let Some(handoff) = canvas.paint_world(mesh, xf, entry + Vec3::Z * 0.5, -Vec3::Z, radius, depth_mm, tick) {
             results.push(handoff.bone_reached);
         }
         canvas.shade(&settings);
+        if let Some(mut wet) = wet {
+            let _ = wet.paint_world_with(mesh, xf, entry + Vec3::Z * 0.5, -Vec3::Z, &shape, tick, &wet_settings);
+        }
     }
     if results.iter().any(|b| *b) {
         println!("gore: bone exposed on tick {tick}");

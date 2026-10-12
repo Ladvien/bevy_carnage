@@ -4,7 +4,9 @@ Texture-space flaying for Bevy: hit the same place twice and the skin comes off,
 
 > **A module of `bevy_carnage` since 0.5.0.** This was a crate of its own — the family below — until 2026-09-04, when the seven leaves were folded back into the one crate a game is meant to depend on. This page is its module documentation, kept whole; the paths in it are spelled the way a consumer reaches them now.
 
-![A torso cratered deeper with every hit until the cortex shows](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/flaymap.gif)
+![A torso hit again and again: the crater opens through pink dermis and cream fat to red muscle, and blood fills its floor and runs down the chest](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/flaymap.gif)
+
+The clip above is `capture_gore`'s third, and its torso is dressed as a game would dress skin: this flaymap for what is peeled, `wetmap` for the blood over it, and `flesh::FleshMaterial` to composite the two. The flaymap alone draws the tissue dry.
 
 ## The family
 
