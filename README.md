@@ -340,7 +340,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.16`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.17`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.17` changed: a broken body hands over its pieces
+
+`GoreFractured` carried only the body and the blow point, so a game with its own physics had nothing to build the pieces from. It now carries every piece as a `GorePiece`: its skin and cut-face meshes, its world transform at the break, its half extents for a collider, the velocity the preset would launch it at, and whether it was thrown, fell with the body or stayed standing. It also carries the materials for both sides. The message is written once per body whether or not the preset spawns the pieces. With `GoreDials::spawn_fragments` off, the body is left to the game, and a runtime `GoreBreakable` no longer re-reports its break each time another part reaches bone. Settled pieces are no longer written every tick. **API:** `GoreFractured` gains `pieces`, `skin` and `cap` and is no longer `Copy`; `GorePiece` and `PieceFate` are new.
 
 ### What `0.5.16` changed: every wound bleeds, from where it is
 

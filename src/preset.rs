@@ -602,15 +602,51 @@ impl GoreHit {
     }
 }
 
-/// **A baked subject came apart under the preset.** Written on the bone handoff whether or not the
-/// preset spawned the pieces, so a game with physics can spawn its own from
-/// [`FractureCache::leaves`].
-#[derive(Message, Clone, Copy, Debug)]
+/// **A body came apart under the preset**, with everything needed to build its pieces. Written on
+/// the bone handoff whether or not the preset spawns them: a game with physics sets
+/// [`GoreDials::spawn_fragments`] to `false`, gives each [`GorePiece`] a rigid body, and despawns or
+/// hides the subject itself. A body breaks once.
+#[derive(Message, Clone, Debug)]
 pub struct GoreFractured {
     /// The subject root.
     pub subject: Entity,
     /// Where the blow landed, world.
     pub at: Vec3,
+    /// Every piece the body broke into.
+    pub pieces: Vec<GorePiece>,
+    /// What a piece's skin side wears: the hit part's own material, as authored.
+    pub skin: Handle<StandardMaterial>,
+    /// What a piece's cut faces wear: the region's cross-section strip, banded through `UV_1`.
+    pub cap: Handle<FleshMaterial>,
+}
+
+/// **One piece of a broken body**, where it is the moment the body broke and how the preset would
+/// launch it.
+#[derive(Clone, Debug)]
+pub struct GorePiece {
+    /// The skin side, if the piece has any. Wear [`GoreFractured::skin`].
+    pub outer: Option<Handle<Mesh>>,
+    /// The cut faces, if any. Wear [`GoreFractured::cap`].
+    pub cap: Option<Handle<Mesh>>,
+    /// Where both meshes are drawn, world.
+    pub transform: Transform,
+    /// Half the piece's extent along each of its local axes, for sizing a collider.
+    pub half_extents: Vec3,
+    /// The velocity the preset launches it at, world units per second. Zero for a piece that stood.
+    pub velocity: Vec3,
+    /// What became of it.
+    pub fate: PieceFate,
+}
+
+/// **What became of a piece** when its body broke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PieceFate {
+    /// The blow parted it off and threw it.
+    Thrown,
+    /// Its body lost its footing: it slumps outward from the body's centre and falls.
+    Fell,
+    /// It kept its footing and stays where it stood.
+    Stood,
 }
 
 /// Marks a dressed [`Gore::floor`], so the bleed can find the floors without a second `Gore` read.
@@ -801,7 +837,7 @@ struct HitContext<'w> {
 #[derive(bevy::ecs::system::SystemParam)]
 struct SubjectLookup<'w, 's> {
     parents: Query<'w, 's, &'static ChildOf>,
-    subjects: Query<'w, 's, (&'static FractureSubject, &'static GlobalTransform)>,
+    subjects: Query<'w, 's, (&'static FractureSubject, &'static GlobalTransform), Without<Broken>>,
     breakables: Query<'w, 's, &'static GlobalTransform, With<GoreBreakable>>,
     dressed: Query<'w, 's, &'static Dressed>,
 }
@@ -1132,53 +1168,61 @@ fn take_hits(
             // glTF scene puts its meshes under node entities, so searching the root's own children
             // found nothing there and threw the pieces in Bevy's default white.
             let skin = dressed.get(hit.entity).ok().and_then(|d| d.original.clone());
+            let skin = skin.unwrap_or_else(|| standard.add(StandardMaterial::default()));
             if let Some((source, root_xf)) = subject
                 && cache.is_baked(source.0.id())
             {
-                fractured.write(GoreFractured { subject: root, at: at_world });
+                let region = cache.region(source.0.id()).unwrap_or(region);
+                let leaves: Vec<Piece> = cache
+                    .frontier_of(source.0.id(), dials.pieces)
+                    .into_iter()
+                    .map(|f| Piece {
+                        outer: f.outer_mesh.clone(),
+                        cap: f.cap_mesh.clone(),
+                        center_local: f.center_local,
+                        half_extents: f.half_extents,
+                        fate: PieceFate::Thrown,
+                    })
+                    .collect();
+                let cap = cap_material(region, atlas.as_deref(), standard, tables, flesh, dials);
+                let pieces = place(leaves, root_xf, at_world);
                 if dials.spawn_fragments {
-                    let skin = skin.unwrap_or_else(|| standard.add(StandardMaterial::default()));
-                    let region = cache.region(source.0.id()).unwrap_or(region);
-                    let pieces: Vec<Piece> = cache
-                        .frontier_of(source.0.id(), dials.pieces)
-                        .into_iter()
-                        .map(|f| Piece {
-                            outer: f.outer_mesh.clone(),
-                            cap: f.cap_mesh.clone(),
-                            center_local: f.center_local,
-                            size: f.half_extents.length(),
-                        })
-                        .collect();
-                    let cap = cap_material(region, atlas.as_deref(), standard, tables, flesh, dials);
-                    throw_pieces(&mut commands, &pieces, root_xf, at_world, cap, skin);
+                    spawn_pieces(&mut commands, &pieces, &skin, &cap);
                     commands.entity(root).despawn();
+                } else {
+                    commands.entity(root).try_insert(Broken);
                 }
+                fractured.write(GoreFractured { subject: root, at: at_world, pieces, skin, cap });
             } else if let Some(root_xf) = breakable {
-                fractured.write(GoreFractured { subject: root, at: at_world });
-                if dials.spawn_fragments {
-                    let skin = skin.unwrap_or_else(|| standard.add(StandardMaterial::default()));
-                    let cap = cap_material(region, atlas.as_deref(), standard, tables, flesh, dials);
-                    let at_local = root_xf.affine().inverse().transform_point3(at_world);
-                    commands.entity(root).queue(move |mut e: EntityWorldMut| {
-                        if let Some(body) = e.take::<GoreBreakable>() {
-                            e.insert(ThrowNow { body, at: at_world, at_local, skin, cap });
-                        }
-                    });
-                }
+                // The message goes out from `throw_bodies`, next in the chain this tick, once the
+                // leaves are meshes.
+                let cap = cap_material(region, atlas.as_deref(), standard, tables, flesh, dials);
+                let at_local = root_xf.affine().inverse().transform_point3(at_world);
+                let spawn = dials.spawn_fragments;
+                commands.entity(root).queue_silenced(move |mut e: EntityWorldMut| {
+                    if let Some(body) = e.take::<GoreBreakable>() {
+                        e.insert(ThrowNow { body, at: at_world, at_local, skin, cap, spawn });
+                    }
+                });
             }
         }
     }
 }
 
-/// One piece to throw, in subject-local space.
+/// One piece of a body, in its local frame, before it is placed.
 struct Piece {
     outer: Option<Handle<Mesh>>,
     cap: Option<Handle<Mesh>>,
     center_local: Vec3,
-    size: f32,
+    half_extents: Vec3,
+    fate: PieceFate,
 }
 
-/// A runtime body whose pieces are thrown on the next tick — the meshes need `Assets<Mesh>`, which
+/// Marks a baked subject the preset broke without spawning its pieces, so it breaks once.
+#[derive(Component)]
+struct Broken;
+
+/// A runtime body whose pieces are made on the next tick — the meshes need `Assets<Mesh>`, which
 /// the hit loop does not hold.
 #[derive(Component)]
 struct ThrowNow {
@@ -1187,6 +1231,8 @@ struct ThrowNow {
     at_local: Vec3,
     skin: Handle<StandardMaterial>,
     cap: Handle<FleshMaterial>,
+    /// Whether the preset spawns the pieces ([`GoreDials::spawn_fragments`]).
+    spawn: bool,
 }
 
 /// The cap material for a region: the cross-section strip the atlas baked, worn by the flesh
@@ -1207,102 +1253,96 @@ fn cap_material(
     flesh.add(tables.material(base, FleshParams::for_layers(&layers, FleshMode::Cap, dials.mm_per_unit), None, None))
 }
 
-/// Spawn a frontier as flying pieces: skin outside, a banded cap inside.
-fn throw_pieces(
-    commands: &mut Commands,
-    pieces: &[Piece],
-    root_xf: &GlobalTransform,
-    at: Vec3,
-    cap: Handle<FleshMaterial>,
-    skin: Handle<StandardMaterial>,
-) {
-    for piece in pieces {
-        let centre = root_xf.transform_point(piece.center_local);
-        let away = (centre - at).normalize_or_zero();
-        let velocity = (away + Vec3::new(0.0, 0.6, 0.0)) * (1.5 / (1.0 + piece.size));
-        spawn_flying(commands, piece, root_xf, velocity, &cap, &skin);
+/// **Place a broken body's pieces in the world**, each with the velocity the preset launches it at.
+///
+/// A thrown piece flies away from the blow and upward, slower the bigger it is. A piece whose body
+/// lost its footing was not hit, so nothing throws it: it slumps outward from the fallen pieces'
+/// centre, slowly and horizontally, so the heap spreads instead of stacking in one column, and
+/// gravity in [`fly`] brings it down. A piece that stood has no velocity.
+fn place(leaves: Vec<Piece>, root_xf: &GlobalTransform, at: Vec3) -> Vec<GorePiece> {
+    let centre_of = |p: &Piece| root_xf.transform_point(p.center_local);
+    let fell: Vec<Vec3> = leaves.iter().filter(|p| p.fate == PieceFate::Fell).map(centre_of).collect();
+    let middle = if fell.is_empty() { Vec3::ZERO } else { fell.iter().sum::<Vec3>() / fell.len() as f32 };
+    leaves
+        .into_iter()
+        .map(|p| {
+            let centre = centre_of(&p);
+            let size = p.half_extents.length();
+            let velocity = match p.fate {
+                PieceFate::Thrown => ((centre - at).normalize_or_zero() + Vec3::new(0.0, 0.6, 0.0)) * (1.5 / (1.0 + size)),
+                PieceFate::Fell => Vec3::new(centre.x - middle.x, 0.0, centre.z - middle.z).normalize_or_zero() * (0.5 / (1.0 + size)),
+                PieceFate::Stood => Vec3::ZERO,
+            };
+            GorePiece {
+                outer: p.outer,
+                cap: p.cap,
+                transform: Transform::from_translation(centre).with_rotation(root_xf.rotation()).with_scale(root_xf.scale()),
+                half_extents: p.half_extents,
+                velocity,
+                fate: p.fate,
+            }
+        })
+        .collect()
+}
+
+/// Spawn placed pieces: skin outside, a banded cap inside. The ones that stood stay [`Standing`];
+/// the rest are [`Flying`] at their velocity.
+fn spawn_pieces(commands: &mut Commands, pieces: &[GorePiece], skin: &Handle<StandardMaterial>, cap: &Handle<FleshMaterial>) {
+    for fate in [PieceFate::Stood, PieceFate::Thrown, PieceFate::Fell] {
+        for piece in pieces.iter().filter(|p| p.fate == fate) {
+            let meshes = [(piece.outer.clone(), None), (piece.cap.clone(), Some(cap.clone()))];
+            for (mesh, cap) in meshes {
+                let Some(mesh) = mesh else { continue };
+                let mut e = match cap {
+                    Some(cap) => commands.spawn((Mesh3d(mesh), MeshMaterial3d(cap), piece.transform)),
+                    None => commands.spawn((Mesh3d(mesh), MeshMaterial3d(skin.clone()), piece.transform)),
+                };
+                if fate == PieceFate::Stood {
+                    e.insert(Standing);
+                } else {
+                    e.insert(Flying(piece.velocity));
+                }
+            }
+        }
     }
 }
 
-/// Spawn the pieces of a body that lost its footing. Nothing hit them, so nothing throws them: each
-/// slumps outward from the falling body's centre, slowly and horizontally, so the heap spreads
-/// instead of stacking in one column, and gravity in [`fly`] brings it down.
-fn slump_pieces(
-    commands: &mut Commands,
-    pieces: &[Piece],
-    root_xf: &GlobalTransform,
-    cap: Handle<FleshMaterial>,
-    skin: Handle<StandardMaterial>,
-) {
-    if pieces.is_empty() {
-        return;
-    }
-    let centres: Vec<Vec3> = pieces.iter().map(|p| root_xf.transform_point(p.center_local)).collect();
-    let middle = centres.iter().sum::<Vec3>() / centres.len() as f32;
-    for (piece, centre) in pieces.iter().zip(&centres) {
-        let out = Vec3::new(centre.x - middle.x, 0.0, centre.z - middle.z).normalize_or_zero();
-        spawn_flying(commands, piece, root_xf, out * (0.5 / (1.0 + piece.size)), &cap, &skin);
-    }
-}
-
-/// One piece, in flight from where it sat on the body.
-fn spawn_flying(
-    commands: &mut Commands,
-    piece: &Piece,
-    root_xf: &GlobalTransform,
-    velocity: Vec3,
-    cap: &Handle<FleshMaterial>,
-    skin: &Handle<StandardMaterial>,
-) {
-    let centre = root_xf.transform_point(piece.center_local);
-    let at_tf = Transform::from_translation(centre).with_rotation(root_xf.rotation()).with_scale(root_xf.scale());
-    if let Some(outer) = piece.outer.clone() {
-        commands.spawn((Mesh3d(outer), MeshMaterial3d(skin.clone()), at_tf, Flying(velocity)));
-    }
-    if let Some(cap_mesh) = piece.cap.clone() {
-        commands.spawn((Mesh3d(cap_mesh), MeshMaterial3d(cap.clone()), at_tf, Flying(velocity)));
-    }
-}
-
-/// Throw a runtime body's leaves: upload the meshes, spawn the pieces, despawn the body.
+/// **Break a runtime body**: upload its leaves' meshes, part them by the modes, write
+/// [`GoreFractured`], and — when the preset owns the pieces — spawn them and despawn the body.
 fn throw_bodies(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut fractured: MessageWriter<GoreFractured>,
     mut bodies: Query<(Entity, &GlobalTransform, &mut ThrowNow)>,
 ) {
     for (entity, xf, mut throw) in &mut bodies {
         let parted = throw.body.thrown_by(throw.at_local);
-        let skin = throw.skin.clone();
-        let cap = throw.cap.clone();
-        let mut thrown = Vec::new();
-        let mut fell = Vec::new();
-        // The island that stays standing is drawn where it stood: every leaf is a piece now, the
-        // body's own meshes are gone with the body, and a standing piece is one with no velocity.
-        for leaf in throw.body.leaves.drain(..) {
-            let piece = Piece {
+        let leaves: Vec<Piece> = throw
+            .body
+            .leaves
+            .drain(..)
+            .map(|leaf| Piece {
+                fate: if parted.thrown.contains(&leaf.id) {
+                    PieceFate::Thrown
+                } else if parted.fell.contains(&leaf.id) {
+                    PieceFate::Fell
+                } else {
+                    PieceFate::Stood
+                },
                 outer: leaf.outer.map(|m| meshes.add(m)),
                 cap: leaf.cap.map(|m| meshes.add(m)),
                 center_local: leaf.center_local,
-                size: leaf.half_extents.length(),
-            };
-            if parted.thrown.contains(&leaf.id) {
-                thrown.push(piece);
-            } else if parted.fell.contains(&leaf.id) {
-                fell.push(piece);
-            } else {
-                let centre = xf.transform_point(piece.center_local);
-                let at_tf = Transform::from_translation(centre).with_rotation(xf.rotation()).with_scale(xf.scale());
-                if let Some(outer) = piece.outer {
-                    commands.spawn((Mesh3d(outer), MeshMaterial3d(skin.clone()), at_tf, Standing));
-                }
-                if let Some(cap_mesh) = piece.cap {
-                    commands.spawn((Mesh3d(cap_mesh), MeshMaterial3d(cap.clone()), at_tf, Standing));
-                }
-            }
+                half_extents: leaf.half_extents,
+            })
+            .collect();
+        let pieces = place(leaves, xf, throw.at);
+        if throw.spawn {
+            spawn_pieces(&mut commands, &pieces, &throw.skin, &throw.cap);
+            commands.entity(entity).despawn();
+        } else {
+            commands.entity(entity).remove::<ThrowNow>();
         }
-        throw_pieces(&mut commands, &thrown, xf, throw.at, cap.clone(), skin.clone());
-        slump_pieces(&mut commands, &fell, xf, cap, skin);
-        commands.entity(entity).despawn();
+        fractured.write(GoreFractured { subject: entity, at: throw.at, pieces, skin: throw.skin.clone(), cap: throw.cap.clone() });
     }
 }
 
@@ -1471,10 +1511,15 @@ fn tick_canvases(clock: Res<GoreClock>, settings: Option<Res<WetSettings>>, mut 
     }
 }
 
-/// Thrown pieces fall to the floor and stop.
+/// Thrown pieces fall to the floor and stop. **A piece at rest on the floor is not touched**: it
+/// would land exactly where it lies every tick, and writing its `Transform` anyway made Bevy
+/// re-propagate every settled piece of every broken body, every tick, for the rest of the game.
 fn fly(dials: Res<GoreDials>, time: Res<Time<Fixed>>, mut pieces: Query<(&mut Flying, &mut Transform)>) {
     let dt = time.delta_secs();
     for (mut v, mut tf) in &mut pieces {
+        if v.0 == Vec3::ZERO && tf.translation.y <= dials.floor_y {
+            continue;
+        }
         v.0.y -= dials.gravity * dt;
         tf.translation += v.0 * dt;
         if tf.translation.y < dials.floor_y {
@@ -1709,6 +1754,53 @@ mod tests {
             .collect();
         assert!(!worn.is_empty(), "the body did not break");
         assert!(worn.iter().all(|id| *id == skin.id()), "a piece was thrown in a material the part never wore");
+    }
+
+    /// **A game with its own physics gets every piece, and the body breaks once.** With
+    /// `spawn_fragments` off, the bone handoff writes one [`GoreFractured`] whose pieces each have a
+    /// mesh, a place and a size, and the preset spawns none of them and leaves the body to the game.
+    /// A second part of the same body hit to bone does not break it again.
+    #[test]
+    fn a_game_with_physics_gets_the_pieces() {
+        let mut app = headless();
+        app.world_mut().resource_mut::<GoreDials>().spawn_fragments = false;
+        let cube = Cuboid::new(0.4, 0.4, 0.4).mesh().build();
+        let proxy = [crate::ProxyCell::from_box(Vec3::ZERO, Vec3::splat(0.2))];
+        let fracture = crate::fracture_mesh(&[(&cube, Mat4::IDENTITY)], &proxy, &crate::CutSettings::new(4, 0.05, 3));
+        let breakable = GoreBreakable::from_fracture(fracture, Region::Limb, &crate::cross_section::Scale::default());
+        let skin = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial::default());
+        let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(cube);
+        let world = app.world_mut();
+        let root = world.spawn((Transform::from_xyz(0.0, 1.0, 0.0), GlobalTransform::from_xyz(0.0, 1.0, 0.0), breakable)).id();
+        let parts: Vec<Entity> = [0.0, 1.0]
+            .map(|x| {
+                world
+                    .spawn((Mesh3d(mesh.clone()), MeshMaterial3d(skin.clone()), Transform::IDENTITY, GlobalTransform::from_xyz(x, 1.0, 0.0), Gore::skin(Region::Limb), ChildOf(root)))
+                    .id()
+            })
+            .into();
+        app.world_mut().run_schedule(FixedUpdate);
+        for (part, x) in parts.into_iter().zip([0.0, 1.0]) {
+            app.world_mut().write_message(GoreHit::impact(part, Vec3::new(x, 1.0, 2.0), Vec3::NEG_Z, 0.03, 60.0));
+            app.world_mut().run_schedule(FixedUpdate);
+        }
+        let messages = app.world().resource::<Messages<GoreFractured>>();
+        let broke: Vec<GoreFractured> = messages.get_cursor().read(messages).cloned().collect();
+        assert_eq!(broke.len(), 1, "the body broke {} times", broke.len());
+        let broke = &broke[0];
+        assert_eq!(broke.subject, root);
+        assert_eq!(broke.skin.id(), skin.id(), "the pieces' skin is not the part's material");
+        assert!(!broke.pieces.is_empty(), "the message carried no pieces");
+        let meshes = app.world().resource::<Assets<Mesh>>();
+        for piece in &broke.pieces {
+            let drawn = [&piece.outer, &piece.cap].into_iter().flatten().collect::<Vec<_>>();
+            assert!(!drawn.is_empty() && drawn.iter().all(|h| meshes.contains(*h)), "a piece has no mesh to build from");
+            assert!(piece.half_extents.min_element() > 0.0, "a piece has no size to give a collider");
+            assert!((piece.transform.translation.y - 1.0).abs() < 0.25, "a piece is not where the body was: {:?}", piece.transform.translation);
+        }
+        let spawned = app.world_mut().query_filtered::<(), Or<(With<Flying>, With<Standing>)>>().iter(app.world()).count();
+        assert_eq!(spawned, 0, "the preset spawned pieces a game with physics owns");
+        assert!(app.world().get_entity(root).is_ok(), "the preset despawned a body the game owns");
     }
 
     /// A blow bruises without bleeding, and the bruise warms the dermis under the blow within the

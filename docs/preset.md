@@ -18,7 +18,7 @@ a plausible-looking result that is quietly wrong.
 | 5 | **Say which way blood runs: `Gore::with_gravity_uv`.** `(0, 1)`, the default, is down on a glTF atlas whose islands stand upright. | A wrong sign is invisible in a still and obvious in motion: the drips climb. Bevy's own primitives disagree: a `Cuboid`'s front face wants `(0, -1)`, and a `Sphere::mesh().uv(..)` must be turned pole-up first. |
 | 6 | **State the scale once: `GoreDials::mm_per_unit`.** `1000` for a game in metres. A game in centimetres also sets `CrossSectionSettings::scale` and `FlaySettings::scale` to match, before adding the plugin. | Tissue depths are millimetres, and the cut faces, the flaymap's grain and the preset each convert from mesh units. |
 | 7 | **Aim `GoreHit` with a ray.** `from` is the ray's origin in world space and `dir` its direction. The preset re-casts it against the mesh to find the UV. | A physics hit point is not enough on its own. Send the ray your weapon fired, or one from just outside the surface along the hit normal reversed. |
-| 8 | **Choose who owns the pieces: `GoreDials::spawn_fragments`.** `true` throws them ballistically to `GoreDials::floor_y`. A game with physics sets `false`, reads `GoreFractured`, and spawns its own bodies from the bake. | The preset's pieces are kinematic and fall to one plane. They will fight a physics engine. |
+| 8 | **Choose who owns the pieces: `GoreDials::spawn_fragments`.** `true` throws them ballistically to `GoreDials::floor_y`. A game with physics sets `false`, reads `GoreFractured`, gives each of its `pieces` a rigid body, and despawns or hides the body itself. | The preset's pieces are kinematic and fall to one plane. They will fight a physics engine. |
 | 9 | **Gate the bake on your own state.** The plugin adds its systems with no run condition. | The caller owns the schedule, everywhere in this crate. |
 
 Tangents are handled for you since 0.5.10: a skin mesh without `ATTRIBUTE_TANGENT` gets them when it
@@ -55,7 +55,12 @@ and breaks a body that can break.
 - `Wounded` — every open wound: where, its normal, its area, and the bloodstain pattern class. Drive
   hit feedback, sound or a decal budget from it.
 - `BoneExposed` — once per canvas, the first hit to reach the cortex.
-- `GoreFractured` — a body came apart: its root and where the blow landed.
+- `GoreFractured` — a body came apart, once: its root, where the blow landed, the material for each
+  side of a piece, and every piece. Each `GorePiece` has its skin and cut-face meshes, its world
+  transform at the break, its half extents for a collider, the velocity the preset would launch it
+  at, and its fate: thrown by the blow, fallen with a body that lost its footing, or still standing.
+  Written whether or not the preset spawns the pieces. When it does, they carry `Flying` or
+  `Standing`, and a settled piece costs nothing per tick; despawning them is the game's call.
 - `Wounds`, a component on each hurt part: every wound it is bleeding, each a UV on its wetmap and
   a point on its mesh. A hit away from the open wounds opens another, up to
   `GoreDials::open_wounds` (16), and a hit inside one reopens it. A wound leaves the list once its
