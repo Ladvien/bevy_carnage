@@ -147,7 +147,7 @@ fn setup_scene(
     // cut faces as cherry-red plastic.
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(2.25, 1.35, 2.95).looking_at(Vec3::new(0.0, 0.76, 0.0), Vec3::Y),
+        common::wide_view(),
         common::SCENE_EXPOSURE,
     ));
     // A fill light, so an unlit cut face reads as shadowed rather than as a hole.

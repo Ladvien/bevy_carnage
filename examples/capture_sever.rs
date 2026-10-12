@@ -62,7 +62,7 @@ const TAIL: u32 = 34;
 
 fn main() {
     let out = arg("--out").unwrap_or_else(|| "frames-sever".to_string());
-    let camera = Transform::from_xyz(2.25, 1.35, 2.95).looking_at(Vec3::new(0.0, 0.76, 0.0), Vec3::Y);
+    let camera = common::wide_view();
     let Some(mut rec) = Recorder::new(WIDTH, HEIGHT, camera, &out) else { return };
 
     light_and_floor(rec.world());

@@ -90,6 +90,13 @@ pub const SCENE_EXPOSURE: bevy::camera::Exposure = bevy::camera::Exposure { ev10
 /// the same scene with `Commands` and must not drift from it, which it did once.
 pub const FLOOR: Color = Color::srgb(0.33, 0.33, 0.36);
 
+/// **The view for a body that comes apart**, far and high enough to keep the throw in frame. The
+/// close view the standing-body demos use, 3.7 m from the chest, lost half of `explode`'s and
+/// `capture`'s 18 pieces and the ends of `capture_sever`'s debris line off the edges (R1-15).
+pub fn wide_view() -> Transform {
+    Transform::from_xyz(3.2, 2.2, 4.2).looking_at(Vec3::new(0.0, 0.45, 0.0), Vec3::Y)
+}
+
 /// The furniture every recorded scene shares: a key light, a fill, a floor to land on, and the
 /// exposure the three are read at — set on every camera already spawned, so call this after them.
 pub fn light_and_floor(world: &mut World) {
