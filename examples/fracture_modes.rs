@@ -31,6 +31,7 @@ fn main() {
             ..default()
         })))
         .add_plugins(common::autopilot::Autopilot)
+        .add_systems(Update, common::fit_hud)
         .add_plugins(FractureModesPlugin)
         .insert_resource(ModeSettings { k: 4, ..Default::default() })
         .init_resource::<Wall>()

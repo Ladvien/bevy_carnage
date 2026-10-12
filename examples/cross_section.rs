@@ -29,6 +29,7 @@ fn main() {
             ..default()
         })))
         .add_plugins(common::autopilot::Autopilot)
+        .add_systems(Update, common::fit_hud)
         .add_plugins(CrossSectionPlugin)
         .add_systems(Startup, setup.after(bevy_carnage::cross_section::CrossSectionSystems))
         .add_systems(Update, orbit)

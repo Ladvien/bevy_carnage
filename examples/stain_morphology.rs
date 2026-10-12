@@ -135,6 +135,7 @@ fn main() {
             ..default()
         })))
         .add_plugins(common::autopilot::Autopilot)
+        .add_systems(Update, common::fit_hud)
         .add_systems(Startup, setup)
         .add_systems(Update, (sweep, hud).chain())
         .run();

@@ -95,6 +95,7 @@ fn main() {
             VisceraPlugin,
         ))
         .add_plugins(common::autopilot::Autopilot)
+        .add_systems(Update, common::fit_hud)
         // The crate is integer-tick at 60 Hz and never reads the clock; Bevy's default is 64.
         .insert_resource(Time::<Fixed>::from_hz(60.0))
         .add_systems(Startup, setup)

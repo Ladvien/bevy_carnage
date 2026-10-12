@@ -67,6 +67,7 @@ fn main() {
             ..default()
         })))
         .add_plugins(common::autopilot::Autopilot)
+        .add_systems(Update, common::fit_hud)
         .add_plugins(WetmapPlugin)
         // 60 Hz, because `WetSettings::dry_ticks` is quoted at 60 Hz. Bevy's default fixed rate is 64,
         // which would silently make the shipped 1800 ticks 28 seconds instead of 30.

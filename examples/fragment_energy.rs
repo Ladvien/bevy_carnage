@@ -248,6 +248,7 @@ fn main() {
             ..default()
         })))
         .add_plugins(common::autopilot::Autopilot)
+        .add_systems(Update, common::fit_hud)
         .init_resource::<Dials>()
         .init_resource::<Report>()
         .add_systems(Startup, setup)

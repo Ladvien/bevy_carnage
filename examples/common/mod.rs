@@ -130,6 +130,30 @@ pub fn material(world: &mut World, color: Color, roughness: f32) -> Handle<Stand
     })
 }
 
+/// The logical width every on-screen legend was laid out for: the default window's.
+const HUD_WIDTH: f32 = 1280.0;
+
+/// **Shrink the legends with a window narrower than the one they were laid out for.**
+///
+/// Every legend is absolutely placed in logical pixels for a 1280-wide window. A web demo draws
+/// into the page's canvas instead, which is as wide as the page's column — about 950 logical pixels
+/// on a desktop and far less on a phone — so the top-left and top-right blocks ran into each other
+/// and printed over one another. Scaling the whole UI by the width ratio keeps the layout it was
+/// written for at any width; a window at 1280 or wider is left at scale 1, so native runs and their
+/// shots do not move.
+pub fn fit_hud(
+    windows: Query<&Window, (With<bevy::window::PrimaryWindow>, Changed<Window>)>,
+    mut scale: ResMut<UiScale>,
+) {
+    for window in &windows {
+        let fit = (window.width() / HUD_WIDTH).min(1.0);
+        // A minimised or not-yet-sized window reports zero; scaling the UI to nothing would hide it.
+        if fit > 0.0 && scale.0 != fit {
+            scale.0 = fit;
+        }
+    }
+}
+
 /// **The examples' own `[f32; 3]` ↔ `Vec3` boundary.**
 ///
 /// `bloodstain` names no math library, so its public API is `[f32; 3]`; `bevy_carnage`'s is `glam`.

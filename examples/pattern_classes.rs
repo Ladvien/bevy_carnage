@@ -196,6 +196,7 @@ fn main() {
             ..default()
         })))
         .add_plugins(common::autopilot::Autopilot)
+        .add_systems(Update, common::fit_hud)
         // The blood dials are authored in ticks at 60 Hz, so the demo runs its mechanisms on a 60 Hz
         // fixed tick and counts integers. No clock is read anywhere in here.
         .insert_resource(Time::<Fixed>::from_hz(f64::from(HZ)))

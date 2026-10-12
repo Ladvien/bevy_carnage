@@ -46,6 +46,7 @@ fn main() {
             ..default()
         })))
         .add_plugins(common::autopilot::Autopilot)
+        .add_systems(Update, common::fit_hud)
         .add_plugins(bevy_carnage::cross_section::CrossSectionPlugin)
         .add_plugins(LacerationPlugin)
         .add_systems(Startup, setup)

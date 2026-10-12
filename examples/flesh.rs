@@ -33,6 +33,7 @@ fn main() {
             ..default()
         })))
         .add_plugins(common::autopilot::Autopilot)
+        .add_systems(Update, common::fit_hud)
         .add_plugins((CrossSectionPlugin, FlaymapPlugin, WetmapPlugin, FleshPlugin))
         .insert_resource(WetSettings { dry_ticks: 600, edge_samples: 4, ..default() })
         .insert_resource(Time::<Fixed>::from_hz(60.0))
