@@ -101,8 +101,11 @@ fn main() {
 }
 
 fn setup(world: &mut World) {
-    // Tilted down harder than the other body demos: the floor is the subject here.
-    let camera = Transform::from_xyz(1.55, 1.55, 2.10).looking_at(ORIGIN - Vec3::Y * 0.70, Vec3::Y);
+    // **Back and up far enough for the head and the slick.** A channel throws its plugs out of the
+    // back, so the slick forms behind and beside the body. The old view stood close and aimed at the
+    // feet: the head was cropped and the body hid half the slick (R1-14). From here the entry hole
+    // and the aim, the plume and the slick are all in one frame. `capture_pooling` uses the same view.
+    let camera = Transform::from_xyz(2.2, 1.9, 2.6).looking_at(Vec3::new(0.2, 0.5, -0.3), Vec3::Y);
     world.spawn((Camera3d::default(), bevy::core_pipeline::prepass::DepthPrepass, camera));
     light_and_floor(world);
 

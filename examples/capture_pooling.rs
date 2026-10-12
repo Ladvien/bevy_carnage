@@ -25,7 +25,7 @@ use bevy_carnage::{Bore, CarnageVfxPlugin, Pool};
 use std::time::Duration;
 
 mod common;
-use common::body::{self, Chunk, ORIGIN};
+use common::body::{self, Chunk};
 use common::recorder::Recorder;
 use common::{arg, light_and_floor};
 
@@ -53,7 +53,8 @@ const SHOTS: [(u32, Vec3); 3] =
 
 fn main() {
     let out = arg("--out").unwrap_or_else(|| "frames-pooling".to_string());
-    let camera = Transform::from_xyz(1.55, 1.55, 2.10).looking_at(ORIGIN - Vec3::Y * 0.70, Vec3::Y);
+    // The windowed `pooling` demo's view; see the reason there.
+    let camera = Transform::from_xyz(2.2, 1.9, 2.6).looking_at(Vec3::new(0.2, 0.5, -0.3), Vec3::Y);
     let Some(mut rec) = Recorder::new_with(WIDTH, HEIGHT, camera, &out, |app| {
         app.add_plugins(CarnageVfxPlugin);
     }) else {
