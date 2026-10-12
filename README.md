@@ -340,7 +340,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.7`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.8`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.8` changed: the examples, not the library
+
+No line under `src/` changed since 0.5.7. The examples that ship with the crate were reworked by a visual pass, and they are the first thing a reader runs. A blow now carries what it frees along its own direction: a shot out of the back, a slash along its swing, a blast outward. Before, every piece left radially from the impact, so a chest shot threw the head straight up out of frame. A reset in `carnage` also clears the blood still in the air, and every cut face shares one interior material, as reflective as water, so a face at the sun's mirror angle no longer reads as a pink tile. The cameras and HUDs were reframed: the web demos scale their UI to the canvas, the preset scene sweeps across the front instead of orbiting round the unlit side, `gore_tier`'s screen and floor blood are drawn as the crate's own stain silhouettes, and `wetmap_paint`'s bursts land where the camera can see them. Two recorder digests moved with the throws, `capture_carnage`'s and `capture_entrails'`, and `docs/DEMOS.md` quotes the new `capture_carnage` one.
 
 ### What `0.5.7` changed: names
 

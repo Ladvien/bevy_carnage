@@ -1,5 +1,9 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.8` changes no line of the library.** The examples it ships were reworked by the visual pass
+# (`AG-062` … `AG-077`): blows push their pieces along their own direction, a reset clears the blood in
+# the air, one interior material for every cut face, and cameras and HUDs that frame what they show.
+#
 # **`0.5.7` is a patch for what the crate says.** Warnings that named the six crates folded into this
 # one in 0.5.0 (`bevy_laceration: …`, `bevy_viscera: …`) name the module instead. No behaviour moved.
 #
@@ -56,7 +60,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.7"
+version = "0.5.8"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
