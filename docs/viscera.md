@@ -79,11 +79,11 @@ if let Some(first) = strands.first() {
 
 **System sets** — `VisceraSystems`. Everything the plugin runs is in it: order a mesh rebuild `.after(VisceraSystems)` and an anchor move `.before(VisceraSystems)`.
 
-**Components** — `Strand` (private state; `nodes()`, `radius()`, `digest()`), `Mesentery` (`anchors`, `tear_strain`, `torn`, all public).
+**Components** — `Strand` (private state; `Strand::new` lays a straight strand, `Strand::curved` one that turns segment by segment; `nodes()`, `radius()`, `digest()`), `Mesentery` (`anchors`, `tear_strain`, `torn`, all public).
 
 **Resource** — `ViscSettings` (`substeps`, `iterations`, `gravity`, `damping`, `compliance_stretch`, `compliance_bend`, `floor_y`, `max_strands`).
 
-**Functions** — `step`, `spill`, `tube_mesh`. All three are plain functions over plain data and none of them needs an `App`.
+**Functions** — `step`, `spill`, `tube_mesh`. All three are plain functions over plain data and none of them needs an `App`. `spill` lays each strand draped and meandering rather than straight: it leaves the wound along its heading, turns toward the floor within about a quarter of its length, and hangs in a slow S, because a strand laid straight read as a rigid rod until gravity sagged it.
 
 **Constants** — `FIXED_HZ`, `FIXED_DT`, `MAX_NODES`, `MAX_SEGMENTS`, `MAX_ANCHORS`, `MIN_REST_LEN`, `MIN_SIDES`, `MAX_SIDES`, `SPILL_SEGMENTS`, `SPILL_REST_LEN`, `SPILL_RADIUS`, `SPILL_CONE`, `STRAND_TEAR_STRAIN`, `DEFAULT_TEAR_STRAIN`, `COMPLIANCE_MESENTERY`, and one `DEFAULT_*` per `ViscSettings` field.
 

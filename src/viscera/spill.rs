@@ -17,6 +17,17 @@ pub const SPILL_REST_LEN: f32 = 0.035;
 pub const SPILL_RADIUS: f32 = 0.02;
 /// Half-angle of the cone the fan is drawn from, radians (30°).
 pub const SPILL_CONE: f32 = FRAC_PI_6;
+/// How far each segment turns toward straight down as a strand is laid. Gut does not leave a wound as
+/// a straight 84 cm pole: it bulges out and hangs. Laid straight along its heading, every strand read
+/// as a rigid red rod for the first several frames after a blow, until gravity sagged it (visual
+/// pass round 1, R1-02). At 0.3 a strand leaves along its heading for a few centimetres and is
+/// hanging within about a quarter of its length.
+const SPILL_DRAPE: f32 = 0.3;
+/// Amplitude of the sideways meander a strand is laid with, as a turn per segment. A strand that only
+/// drapes still hangs as a plumb line, so each one is laid with a slow S-curve.
+const SPILL_WANDER: f32 = 0.35;
+/// Radians of meander phase per segment: about one full S over the 24 segments.
+const SPILL_WANDER_RATE: f32 = 0.26;
 
 /// **Spill `count` strands out of `from`, fanned around `dir`.**
 ///
@@ -46,8 +57,12 @@ pub fn spill(from: Vec3, dir: Vec3, count: u32, seed: u32, s: &ViscSettings) -> 
         let heading = axis * cos_p + radial * sin_p;
         // Strands leave through the same hole but not through the same point of it.
         let mouth = from + radial * (SPILL_RADIUS * 2.0 * spread);
-
-        out.push(Strand::new(mouth, heading, SPILL_SEGMENTS, SPILL_REST_LEN, SPILL_RADIUS));
+        // Laid draped and meandering, not straight: see `SPILL_DRAPE`. The meander's phase is the
+        // strand's own, from the same hash, so two strands of one spill never sway in step.
+        let side = heading.cross(radial).try_normalize().unwrap_or(u);
+        let phase = TAU * hash_unit(hash_pair(seed, k * 3 + 0x5A1D));
+        let turn = |i: usize| Vec3::NEG_Y * SPILL_DRAPE + side * (SPILL_WANDER * (phase + SPILL_WANDER_RATE * i as f32).sin());
+        out.push(Strand::curved(mouth, heading, SPILL_SEGMENTS, SPILL_REST_LEN, SPILL_RADIUS, turn));
     }
     out
 }

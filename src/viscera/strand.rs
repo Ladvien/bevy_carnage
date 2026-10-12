@@ -13,7 +13,7 @@ use crate::viscera::hash::{fnv1a_u32, FNV_SEED};
 /// and an eight-sided tube over this many nodes is under 512 triangles.
 pub const MAX_NODES: usize = 32;
 
-/// The largest segment count [`Strand::new`] will build: one fewer than [`MAX_NODES`].
+/// The largest segment count [`Strand::new`] or [`Strand::curved`] will build: one fewer than [`MAX_NODES`].
 pub const MAX_SEGMENTS: u32 = MAX_NODES as u32 - 1;
 
 /// The shortest rest length a segment may have.
@@ -61,6 +61,34 @@ pub struct Strand {
 }
 
 impl Strand {
+    /// Lay a strand that turns as it goes. Each segment's direction is the previous one plus
+    /// `turn(i)`, renormalised, so every segment is laid at exactly `rest_len` and the strand starts
+    /// at rest: no segment is stretched, and nothing moves until gravity or a constraint moves it.
+    ///
+    /// Clamped exactly as [`Self::new`] is. A turn that would leave a direction that cannot be
+    /// normalised keeps the previous direction, so a degenerate `turn` lays a straight run rather
+    /// than collapsing two nodes onto one point.
+    pub fn curved(from: Vec3, dir: Vec3, segments: u32, rest_len: f32, radius: f32, turn: impl Fn(usize) -> Vec3) -> Self {
+        let segments = segments.clamp(1, MAX_SEGMENTS) as usize;
+        let rest_len = if rest_len.is_finite() { rest_len.max(MIN_REST_LEN) } else { MIN_REST_LEN };
+        let radius = if radius.is_finite() { radius.max(0.0) } else { 0.0 };
+        let from = if from.is_finite() { from } else { Vec3::ZERO };
+        let mut heading = axis_or_down(dir);
+
+        let mut pos = Vec::with_capacity(segments + 1);
+        let mut at = from;
+        pos.push(at);
+        for i in 0..segments {
+            let next = heading + turn(i);
+            if next.is_finite() {
+                heading = next.try_normalize().unwrap_or(heading);
+            }
+            at += heading * rest_len;
+            pos.push(at);
+        }
+        Self { prev: pos.clone(), pos, rest_len, radius, torn: vec![false; segments] }
+    }
+
     /// Lay a straight strand of `segments` segments from `from`, along `dir`.
     ///
     /// Every argument is clamped rather than rejected, because this returns a `Strand` and a caller
@@ -167,7 +195,8 @@ impl Default for Mesentery {
 
 /// Normalise, or report the caller's bug and lay the strand straight down.
 ///
-/// Shared by [`Strand::new`] and [`crate::viscera::spill`] so that a degenerate direction has exactly one
+/// Shared by [`Strand::new`], [`Strand::curved`] and [`crate::viscera::spill`] so that a degenerate
+/// direction has exactly one
 /// meaning in the crate rather than one per entry point.
 pub(crate) fn axis_or_down(dir: Vec3) -> Vec3 {
     match dir.try_normalize() {
