@@ -202,7 +202,9 @@ TIMEOUT=${QA_TIMEOUT:-180}
 
 # `timeout` is not on a stock macOS, so this is a watchdog in plain bash. It signals the child
 # directly, which is why the binary is run directly. Exit status 124 means it timed out, as GNU
-# `timeout` does.
+# `timeout` does. Before killing a run that outlived its limit, macOS's `sample` records where every
+# thread was stuck into `<out>/<name>.hang.txt`: a hang that is gone on the next run can only be
+# diagnosed from the run that had it.
 run_limited() {
   local secs=$1 flag pid wd rc
   shift
@@ -212,6 +214,9 @@ run_limited() {
   (
     sleep "$secs"
     echo timeout >"$flag"
+    if command -v sample >/dev/null 2>&1 && [ -n "${HANG_FILE:-}" ]; then
+      sample "$pid" 2 -file "$HANG_FILE" >/dev/null 2>&1 || true
+    fi
     kill -TERM "$pid" 2>/dev/null || true
     sleep 5
     kill -KILL "$pid" 2>/dev/null || true
@@ -241,7 +246,7 @@ run_logged() {
   shift 2
   set +e
   if [ "$secs" -gt 0 ]; then
-    run_limited "$secs" "$@" 2>&1 | tee "$OUT/$name.log"
+    HANG_FILE="$OUT/$name.hang.txt" run_limited "$secs" "$@" 2>&1 | tee "$OUT/$name.log"
   else
     "$@" 2>&1 | tee "$OUT/$name.log"
   fi
