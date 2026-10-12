@@ -340,7 +340,18 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.2`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.3`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.3` changed: four things that looked wrong
+
+A visual pass rendered every example and recorder and looked at them frame by frame. These are the crate-side fixes; `BACKLOG.md`'s phase 6 has the measurements and the before-and-after frames.
+
+- **A body with no footing comes down.** `preset` kept the biggest island standing whatever was left under it, so a body cut off at the legs hung at standing height. It now stands only while it holds a piece the subject stood on; otherwise it slumps into a heap.
+- **Spilled gut drapes.** `viscera::spill` laid every strand ruler-straight, so the first frames after a blow were a fan of rigid red rods. Strands are laid with the new `Strand::curved`: off the wound, turning toward the floor, meandering, every segment still at rest length.
+- **The GPU spray is blood.** Each droplet was a square quad, coloured with the gamma-encoded triple the crate's materials take, while Hanabi blends in linear space, so the spray drew as pink square confetti. Drops are round, and both effects take `spectral::linear_srgb`.
+- **A slash opens as a trough.** `laceration::tear` removed only triangles wholly inside the gape, so a cut at an angle to the mesh opened as pits bridged by skin, and a gape narrower than a cell did not open at all. The bed also stopped short of the lips. Now every triangle the cut passes through is clipped, the mouth lands on one lip curve, and the bed rises to it and runs past both ends. `the_tear_is_frozen` is re-blessed for it.
+
+`bench_carnage`'s digest over every fragment, wound, stain and droplet is unchanged, and so is its bake time.
 
 ### What `0.5.2` changed: the bake again, and the hitch it causes
 

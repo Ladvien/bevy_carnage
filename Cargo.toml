@@ -1,5 +1,10 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.3` is a patch: four things that looked wrong now look right.** A body with no footing comes
+# down; spilled gut drapes instead of standing out as rods; the GPU spray is round blood-red drops
+# rather than pink squares; and a slash opens as one trough instead of a dashed row of pits. One item
+# is added (`viscera::Strand::curved`) and none removed. `bench_carnage`'s digest is unchanged.
+#
 # **`0.5.2` is a patch: the same output, a cheaper bake again.** Each cell's face planes are computed
 # once rather than once per render triangle tested against it, which the bench measures at -17.7 % of
 # the bake with its digest unchanged. With `0.5.1`, the bake is 25 % cheaper than `0.5.0`.
@@ -36,7 +41,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.2"
+version = "0.5.3"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
