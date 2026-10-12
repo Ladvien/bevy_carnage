@@ -111,7 +111,9 @@ fn setup(
 
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(0.0, 0.25, 1.7).looking_at(Vec3::ZERO, Vec3::Y),
+        // Slid sideways, not turned, so the sphere stands right of the legend: centred, its top-left
+        // edge ran under the HUD's tick line (R4-03).
+        Transform::from_xyz(-0.45, 0.25, 1.7).looking_at(Vec3::new(-0.45, 0.0, 0.0), Vec3::Y),
         // A component in 0.19, and per-camera.
         AmbientLight { brightness: 420.0, ..default() },
     ));
@@ -193,8 +195,12 @@ fn keyboard(
     }
     let tick = demo.tick;
     for mut canvas in &mut actors {
-        for (i, u) in [0.34_f32, 0.50, 0.66].into_iter().enumerate() {
-            canvas.paint_uv(Vec2::new(u, 0.16), &shot(tick ^ (i as u32 * 977)), tick);
+        // Just above the equator and spread ±36° about the face the camera sees, which is u = 0.75 on
+        // this mesh: Bevy's UV sphere runs u round its z axis, and the −90° turn above puts u = 0.75
+        // at +z. At v = 0.16 every burst landed near the top pole, foreshortened to one smear at the
+        // rim (R1-30), and u = 0.34-0.66 was the back.
+        for (i, u) in [0.65_f32, 0.75, 0.85].into_iter().enumerate() {
+            canvas.paint_uv(Vec2::new(u, 0.42), &shot(tick ^ (i as u32 * 977)), tick);
         }
     }
 }
