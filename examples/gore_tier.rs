@@ -110,12 +110,15 @@ struct ScreenSplatNode(usize);
 #[derive(Resource, Default)]
 struct Tick(u32);
 
-/// One landed stain, as drawn: the crate's own silhouette, in world space.
+/// One landed stain: where it lies, and the crate's own silhouette for it.
 struct Mark {
     at: Vec3,
-    half: Vec2,
-    angle: f32,
+    shape: StainShape,
 }
+
+/// The quad one [`Mark`] is drawn on, with its index into [`Kill::marks`].
+#[derive(Component)]
+struct MarkNode(usize);
 
 /// One screen-blood mark, in normalised device coordinates — the space [`occludes_aim`] judges — and
 /// the silhouette it is drawn with.
@@ -230,26 +233,31 @@ fn screen_splats(seed: u32) -> Vec<Splat> {
         .collect()
 }
 
-/// Texels per side of a screen splat's mask: enough for the spines at the largest mark's size.
-const SPLAT_TEXELS: u32 = 64;
+/// Texels per side of a silhouette's mask: enough for the spines at the largest mark's size.
+const MASK_TEXELS: u32 = 64;
 
-/// **One splat's mask as an image**: white, with the silhouette's coverage as alpha, so the node's
-/// colour is the blood colour and the tier's palette swap needs no new image.
-fn splat_image(shape: &StainShape) -> Image {
-    let n = SPLAT_TEXELS as usize;
+/// **A silhouette as an image**: white, with its coverage as alpha, so the colour is the blood colour
+/// the node or material is tinted with and the tier's palette swap needs no new image.
+fn silhouette_image(shape: &StainShape) -> Image {
+    let n = MASK_TEXELS as usize;
     let mut coverage = vec![0u8; n * n];
     // The buffer is built from the same constant, so `rasterise` refusing it is unreachable; if it
     // ever does, a clear mask is the honest picture of "no coverage computed".
-    let _ = rasterise(shape, SPLAT_TEXELS, &mut coverage);
+    let _ = rasterise(shape, MASK_TEXELS, &mut coverage);
     let data: Vec<u8> = coverage.iter().flat_map(|&c| [255, 255, 255, c]).collect();
     Image::new(
-        Extent3d { width: SPLAT_TEXELS, height: SPLAT_TEXELS, depth_or_array_layers: 1 },
+        Extent3d { width: MASK_TEXELS, height: MASK_TEXELS, depth_or_array_layers: 1 },
         TextureDimension::D2,
         data,
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::default(),
     )
 }
+
+/// How much wider the mask's square is than the stain's long axis. `rasterise` shrinks the body to
+/// leave room for the spines, by `(1 + longest spine) · 1.04`, which lies between 1.04 and 1.66; this
+/// is the middle of that, so a mark is drawn about as long as the stain it is.
+const MASK_OVER_STAIN: f32 = 1.35;
 
 /// The blood palette this policy paints with. **The only thing the tier changes about the emitter.**
 fn blood_color(policy: &GorePolicy, s: &CarnageSettings, alpha: f32) -> Color {
@@ -313,7 +321,27 @@ fn setup(
     let (marks, splats) = spray(&settings);
     info!("the kill: {} landed stains, {} screen marks", marks.len(), splats.len());
     let splat_masks: Vec<Handle<Image>> =
-        splats.iter().map(|s| images.add(splat_image(&s.shape))).collect();
+        splats.iter().map(|s| images.add(silhouette_image(&s.shape))).collect();
+    // One quad per landed stain, spawned once and shown, scaled and tinted by `draw_blood`. Its own
+    // material each, because each carries its own silhouette; lifted 2 mm off the floor so the two
+    // do not z-fight.
+    let quad = meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(0.5)).mesh().build());
+    for (i, mark) in marks.iter().enumerate() {
+        let material = materials.add(StandardMaterial {
+            base_color: Color::NONE,
+            base_color_texture: Some(images.add(silhouette_image(&mark.shape))),
+            alpha_mode: AlphaMode::Blend,
+            perceptual_roughness: 0.35,
+            ..default()
+        });
+        commands.spawn((
+            MarkNode(i),
+            Mesh3d(quad.clone()),
+            MeshMaterial3d(material),
+            Transform::from_translation(mark.at + Vec3::Y * 0.002).with_scale(Vec3::ZERO),
+            Visibility::Hidden,
+        ));
+    }
     commands.insert_resource(Kill { marks, splats, ..default() });
     // Far enough back that the standing subject fits, head to feet, in the band between the
     // eleven-line legend and the status block: closer in, the legend ran across the head and the
@@ -553,11 +581,7 @@ fn spray(settings: &CarnageSettings) -> (Vec<Mark>, Vec<Splat>) {
     let blood = common::blood_wound(&wound);
     let marks = common::stains_with_shapes(&blood, &settings.blood, PLANE_Y)
         .into_iter()
-        .map(|(stain, shape)| Mark {
-            at: common::v3(stain.at),
-            half: Vec2::new(shape.major * 0.5, shape.minor * 0.5),
-            angle: shape.direction[1].atan2(shape.direction[0]),
-        })
+        .map(|(stain, shape)| Mark { at: common::v3(stain.at), shape })
         .collect();
     (marks, screen_splats(wound_seed(&blood)))
 }
@@ -613,35 +637,36 @@ fn begin_kill(
     }
 }
 
-/// The landed spray, as the crate's own stain silhouettes. Fades over
+/// The landed spray, as the crate's own stain silhouettes lying on the floor. Fades over
 /// [`PERSIST_REF_TICKS`] × [`GorePolicy::persistence_scale`].
+///
+/// **Filled, not outlined.** These were gizmo ellipses, which draw a one-pixel outline: blood read as
+/// a scatter of thin rings, and at `Stylised`, in the spark palette, as specks too small to see
+/// (R1-37).
 fn draw_blood(
-    mut gizmos: Gizmos,
     kill: Res<Kill>,
     policy: Res<GorePolicy>,
     settings: Res<CarnageSettings>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut nodes: Query<(&MarkNode, &mut Transform, &mut Visibility, &MeshMaterial3d<StandardMaterial>)>,
 ) {
-    let Some(age) = kill.age else { return };
-    if !policy.blood_decals {
-        return;
-    }
     let life = (PERSIST_REF_TICKS as f32 * policy.persistence_scale).max(1.0);
-    let alpha = 1.0 - age as f32 / life;
-    if alpha <= 0.0 {
-        return;
-    }
-    // A stain spreads on impact; sqrt so it opens fast and settles.
-    let grow = (age as f32 / SPREAD_TICKS as f32).min(1.0).sqrt();
-    let color = blood_color(&policy, &settings, alpha.min(1.0));
-    // The gizmo ellipse lies in its own XY plane, so this lays it on the floor and then turns it to
-    // the direction the droplet was travelling.
-    let flat = Quat::from_rotation_arc(Vec3::Z, Vec3::Y);
-    for m in &kill.marks {
-        gizmos.ellipse(
-            Isometry3d::new(m.at, flat * Quat::from_rotation_z(m.angle)),
-            m.half * grow,
-            color,
-        );
+    let shown = kill.age.filter(|&age| policy.blood_decals && (age as f32) < life);
+    for (which, mut tf, mut vis, mat) in &mut nodes {
+        let (Some(age), Some(mark)) = (shown, kill.marks.get(which.0)) else {
+            vis.set_if_neq(Visibility::Hidden);
+            continue;
+        };
+        vis.set_if_neq(Visibility::Inherited);
+        // A stain spreads on impact; sqrt so it opens fast and settles.
+        let grow = (age as f32 / SPREAD_TICKS as f32).min(1.0).sqrt();
+        tf.scale = Vec3::splat(mark.shape.major * MASK_OVER_STAIN * grow);
+        let color = blood_color(&policy, &settings, (1.0 - age as f32 / life).min(1.0));
+        if let Some(mut m) = materials.get_mut(&mat.0)
+            && m.base_color != color
+        {
+            m.base_color = color;
+        }
     }
 }
 
