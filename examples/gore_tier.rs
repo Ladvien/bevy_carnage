@@ -35,10 +35,13 @@
 //!
 //! Run: `cargo run -p bevy_carnage --example gore_tier`
 
+use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_carnage::{
-    CarnageSettings, CutSettings, FlashGate, GorePolicy, GoreTier, WCAG_FLASHES_PER_SECOND, Wound,
-    WoundKind, fracture_mesh, hash_f32, occludes_aim, wound_seed,
+    CarnageSettings, CutSettings, FlashGate, GorePolicy, GoreTier, StainShape,
+    WCAG_FLASHES_PER_SECOND, Wound, WoundKind, fracture_mesh, hash_f32, occludes_aim, rasterise,
+    wound_seed,
 };
 
 mod common;
@@ -114,10 +117,12 @@ struct Mark {
     angle: f32,
 }
 
-/// One screen-blood mark, in normalised device coordinates — the space [`occludes_aim`] judges.
+/// One screen-blood mark, in normalised device coordinates — the space [`occludes_aim`] judges — and
+/// the silhouette it is drawn with.
 struct Splat {
     ndc: Vec2,
     radius_ndc: f32,
+    shape: StainShape,
 }
 
 #[derive(Resource, Default)]
@@ -191,20 +196,59 @@ fn exclusion_ndc(policy: &GorePolicy) -> f32 {
 ///
 /// Deliberately spread across the exclusion boundary: some land on the reticle and some do not, which
 /// is the only way a refusal count means anything.
+///
+/// **Each is a stain silhouette, not a disc.** Drawn as rounded UI boxes they read as six identical
+/// red pills, UI chips rather than blood on the lens (R1-39). Each now gets the crate's own stain
+/// silhouette, spined and stretched outward from the centre of the screen the way a drop thrown at
+/// the lens is.
 fn screen_splats(seed: u32) -> Vec<Splat> {
     (0..SCREEN_SPLATS as u32)
         .map(|i| {
             let a = hash_f32(seed ^ i.wrapping_mul(0x9E37_79B9));
             let b = hash_f32(seed ^ i.wrapping_mul(0x85EB_CA6B).wrapping_add(7));
             let c = hash_f32(seed ^ i.wrapping_mul(0xC2B2_AE35).wrapping_add(13));
+            let d = hash_f32(seed ^ i.wrapping_mul(0x27D4_EB2F).wrapping_add(19));
             let angle = a * std::f32::consts::TAU;
             let r = 0.05 + 0.66 * b;
             Splat {
                 ndc: Vec2::new(angle.cos() * r, angle.sin() * r),
-                radius_ndc: 0.018 + 0.045 * c,
+                // About twice the old disc's size: the silhouette's body fills only about 60 % of its
+                // mask (the rest is room for the spines), and at the old size a drop on the lens was
+                // a speck. The refusal is judged on this same radius, so the counts stay honest.
+                radius_ndc: 0.05 + 0.09 * c,
+                shape: StainShape {
+                    major: 1.0,
+                    minor: 0.5 + 0.3 * d,
+                    spines: 2 + (d * 3.0) as u8,
+                    satellites: 0,
+                    // Texture rows run down the screen while NDC's y runs up, hence the sign.
+                    direction: [angle.cos(), -angle.sin()],
+                    seed: seed ^ i,
+                },
             }
         })
         .collect()
+}
+
+/// Texels per side of a screen splat's mask: enough for the spines at the largest mark's size.
+const SPLAT_TEXELS: u32 = 64;
+
+/// **One splat's mask as an image**: white, with the silhouette's coverage as alpha, so the node's
+/// colour is the blood colour and the tier's palette swap needs no new image.
+fn splat_image(shape: &StainShape) -> Image {
+    let n = SPLAT_TEXELS as usize;
+    let mut coverage = vec![0u8; n * n];
+    // The buffer is built from the same constant, so `rasterise` refusing it is unreachable; if it
+    // ever does, a clear mask is the honest picture of "no coverage computed".
+    let _ = rasterise(shape, SPLAT_TEXELS, &mut coverage);
+    let data: Vec<u8> = coverage.iter().flat_map(|&c| [255, 255, 255, c]).collect();
+    Image::new(
+        Extent3d { width: SPLAT_TEXELS, height: SPLAT_TEXELS, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    )
 }
 
 /// The blood palette this policy paints with. **The only thing the tier changes about the emitter.**
@@ -261,12 +305,15 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     settings: Res<CarnageSettings>,
 ) {
     // **The one spray, built once**, before any tier has been chosen. Logged so a native run reports
     // what the emitter produced without anyone having to press a key.
     let (marks, splats) = spray(&settings);
     info!("the kill: {} landed stains, {} screen marks", marks.len(), splats.len());
+    let splat_masks: Vec<Handle<Image>> =
+        splats.iter().map(|s| images.add(splat_image(&s.shape))).collect();
     commands.insert_resource(Kill { marks, splats, ..default() });
     // Far enough back that the standing subject fits, head to feet, in the band between the
     // eleven-line legend and the status block: closer in, the legend ran across the head and the
@@ -328,16 +375,11 @@ fn setup(
         },
         BorderColor::all(Color::srgba(0.45, 0.85, 1.0, 0.85)),
     ));
-    for i in 0..SCREEN_SPLATS {
+    for (i, mask) in splat_masks.into_iter().enumerate() {
         commands.spawn((
             ScreenSplatNode(i),
-            Node {
-                position_type: PositionType::Absolute,
-                display: Display::None,
-                border_radius: BorderRadius::MAX,
-                ..default()
-            },
-            BackgroundColor(Color::NONE),
+            Node { position_type: PositionType::Absolute, display: Display::None, ..default() },
+            ImageNode { image: mask, color: Color::NONE, ..default() },
         ));
     }
     // The flash meter and the status share one bottom-left column, the meter on top, so the meter
@@ -650,11 +692,11 @@ fn screen_blood(
     mut kill: ResMut<Kill>,
     policy: Res<GorePolicy>,
     settings: Res<CarnageSettings>,
-    mut nodes: Query<(&mut Node, &mut BackgroundColor, &ScreenSplatNode)>,
+    mut nodes: Query<(&mut Node, &mut ImageNode, &ScreenSplatNode)>,
 ) {
     let active = kill.age.is_some();
     let mut refused = 0u32;
-    for (mut node, mut bg, which) in &mut nodes {
+    for (mut node, mut image, which) in &mut nodes {
         let Some(splat) = kill.splats.get(which.0) else {
             node.display = Display::None;
             continue;
@@ -668,12 +710,16 @@ fn screen_blood(
             node.display = Display::None;
             continue;
         }
+        // **Round on screen, and inside what was judged.** An NDC disc is an ellipse on a wide
+        // window, which drew every mark stretched sideways. The mark is now as wide as the ellipse
+        // is tall, a viewport-height diameter, so it never covers more than `occludes_aim` admitted.
         node.display = Display::Flex;
-        node.width = percent(splat.radius_ndc * 100.0);
-        node.height = percent(splat.radius_ndc * 100.0);
-        node.left = percent((splat.ndc.x - splat.radius_ndc + 1.0) * 50.0);
-        node.top = percent((1.0 - splat.ndc.y - splat.radius_ndc) * 50.0);
-        bg.0 = blood_color(&policy, &settings, 0.8);
+        node.width = vh(splat.radius_ndc * 100.0);
+        node.height = vh(splat.radius_ndc * 100.0);
+        node.left = percent((splat.ndc.x + 1.0) * 50.0);
+        node.top = percent((1.0 - splat.ndc.y) * 50.0);
+        node.margin = UiRect { left: vh(-splat.radius_ndc * 50.0), top: vh(-splat.radius_ndc * 50.0), ..default() };
+        image.color = blood_color(&policy, &settings, 0.85);
     }
     if kill.refused != refused {
         kill.refused = refused;
