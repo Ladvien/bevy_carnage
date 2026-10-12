@@ -63,7 +63,7 @@ Requires **Bevy 0.19** and a Rust toolchain with **edition 2024**. That one line
 
 ## Quick start — the two-line inclusion
 
-**0.4.0 adds a preset.** One plugin, a `Gore` on every surface that can be hurt, and a `GoreHit` per injury; everything below in this README is what the preset composes, and every one of its surfaces wears the flesh material.
+**0.4.0 adds a preset.** One plugin, a `Gore` on every surface that can be hurt, and a `GoreHit` per injury; everything below in this README is what the preset composes, and every one of its surfaces wears the flesh material. **Putting it on a real glTF character:** [`docs/preset.md`](docs/preset.md) is the checklist: the fixed step, `UV_0`, `uv_per_metre`, `gravity_uv`, the scale, the hit ray, and who owns the pieces.
 
 ```rust
 use bevy::prelude::*;
