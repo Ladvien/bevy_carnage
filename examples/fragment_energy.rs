@@ -311,65 +311,82 @@ fn setup(
         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
         Node { position_type: PositionType::Absolute, top: px(12), left: px(14), ..default() },
     ));
-    commands.spawn((
-        HudStatus,
-        Text::new(""),
-        TextFont { font_size: FontSize::Px(16.0), ..default() },
-        TextColor(Color::srgba(1.0, 0.92, 0.55, 0.95)),
-        Node { position_type: PositionType::Absolute, bottom: px(14), left: px(14), ..default() },
-    ));
-
-    // The histogram: one slot per bucket, each holding the observed count beside Mott's shape.
-    commands.spawn((
-        HistoPanel,
-        Text::new("fragment volume ->   solid: this bake    outline: Mott shape (qualitative)"),
-        TextFont { font_size: FontSize::Px(13.0), ..default() },
-        TextColor(Color::srgba(0.85, 0.90, 1.0, 0.85)),
-        Node { position_type: PositionType::Absolute, bottom: px(184), right: px(16), ..default() },
-    ));
-    let panel = commands
-        .spawn((
-            HistoPanel,
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: px(96),
-                right: px(16),
-                width: px(330),
-                height: px(84),
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::FlexEnd,
-                column_gap: px(6),
-                ..default()
-            },
-        ))
-        .id();
-    for bucket in 0..BUCKETS {
-        let slot = commands
-            .spawn((
-                ChildOf(panel),
-                Node {
-                    width: px(27),
-                    height: percent(100.0),
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::FlexEnd,
-                    column_gap: px(3),
-                    ..default()
-                },
-            ))
-            .id();
-        for expected in [false, true] {
-            commands.spawn((
-                ChildOf(slot),
-                HistoBar { bucket, expected },
-                Node { width: px(11), height: percent(0.0), ..default() },
-                BackgroundColor(if expected {
-                    Color::srgba(0.45, 0.72, 1.0, 0.55)
-                } else {
-                    Color::srgb(0.92, 0.36, 0.22)
-                }),
+    // The histogram and the status share one bottom column, the histogram on top, so the bars sit
+    // above however many lines the status grows to. They used to be pinned 96 px up, which the
+    // status outgrew, and the bars were drawn through its first line (R1-40).
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            bottom: px(14),
+            left: px(14),
+            right: px(16),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(10),
+            ..default()
+        })
+        .with_children(|column| {
+            // One slot per bucket, each holding the observed count beside Mott's shape.
+            column
+                .spawn((
+                    HistoPanel,
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        align_self: AlignSelf::FlexEnd,
+                        align_items: AlignItems::FlexEnd,
+                        row_gap: px(6),
+                        ..default()
+                    },
+                ))
+                .with_children(|histogram| {
+                    histogram.spawn((
+                        Text::new(
+                            "fragment volume ->   solid: this bake    outline: Mott shape (qualitative)",
+                        ),
+                        TextFont { font_size: FontSize::Px(13.0), ..default() },
+                        TextColor(Color::srgba(0.85, 0.90, 1.0, 0.85)),
+                    ));
+                    histogram
+                        .spawn(Node {
+                            width: px(330),
+                            height: px(84),
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::FlexEnd,
+                            column_gap: px(6),
+                            ..default()
+                        })
+                        .with_children(|bars| {
+                            for bucket in 0..BUCKETS {
+                                bars.spawn(Node {
+                                    width: px(27),
+                                    height: percent(100.0),
+                                    flex_direction: FlexDirection::Row,
+                                    align_items: AlignItems::FlexEnd,
+                                    column_gap: px(3),
+                                    ..default()
+                                })
+                                .with_children(|slot| {
+                                    for expected in [false, true] {
+                                        slot.spawn((
+                                            HistoBar { bucket, expected },
+                                            Node { width: px(11), height: percent(0.0), ..default() },
+                                            BackgroundColor(if expected {
+                                                Color::srgba(0.45, 0.72, 1.0, 0.55)
+                                            } else {
+                                                Color::srgb(0.92, 0.36, 0.22)
+                                            }),
+                                        ));
+                                    }
+                                });
+                            }
+                        });
+                });
+            column.spawn((
+                HudStatus,
+                Text::new(""),
+                TextFont { font_size: FontSize::Px(16.0), ..default() },
+                TextColor(Color::srgba(1.0, 0.92, 0.55, 0.95)),
             ));
-        }
-    }
+        });
 }
 
 /// Read the keys, and re-break whenever anything moved. Also bakes frame one, because [`Dials`]
@@ -573,8 +590,8 @@ fn hud(dials: Res<Dials>, report: Res<Report>, mut line: Query<&mut Text, With<H
          BINDING: {}\n\
          grady_mott_target -> {} pieces, clamped to [{}, {}]{}    min(bounds) {:.1}    bake \
          produced {} leaves\n\
-         largest / smallest fragment volume {}   (Mott spread: many small, few large - the \
-         histogram's claim, measured)   histogram spans 0 to {:.1} mm3",
+         largest / smallest fragment volume {}   histogram spans 0 to {:.1} mm3\n\
+         (Mott spread: many small, few large - the histogram's claim, measured)",
         dials.energy_j,
         energy_label(dials.energy_j),
         dials.strain_rate,

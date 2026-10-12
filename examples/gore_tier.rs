@@ -341,23 +341,42 @@ fn setup(
             BackgroundColor(Color::NONE),
         ));
     }
-    // The flash meter: one slot per admitted flash the gate will allow in a second.
-    for i in 0..WCAG_FLASHES_PER_SECOND {
-        commands.spawn((
-            FlashSlot(i),
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: px(112),
-                left: px(14 + 30 * i as i32),
-                width: px(24),
-                height: px(14),
-                border: UiRect::all(px(1)),
-                ..default()
-            },
-            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.5)),
-            BackgroundColor(Color::NONE),
-        ));
-    }
+    // The flash meter and the status share one bottom-left column, the meter on top, so the meter
+    // sits above however many lines the status grows to. It used to be pinned 112 px up, which the
+    // six-line status outgrew, and the slots struck through its first line (R1-36).
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            bottom: px(14),
+            left: px(14),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(8),
+            ..default()
+        })
+        .with_children(|column| {
+            // One slot per admitted flash the gate will allow in a second.
+            column.spawn(Node { column_gap: px(6), ..default() }).with_children(|meter| {
+                for i in 0..WCAG_FLASHES_PER_SECOND {
+                    meter.spawn((
+                        FlashSlot(i),
+                        Node {
+                            width: px(24),
+                            height: px(14),
+                            border: UiRect::all(px(1)),
+                            ..default()
+                        },
+                        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.5)),
+                        BackgroundColor(Color::NONE),
+                    ));
+                }
+            });
+            column.spawn((
+                HudStatus,
+                Text::new(""),
+                TextFont { font_size: FontSize::Px(15.0), ..default() },
+                TextColor(Color::srgba(1.0, 0.92, 0.55, 0.95)),
+            ));
+        });
 
     commands.spawn((
         Text::new(
@@ -377,13 +396,6 @@ fn setup(
         TextFont { font_size: FontSize::Px(14.0), ..default() },
         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
         Node { position_type: PositionType::Absolute, top: px(12), left: px(14), ..default() },
-    ));
-    commands.spawn((
-        HudStatus,
-        Text::new(""),
-        TextFont { font_size: FontSize::Px(15.0), ..default() },
-        TextColor(Color::srgba(1.0, 0.92, 0.55, 0.95)),
-        Node { position_type: PositionType::Absolute, bottom: px(14), left: px(14), ..default() },
     ));
 }
 
