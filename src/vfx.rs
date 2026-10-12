@@ -39,7 +39,7 @@ use bevy::prelude::*;
 use bevy_hanabi::{
     AccelModifier, Attribute, ColorOverLifetimeModifier, EffectAsset, EffectSpawner, ExprWriter,
     Gradient, HanabiPlugin, KillAabbModifier, LinearDragModifier, MotionIntegration, OrientMode,
-    OrientModifier, ParticleEffect, ScalarType, SetAttributeModifier, SetPositionCone3dModifier,
+    OrientModifier, ParticleEffect, RoundModifier, ScalarType, SetAttributeModifier, SetPositionCone3dModifier,
     SetVelocitySphereModifier, ShapeDimension, SimulationCondition, SimulationSpace,
     SizeOverLifetimeModifier, SpawnerSettings,
 };
@@ -88,15 +88,21 @@ const DROPLET_FILM: Film = Film { thickness_mm: 0.4, so2: crate::bloodstain::SO2
 
 /// The droplet colour, computed once. 81 wavelengths of Kubelka–Munk is not something to pay per
 /// effect asset, and the answer is a function of a constant.
-static DROPLET_SRGB: LazyLock<[f32; 3]> =
-    LazyLock::new(|| crate::bloodstain::spectral::srgb(&DROPLET_FILM));
+///
+/// **Linear, because Hanabi blends in linear space.** This was `spectral::srgb` — the gamma-encoded
+/// triple every *material* in this crate is authored in — and a particle gradient takes its values
+/// as linear. Encoded values read as linear display lighter and greyer, so the spray rendered as the
+/// dusty pink of round 1's R1-03 rather than as the blood the film model computes. Hanabi's own
+/// examples convert with `to_linear()` before building a gradient for the same reason.
+static DROPLET_LINEAR: LazyLock<[f32; 3]> =
+    LazyLock::new(|| crate::bloodstain::spectral::linear_srgb(&DROPLET_FILM));
 
 /// **The film a ribbon strand is.** A strand dragged off a flying gib is a running film rather than
 /// a lens, so it is thicker and venous — the same two dials, one model.
 const RIBBON_FILM: Film = Film { thickness_mm: 1.0, so2: crate::bloodstain::SO2_VENOUS, substrate: 0.2 };
 
-/// The strand colour, computed once. See [`DROPLET_SRGB`].
-static RIBBON_SRGB: LazyLock<[f32; 3]> = LazyLock::new(|| crate::bloodstain::spectral::srgb(&RIBBON_FILM));
+/// The strand colour, computed once and linear. See [`DROPLET_LINEAR`].
+static RIBBON_LINEAR: LazyLock<[f32; 3]> = LazyLock::new(|| crate::bloodstain::spectral::linear_srgb(&RIBBON_FILM));
 
 /// Blood, as a colour ramp: the droplet's own colour, fading to a darker, transparent clot.
 ///
@@ -109,7 +115,7 @@ static RIBBON_SRGB: LazyLock<[f32; 3]> = LazyLock::new(|| crate::bloodstain::spe
 /// blood looks like: a droplet thins and dries as it flies, and the crate has no spectral model of a
 /// droplet mid-flight to ask instead. The factors are the ratios the hand-authored ramp had.
 fn blood_gradient() -> Gradient<Vec4> {
-    let [r, g_, b] = *DROPLET_SRGB;
+    let [r, g_, b] = *DROPLET_LINEAR;
     let key = |scale: f32, alpha: f32| Vec4::new(r * scale, g_ * scale, b * scale, alpha);
     let mut g = Gradient::new();
     g.add_key(0.0, key(1.0, 1.0));
@@ -223,6 +229,10 @@ impl BloodEffect {
         let gravity = AccelModifier::constant(&mut module, Vec3::NEG_Y * s.blood.gravity);
         let drag = LinearDragModifier::constant(&mut module, s.blood.drag * self.drag_scale);
         let kill = KillAabbModifier::new(kill_center, kill_half);
+        // **A drop, not a square.** A bare billboard is a square quad, and a cloud of hundreds of
+        // them read as pink confetti hanging round the body (visual pass round 1, R1-03). The
+        // ellipse discards the corners in the fragment stage, so each droplet is a round drop.
+        let round = RoundModifier::ellipse(&mut module);
 
         EffectAsset::new(s.effect_capacity, self.spawner, module)
             .with_name(self.name)
@@ -241,6 +251,7 @@ impl BloodEffect {
             // Along velocity, so a droplet reads as a streak in the direction it is travelling
             // rather than as a sphere — which is most of what makes a spray look fast.
             .render(OrientModifier::new(OrientMode::AlongVelocity))
+            .render(round)
     }
 }
 
@@ -454,11 +465,11 @@ pub fn gib_ribbon() -> EffectAsset {
         // authored. `blood_gradient` is not reusable here because a strand wants two keys, not three.
         .render(ColorOverLifetimeModifier::new(Gradient::linear(
             {
-                let [r, g, b] = *RIBBON_SRGB;
+                let [r, g, b] = *RIBBON_LINEAR;
                 Vec4::new(r, g, b, 1.0)
             },
             {
-                let [r, g, b] = *RIBBON_SRGB;
+                let [r, g, b] = *RIBBON_LINEAR;
                 Vec4::new(r * 0.29, g * 0.29, b * 0.29, 0.0)
             },
         )))

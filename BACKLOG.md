@@ -817,6 +817,7 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
 | [x] | **AG-043 — once the legs went, the torso hung at standing height for the rest of the clip (R1-01, high).** In six examples and three layers, the biggest island was held in place whether or not anything touched the floor beneath it. Now it stays standing only while it holds a piece the body stood on. Otherwise it comes down with the rest, slumping into a heap rather than being thrown, since nothing hit it. Fixed in `examples/common/body.rs` (`sever`, `carnage`, `entrails`, `ribbons` and their recorders, with "nothing holds it up now" in the HUDs), in `capture_gore`'s fracture-modes clip, and in the crate's own `preset`, whose `thrown_by` judges footing by the subject's lowest extent since the crate knows no floor. | M |
 | [x] | **AG-044 — gut spilled as rigid red rods (R1-02, high).** `viscera::spill` laid every strand straight along its heading, 84 cm of ruler-straight tube. For the first frames after a blow that is a fan of poles, and on the floor a straight stick. Each strand is now laid with `Strand::curved`, which is new: it leaves the wound along its heading, turns toward the floor within about a quarter of its length, and meanders in a slow S with a phase of its own. Every segment is still laid at its rest length, so the solver starts it at rest. | S |
 | [x] | **AG-045 — a run that hangs once in about a hundred left nothing to diagnose it with.** `spill`, `carnage` and `rheology` each once saved every shot and then never exited. `spill` then ran clean four times in a row on its own, and all 24 examples ran clean through 72 more scripted runs. `qa.sh`'s watchdog now runs macOS `sample` on a run it is about to kill, into `<out>/<name>.hang.txt`, so the next occurrence leaves a stack for every thread. Not fixed: no hang has occurred since the sampler went in, so its cause is unknown. | S |
+| [x] | **AG-046 — the GPU spray was pink square confetti (R1-03, high).** Two separate faults made one look. Each droplet was a bare billboard, a square quad, and now carries Hanabi's `RoundModifier::ellipse`, so it is a round drop. And the colour every Hanabi effect drew with was `spectral::srgb`, the gamma-encoded triple the crate's *materials* take, while a particle gradient takes linear values. Encoded values read as linear display lighter and greyer, which is the dusty pink. The droplet and ribbon colours are now `spectral::linear_srgb` of the same two films, so the spray shows the blood the film model computes. | S |
 
 > BLOCKED: bevy_hanabi has no bevy-0.20 release (crates.io 0.19.0; its main still declares bevy 0.19), and the game's avian3d 0.7 is on bevy 0.19 with no 0.20 release; the game consumes this crate by path, so the crate cannot move alone.
 
@@ -861,22 +862,30 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
   - `viscera_spill` frames 70 and 160: the ruler-straight strand on the floor is now a coil.
 
   `viscera.gif` (whose recipe is now in `docs/DEMOS.md`) and `preset.gif` are regenerated and looked at: `viscera.gif` frames 5, 20, 60 and 129, and `preset.gif` frames 60, 70, 100 and 179. In those, gut hangs in loops from the opened body, then the body comes down and the gut coils with the heap. `docs/viscera.md` names the new constructor and says why the spill drapes.
+- **AG-046, measured and looked at.** The decals were checked for the same colour fault and do not have it: `floor_colour()` passes the encoded triple to `Color::srgb`, which converts it. The four `vfx` unit tests pass, and `capture_carnage` prints the same 289 wounds / 32 043 stains / `b540ac712d86e37a`, because particles reach no digest. Looked at against round 1:
+  - `carnage` blast (f1110), cropped to the cloud at 160 %: hard-edged rotated pink squares are now round drops of varied size, deep red, the same family as the cut faces.
+  - `carnage` slash (f590), whole frame: the drops stand out against the blue body and grey floor, and against the dark backdrop they read as darker spatter rather than vanishing.
+  - `capture_carnage` 200: a deep-red round cloud over the heap where a pink square one was.
+  - `capture_ribbons` 130 and `ribbons` f70: the strands draw dark red and are still visible.
+  - `pooling` f200 is unchanged, as it should be.
+
+  `carnage.gif` is regenerated from those frames and looked at in frames 30, 70, 100, 150 and 190. The floor stains stay lighter than the spray. Their colour path converts correctly, as above, so this ticket leaves them; why they read lighter is not established.
 
 ### Rounds
 
 | round | examples rendered | new defects | fixed | blocked | open |
 |---|---|---|---|---|---|
 | iter-01 | 12 recorders, 9 terminal, 24 windowed | 83 candidates, not yet re-inspected | 1 (R1-01, `AG-043`) | 0 | 82 |
-| iter-02 (partial) | 24 windowed off screen; the recorders `AG-043` and `AG-044` touched | 2 found while fixing R1-01 | R1-02 (`AG-044`) | 0 | 83 |
+| iter-02 (partial) | 24 windowed off screen; the recorders `AG-043`, `AG-044` and `AG-046` touched | 2 found while fixing R1-01 | R1-02 (`AG-044`), R1-03 (`AG-046`) | 0 | 82 |
 
 **Round 1 found 83 candidates.** The work then moved to performance (`AG-039` … `AG-041`,
 released as `0.5.1` and `0.5.2`, neither of which changed a pixel) and to the harness (`AG-042`).
-The deduplicated list is `docs/visual-pass-round-1.md`. Of its five high-severity rows, two are
-fixed and three are open:
+The deduplicated list is `docs/visual-pass-round-1.md`. Of its five high-severity rows, three are
+fixed and two are open:
 
 - ~~the torso staying at standing height after the legs go (six examples)~~, fixed by `AG-043`;
 - ~~viscera and blood strands launched as rigid body-length rods~~, fixed by `AG-044`;
-- `carnage`'s GPU spray drawn as pink square confetti;
+- ~~`carnage`'s GPU spray drawn as pink square confetti~~, fixed by `AG-046`;
 - `laceration_open`'s cut opening as a dashed row of pits rather than a trough;
 - `pooling`'s repeat shots never merging, because the autopilot never moves the aim.
 
