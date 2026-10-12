@@ -218,8 +218,11 @@ run_limited() {
   (
     sleep "$secs"
     echo timeout >"$flag"
+    # The process state first, then the sample, and sample's own output too. With that output sent to
+    # /dev/null, the first two hangs after `AG-045` (`spill` and `viscera_spill`, one round) left no
+    # file and no reason; a process stuck while exiting may refuse to be sampled, and this says so.
     if command -v sample >/dev/null 2>&1 && [ -n "${HANG_FILE:-}" ]; then
-      sample "$pid" 2 -file "$HANG_FILE" >/dev/null 2>&1 || true
+      { ps -o pid,stat,etime,command -p "$pid"; sample "$pid" 2 -file "$HANG_FILE.sample"; } >"$HANG_FILE" 2>&1 || true
     fi
     kill -TERM "$pid" 2>/dev/null || true
     sleep 5
