@@ -340,7 +340,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.6`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.7`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.7` changed: names
+
+Seventeen warnings still began with the name of a crate this one absorbed in 0.5.0 (`bevy_laceration: …`, `bevy_viscera: …`), which sent a reader looking for a dependency that does not exist. They name the module now (`laceration: …`, `viscera: …`), and so does the documentation. No behaviour changed; a log filter matching the old prefixes needs the new ones.
 
 ### What `0.5.6` changed: stains stay on the floor
 

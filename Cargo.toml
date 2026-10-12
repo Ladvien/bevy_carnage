@@ -1,5 +1,8 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.7` is a patch for what the crate says.** Warnings that named the six crates folded into this
+# one in 0.5.0 (`bevy_laceration: …`, `bevy_viscera: …`) name the module instead. No behaviour moved.
+#
 # **`0.5.6` is a patch for the floor stains.** A stain decal painted any surface within a metre above
 # its plane, so a body standing in blood was streaked up the legs and chunks lying in a pool turned
 # pink; it now paints within 4 cm. Nothing else moved.
@@ -53,7 +56,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.6"
+version = "0.5.7"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
