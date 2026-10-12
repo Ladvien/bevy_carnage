@@ -102,6 +102,11 @@ fn main() {
     println!("preset: frames={frames} ticks={tick} digest={digest:016x}");
 }
 
-fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
-    preset_scene::spawn(&mut commands, &mut meshes, &mut materials);
+fn setup(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    preset_scene::spawn(&mut commands, &mut meshes, &mut materials, &mut images);
 }

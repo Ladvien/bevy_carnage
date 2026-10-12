@@ -340,7 +340,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.14`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.15`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.15` changed: a textured character keeps its skin
+
+Under the preset, a skin's own texture was replaced by the flaymap's flat colour. A glTF exporter writes a textured material with a white colour factor, so a textured character was dressed white, and when it broke its pieces were white as well. Now a dressed skin keeps its texture, colour factor, vertex colours, occlusion, emissive and normal maps, and its wounds are drawn over it. A broken body's pieces wear the material of the part that was hit, however deep in the scene that part sits. **API:** `FleshTables::material` takes `Option<&FlayCanvas>` where it took the canvas's roughness image, and binds the canvas itself; `FleshExtension::set_flay` is gone. Two limits remain, listed in [`docs/preset.md`](docs/preset.md): a skin's own roughness map is replaced by the flaymap's, and a skin with its own normal map keeps it, so its craters lose their slope. The preset demo's body is now textured, and `preset.gif` is re-recorded.
 
 ### What `0.5.14` changed: a slash cuts one character, and the preset has a checklist
 

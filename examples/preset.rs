@@ -43,7 +43,12 @@ struct Sweep;
 #[derive(Resource, Default)]
 struct Shots(u32);
 
-fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn setup(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
     commands.spawn((
         Camera3d::default(),
         preset_scene::sweep(0.0),
@@ -52,7 +57,7 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials
         Sweep,
     ));
     commands.init_resource::<Shots>();
-    preset_scene::spawn(&mut commands, &mut meshes, &mut materials);
+    preset_scene::spawn(&mut commands, &mut meshes, &mut materials, &mut images);
     commands.spawn((
         Text::new("1 shot   2 blow   3 iron   4 slash   R reset"),
         TextFont { font_size: bevy::text::FontSize::Px(14.0), ..default() },
@@ -61,12 +66,14 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials
     ));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn keys(
     input: Res<ButtonInput<KeyCode>>,
     mut shots: ResMut<Shots>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     parts: Query<(Entity, &Part)>,
     scene: Query<Entity, Or<(With<Body>, With<Sheet>, With<Slab>, With<Sun>)>>,
     pieces: Query<
@@ -101,7 +108,7 @@ fn keys(
             commands.entity(e).despawn();
         }
         shots.0 = 0;
-        preset_scene::spawn(&mut commands, &mut meshes, &mut materials);
+        preset_scene::spawn(&mut commands, &mut meshes, &mut materials, &mut images);
     }
 }
 

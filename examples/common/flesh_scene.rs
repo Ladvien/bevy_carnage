@@ -89,17 +89,14 @@ pub fn setup(
     // Tangents, so the flaymap's normal image can slope the crater's walls.
     let sphere = Sphere::new(0.34).mesh().uv(64, 36);
     let sphere_mesh = meshes.add(sphere.clone().with_generated_tangents().unwrap_or(sphere));
-    let flay = FlayCanvas::new(&mut images, CANVAS, Region::Limb, layers, [0.80, 0.62, 0.53], 0.55);
-    let wet = WetCanvas::new(&mut images, CANVAS, [0.80, 0.62, 0.53], 0.55);
-    let skin_base = StandardMaterial {
-        base_color_texture: Some(flay.albedo()),
-        metallic_roughness_texture: Some(flay.roughness()),
-        normal_map_texture: Some(flay.normal()),
-        perceptual_roughness: 1.0,
-        ..default()
-    };
+    const SKIN: [f32; 3] = [0.80, 0.62, 0.53];
+    let flay = FlayCanvas::new(&mut images, CANVAS, Region::Limb, layers, SKIN, 0.55);
+    let wet = WetCanvas::new(&mut images, CANVAS, SKIN, 0.55);
+    // The canvas is filled with the skin's colour, and the material says the same colour: the flesh
+    // material swaps one for the other wherever the skin is intact, so they must agree.
+    let skin_base = StandardMaterial { base_color: Color::srgb(SKIN[0], SKIN[1], SKIN[2]), ..default() };
     let skin_params = FleshParams::for_layers(&layers, FleshMode::Canvas, scale.mm_per_unit);
-    let skin_mat = flesh.add(tables.material(skin_base, skin_params, Some(wet.roughness()), Some(flay.roughness())));
+    let skin_mat = flesh.add(tables.material(skin_base, skin_params, Some(wet.roughness()), Some(&flay)));
     // **Turned pole-up.** Bevy's UV sphere has its poles on the mesh's Z axis, so unturned its pole
     // faced the camera: every hit landed on the UV pole, where `u` collapses, and the crater drew as
     // a thin slit while the blood ran away from the camera instead of down. Turned, the hit lands on

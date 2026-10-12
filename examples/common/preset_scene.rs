@@ -4,7 +4,9 @@
 //! This file is the whole inclusion cost of the family, and that is the point of it: one plugin, one
 //! component per surface, one message per hit. Compare `carnage_web.rs`, which does the same by hand.
 
+use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_carnage::cross_section::{Region, Scale};
 use bevy_carnage::preset::{Gore, GoreBreakable, GoreHit};
 use bevy_carnage::{CutSettings, fracture_mesh};
@@ -69,9 +71,12 @@ pub fn view(angle: f32) -> Transform {
 }
 
 /// Spawn everything. `skin` is the body's own material; the preset dresses over it.
-pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
+pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) {
+    // **Textured under a white factor**, the way a glTF exporter writes a textured character, so the
+    // demo exercises what a game hands the preset: the wounds open in an authored skin and leave the
+    // rest of it as it was.
     let skin = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.80, 0.62, 0.53),
+        base_color_texture: Some(skin_texture(images)),
         perceptual_roughness: 0.55,
         ..default()
     });
@@ -150,6 +155,57 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut
         Transform::from_xyz(1.5, 2.5, -3.0).looking_at(Vec3::new(0.0, 0.8, 0.0), Vec3::Y),
         Sun,
     ));
+}
+
+/// The skin's tone, sRGB: the flat colour this scene's body wore before it had a texture.
+const SKIN: [f32; 3] = [0.80, 0.62, 0.53];
+
+/// **A skin texture, made here so the demo needs no asset**: [`SKIN`] mottled at two scales, under a
+/// redder flush. 256² because every face of a part maps the whole image, so a torso's front gets
+/// about 2.3 mm a texel, and no finer detail survives the clips' framing. Freckles were tried and
+/// dropped: at that framing each was one dark pixel, and the skin read as dirty.
+fn skin_texture(images: &mut Assets<Image>) -> Handle<Image> {
+    const SIZE: u32 = 256;
+    let mut data = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let (u, v) = ((x as f32 + 0.5) / SIZE as f32, (y as f32 + 0.5) / SIZE as f32);
+            // Blotches a few centimetres across, a redder flush over larger patches, and a fine grain.
+            let blotch = (noise(u * 7.0, v * 7.0, 11) + 0.5 * noise(u * 15.0, v * 15.0, 12)) / 1.5 - 0.5;
+            let flush = noise(u * 3.0, v * 3.0, 13) - 0.5;
+            let grain = noise(u * 60.0, v * 60.0, 14) - 0.5;
+            let shade = 1.0 + 0.16 * blotch + 0.05 * grain;
+            let tone = [SKIN[0] * shade + 0.05 * flush, SKIN[1] * shade - 0.02 * flush, SKIN[2] * shade - 0.02 * flush];
+            data.extend(tone.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8));
+            data.push(255);
+        }
+    }
+    images.add(Image::new(
+        Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    ))
+}
+
+/// Smooth value noise in `[0, 1]` over an integer lattice.
+fn noise(x: f32, y: f32, seed: u32) -> f32 {
+    let (ix, iy) = (x.floor() as i32, y.floor() as i32);
+    let (fx, fy) = (x - x.floor(), y - y.floor());
+    let (sx, sy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
+    let top = hash(ix, iy, seed) + (hash(ix + 1, iy, seed) - hash(ix, iy, seed)) * sx;
+    let bottom = hash(ix, iy + 1, seed) + (hash(ix + 1, iy + 1, seed) - hash(ix, iy + 1, seed)) * sx;
+    top + (bottom - top) * sy
+}
+
+/// A lattice point's value in `[0, 1)`.
+fn hash(x: i32, y: i32, seed: u32) -> f32 {
+    let mut h = (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ seed.wrapping_mul(0xcb1a_b31f);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0x5bd1_e995);
+    h ^= h >> 15;
+    (h >> 8) as f32 / (1u32 << 24) as f32
 }
 
 /// A ray onto the front face of a part, offset from its centre by `offset` (subject-local).

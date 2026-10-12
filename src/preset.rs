@@ -649,6 +649,12 @@ fn advance_clock(mut clock: ResMut<GoreClock>, lac: Option<ResMut<LacerationCloc
 
 /// **Dress every new [`Gore`] entity**: canvases, and the flesh material over its own material.
 ///
+/// **A skin keeps the skin it was authored with.** Its colour, its `base_color_texture`, its
+/// occlusion and emissive maps and its own normal map are kept; only its metallic-roughness
+/// texture is replaced, by the flaymap's (see [`FleshTables::material`]). Before 0.5.15 the skin's
+/// base texture was replaced by the flaymap's flat colour, so a textured glTF character, whose
+/// colour factor is usually white, was dressed white.
+///
 /// **A skin gets tangents if its mesh has none.** The flaymap's normal image is a tangent-space map,
 /// and Bevy leaves a normal map out entirely on a mesh without `ATTRIBUTE_TANGENT` — so a skin dressed
 /// without them would shade its craters flat, silently. They are generated once, on the mesh asset
@@ -706,22 +712,15 @@ fn dress(
         match gore.kind {
             GoreKind::Skin(region) => {
                 let layers = layers_for(region, settings.as_deref());
+                // The canvas is filled with the material's colour factor; the flesh material swaps
+                // that for the authored skin, texture included, wherever the skin is intact. The
+                // tangents the crater's normal map needs were generated above if the mesh had none.
                 let flay = FlayCanvas::new(&mut images, dials.canvas, region, layers, base_srgb, rough);
                 let wet = WetCanvas::new(&mut images, dials.canvas, base_srgb, rough);
-                let dressed = StandardMaterial {
-                    base_color: Color::WHITE,
-                    base_color_texture: Some(flay.albedo()),
-                    metallic_roughness_texture: Some(flay.roughness()),
-                    // The crater's slope, unless the caller's material carries a normal map of its own,
-                    // which is kept. The tangents it needs were generated above if the mesh had none.
-                    normal_map_texture: base.normal_map_texture.clone().or_else(|| Some(flay.normal())),
-                    perceptual_roughness: 1.0,
-                    ..base
-                };
                 let mut params = FleshParams::for_layers(&layers, FleshMode::Canvas, scale.mm_per_unit);
                 params.wet.z = wet_settings.as_ref().map(|w| w.film_depth_mm).unwrap_or(2.0);
                 let dermis = DermisCanvas::new(&mut images, dials.canvas);
-                let mut material = tables.material(dressed, params, Some(wet.roughness()), Some(flay.roughness()));
+                let mut material = tables.material(base, params, Some(wet.roughness()), Some(&flay));
                 material.extension.set_dermis(Some(dermis.image()));
                 entity_commands.insert((MeshMaterial3d(flesh.add(material)), flay, wet, dermis));
             }
@@ -774,8 +773,8 @@ struct HitContext<'w> {
 #[derive(bevy::ecs::system::SystemParam)]
 struct SubjectLookup<'w, 's> {
     parents: Query<'w, 's, &'static ChildOf>,
-    subjects: Query<'w, 's, (&'static FractureSubject, &'static GlobalTransform, Option<&'static Children>)>,
-    breakables: Query<'w, 's, (&'static GlobalTransform, Option<&'static Children>), With<GoreBreakable>>,
+    subjects: Query<'w, 's, (&'static FractureSubject, &'static GlobalTransform)>,
+    breakables: Query<'w, 's, &'static GlobalTransform, With<GoreBreakable>>,
     dressed: Query<'w, 's, &'static Dressed>,
 }
 
@@ -1087,18 +1086,17 @@ fn take_hits(
                 subject = subjects.get(root).ok();
                 breakable = breakables.get(root).ok();
             }
-            let skin_of = |children: Option<&Children>| {
-                children
-                    .into_iter()
-                    .flatten()
-                    .find_map(|c| dressed.get(*c).ok().and_then(|d| d.original.clone()))
-            };
-            if let Some((source, root_xf, children)) = subject
+            // **The pieces wear the material of the part that was hit**, as it was before the
+            // preset dressed it. That part is under the root by construction, at whatever depth: a
+            // glTF scene puts its meshes under node entities, so searching the root's own children
+            // found nothing there and threw the pieces in Bevy's default white.
+            let skin = dressed.get(hit.entity).ok().and_then(|d| d.original.clone());
+            if let Some((source, root_xf)) = subject
                 && cache.is_baked(source.0.id())
             {
                 fractured.write(GoreFractured { subject: root, at: at_world });
                 if dials.spawn_fragments {
-                    let skin = skin_of(children).unwrap_or_else(|| standard.add(StandardMaterial::default()));
+                    let skin = skin.unwrap_or_else(|| standard.add(StandardMaterial::default()));
                     let region = cache.region(source.0.id()).unwrap_or(region);
                     let pieces: Vec<Piece> = cache
                         .frontier_of(source.0.id(), dials.pieces)
@@ -1114,10 +1112,10 @@ fn take_hits(
                     throw_pieces(&mut commands, &pieces, root_xf, at_world, cap, skin);
                     commands.entity(root).despawn();
                 }
-            } else if let Some((root_xf, children)) = breakable {
+            } else if let Some(root_xf) = breakable {
                 fractured.write(GoreFractured { subject: root, at: at_world });
                 if dials.spawn_fragments {
-                    let skin = skin_of(children).unwrap_or_else(|| standard.add(StandardMaterial::default()));
+                    let skin = skin.unwrap_or_else(|| standard.add(StandardMaterial::default()));
                     let cap = cap_material(region, atlas.as_deref(), standard, tables, flesh, dials);
                     let at_local = root_xf.affine().inverse().transform_point3(at_world);
                     commands.entity(root).queue(move |mut e: EntityWorldMut| {
@@ -1551,6 +1549,66 @@ mod tests {
         let drawn = |e: Entity| app.world().get::<Mesh3d>(e).map(|m| m.0.id());
         assert_ne!(drawn(hit), Some(shared.id()), "the slashed body still draws the shared mesh, so its tear lands on every instance");
         assert_eq!(drawn(other), Some(shared.id()), "the body nobody hit stopped drawing its own mesh");
+    }
+
+    /// **A textured skin is dressed over its own texture.** The material keeps its texture and
+    /// colour factor, and the flaymap is filled with that factor, which is what lets the shader swap
+    /// the canvas's flat intact colour for the authored skin exactly.
+    #[test]
+    fn a_textured_skin_keeps_its_texture() {
+        let mut app = headless();
+        let texture = app.world_mut().resource_mut::<Assets<Image>>().add(Image::default());
+        let factor = Color::srgb(0.3, 0.5, 0.7);
+        let authored = StandardMaterial { base_color: factor, base_color_texture: Some(texture.clone()), ..default() };
+        let material = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(authored);
+        let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.4, 0.6, 0.2).mesh().build());
+        let body = app
+            .world_mut()
+            .spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Limb)))
+            .id();
+        app.world_mut().run_schedule(FixedUpdate);
+        let dressed = app.world().get::<MeshMaterial3d<FleshMaterial>>(body).and_then(|m| app.world().resource::<Assets<FleshMaterial>>().get(&m.0)).cloned();
+        let Some(dressed) = dressed else { panic!("the skin was not dressed") };
+        assert_eq!(dressed.base.base_color_texture.map(|h| h.id()), Some(texture.id()), "the skin's own texture was replaced");
+        assert_eq!(dressed.base.base_color, factor, "the skin's colour factor was replaced");
+        let intact = app.world().get::<FlayCanvas>(body).and_then(|f| app.world().resource::<Assets<Image>>().get(&f.albedo())).and_then(|i| i.data.as_ref()).map(|d| [d[0], d[1], d[2]]);
+        let want = factor.to_srgba();
+        let want = [want.red, want.green, want.blue].map(|c| c * 255.0);
+        let Some(intact) = intact else { panic!("the flaymap has no albedo bytes") };
+        for (got, want) in intact.iter().zip(want) {
+            assert!((*got as f32 - want).abs() <= 1.0, "the canvas's intact skin {intact:?} is not the factor {want:?}");
+        }
+    }
+
+    /// **Thrown pieces wear the hit part's own material, however deep the part sits.** A glTF scene
+    /// puts its meshes under node entities, so here the part is the body root's grandchild.
+    #[test]
+    fn thrown_pieces_wear_the_skin_of_the_part_that_was_hit() {
+        let mut app = headless();
+        let cube = Cuboid::new(0.4, 0.4, 0.4).mesh().build();
+        let proxy = [crate::ProxyCell::from_box(Vec3::ZERO, Vec3::splat(0.2))];
+        let fracture = crate::fracture_mesh(&[(&cube, Mat4::IDENTITY)], &proxy, &crate::CutSettings::new(4, 0.05, 3));
+        let breakable = GoreBreakable::from_fracture(fracture, Region::Limb, &crate::cross_section::Scale::default());
+        let skin = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial { base_color: Color::srgb(0.3, 0.5, 0.7), ..default() });
+        let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(cube);
+        let world = app.world_mut();
+        let root = world.spawn((Transform::IDENTITY, GlobalTransform::IDENTITY, breakable)).id();
+        let node = world.spawn((Transform::IDENTITY, GlobalTransform::IDENTITY, ChildOf(root))).id();
+        let part = world
+            .spawn((Mesh3d(mesh), MeshMaterial3d(skin.clone()), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Limb), ChildOf(node)))
+            .id();
+        app.world_mut().run_schedule(FixedUpdate);
+        app.world_mut().write_message(GoreHit::impact(part, Vec3::new(0.0, 0.0, 2.0), Vec3::NEG_Z, 0.03, 60.0));
+        app.world_mut().run_schedule(FixedUpdate);
+        app.world_mut().run_schedule(FixedUpdate);
+        let worn: Vec<_> = app
+            .world_mut()
+            .query_filtered::<&MeshMaterial3d<StandardMaterial>, Or<(With<Flying>, With<Standing>)>>()
+            .iter(app.world())
+            .map(|m| m.0.id())
+            .collect();
+        assert!(!worn.is_empty(), "the body did not break");
+        assert!(worn.iter().all(|id| *id == skin.id()), "a piece was thrown in a material the part never wore");
     }
 
     /// A blow bruises without bleeding, and the bruise warms the dermis under the blow within the

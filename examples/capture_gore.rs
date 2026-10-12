@@ -326,15 +326,11 @@ fn spawn_intact(world: &mut World) {
                     WetCanvas::new(&mut images, 256, SKIN, 0.7),
                 )
             };
-            let base = StandardMaterial {
-                base_color_texture: Some(flay.albedo()),
-                metallic_roughness_texture: Some(flay.roughness()),
-                normal_map_texture: Some(flay.normal()),
-                perceptual_roughness: 1.0,
-                ..default()
-            };
+            // The material's colour is the one the canvas was filled with; the flesh material
+            // swaps that for the material's own skin wherever the skin is intact.
+            let base = StandardMaterial { base_color: Color::srgb(SKIN[0], SKIN[1], SKIN[2]), ..default() };
             let params = FleshParams::for_layers(&layers, FleshMode::Canvas, Scale::default().mm_per_unit);
-            let material = world.resource::<FleshTables>().material(base, params, Some(wet.roughness()), Some(flay.roughness()));
+            let material = world.resource::<FleshTables>().material(base, params, Some(wet.roughness()), Some(&flay));
             let material = world.resource_mut::<Assets<FleshMaterial>>().add(material);
             // Tangents, or Bevy draws the normal map flat.
             let mesh = mesh.clone().with_generated_tangents().unwrap_or(mesh);

@@ -24,6 +24,17 @@ a plausible-looking result that is quietly wrong.
 Tangents are handled for you since 0.5.10: a skin mesh without `ATTRIBUTE_TANGENT` gets them when it
 is dressed, because the crater's normal map needs them.
 
+## What a dressed skin keeps
+
+Since 0.5.15 a skin keeps the material it was authored with: its colour factor, its
+`base_color_texture`, the mesh's vertex colours, its occlusion and emissive maps, and its own
+normal map. The wounds are drawn over that skin, and the pieces a broken body throws wear the hit
+part's material as it was before the preset dressed it. Two things are the flaymap's. The skin's
+metallic-roughness texture is replaced by the flaymap's roughness image, so intact skin takes its
+roughness from the material's `perceptual_roughness` alone. And a skin that brings its own normal
+map keeps it, so its craters shade without the slope of their walls. Neither gets a texture slot of
+its own, because every texture the flesh material adds counts against WebGL2's sixteen per stage.
+
 ## Units, in one place
 
 | Field | Unit |
@@ -51,6 +62,7 @@ and breaks a body that can break.
 - **Wounds are anchored to the ray, against the bind pose.** The preset re-casts each wound's ray every
   pulse, against the mesh asset placed by the entity's `GlobalTransform`. On a skinned, animated
   mesh the ray can land somewhere other than where it first hit.
+- **A skin's roughness map and a crater's slope give way.** See *What a dressed skin keeps*.
 - **One open wound per mesh entity.** A second hit on the same entity replaces the first wound's
   bleed. Split a body into a mesh per part, which you need for the canvases anyway.
 - **One gravity direction per canvas.** On a mesh whose UV islands point different ways, blood runs

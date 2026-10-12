@@ -69,7 +69,12 @@ struct Shots {
     numbers: bool,
 }
 
-fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn setup(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
     commands.spawn((
         Camera3d::default(),
         preset_scene::sweep(0.0),
@@ -77,7 +82,7 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials
         preset_scene::EXPOSURE,
         Sweep,
     ));
-    preset_scene::spawn(&mut commands, &mut meshes, &mut materials);
+    preset_scene::spawn(&mut commands, &mut meshes, &mut materials, &mut images);
     commands.spawn((
         Text::new(""),
         TextFont { font_size: bevy::text::FontSize::Px(13.0), ..default() },
@@ -95,6 +100,7 @@ fn keys(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     parts: Query<(Entity, &Part)>,
     scene: Query<Entity, Or<(With<Body>, With<Sheet>, With<Slab>, With<Sun>)>>,
     pieces: Query<
@@ -138,7 +144,7 @@ fn keys(
             commands.entity(e).despawn();
         }
         shots.n = 0;
-        preset_scene::spawn(&mut commands, &mut meshes, &mut materials);
+        preset_scene::spawn(&mut commands, &mut meshes, &mut materials, &mut images);
     }
 }
 

@@ -5,6 +5,7 @@
 
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
+    pbr_bindings,
     pbr_functions::alpha_discard,
     pbr_types,
     mesh_view_bindings as view_bindings,
@@ -118,9 +119,21 @@ fn fragment(
         wetness = w.a;
     }
     if (flags & FLAG_FLAY) != 0u {
-        let f = textureSample(flay_map, flesh_sampler, in.uv);
+        // The canvas's roughness image is in the base's metallic-roughness slot (see
+        // `FleshTables::material`): `R` the depth over the span, `A` whether the texel is peeled.
+        // `pbr_bindings` is the non-bindless layout, which is the only one this material has:
+        // `ExtendedMaterial` goes bindless only when its extension does, and `FleshExtension` does not.
+        let f = textureSample(pbr_bindings::metallic_roughness_texture, pbr_bindings::metallic_roughness_sampler, in.uv);
         depth_frac = f.r;
         peeled = f.a;
+        // The canvas's albedo is the flat colour it was dressed with wherever the skin is intact.
+        // Swap that for the skin as authored (texture, factor, vertex colours) by exactly the intact
+        // share of the texel. A peeled texel keeps the canvas's tissue, and an untextured skin, whose
+        // authored colour *is* the flat one, comes out as the canvas drew it.
+        let canvas = textureSample(flay_map, flesh_sampler, in.uv).rgb;
+        let flat = pbr_bindings::material.base_color.rgb;
+        let authored = pbr_input.material.base_color.rgb;
+        pbr_input.material.base_color = vec4<f32>(canvas + (1.0 - peeled) * (authored - flat), pbr_input.material.base_color.a);
     }
     // What lies under intact skin: a bruise's chromophores or a burn's eschar modulate the skin's
     // own colour (the map is a ratio, linear), and go with the skin when it is peeled.
