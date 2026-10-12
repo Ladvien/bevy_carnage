@@ -1,5 +1,9 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.10` gives a preset skin the tangents its wounds need** (`AG-081`). The crater normal map is
+# tangent-space and Bevy drops it on a mesh without tangents, so `GorePlugin` now generates them for
+# every `Gore::skin` mesh that lacks them, and waits for a still-loading mesh before dressing it.
+#
 # **`0.5.9` makes a flayed wound look like one** (`AG-080`). A flaymap texel holds the tissue averaged
 # over its grain instead of one point of it, its band edges are torn by noise, and a new
 # `FlayCanvas::normal` image slopes the crater's walls. Cut-face strips carry a mip chain, a thinner
@@ -65,7 +69,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.9"
+version = "0.5.10"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

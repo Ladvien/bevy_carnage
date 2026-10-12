@@ -634,6 +634,14 @@ fn advance_clock(mut clock: ResMut<GoreClock>, lac: Option<ResMut<LacerationCloc
 }
 
 /// **Dress every new [`Gore`] entity**: canvases, and the flesh material over its own material.
+///
+/// **A skin gets tangents if its mesh has none.** The flaymap's normal image is a tangent-space map,
+/// and Bevy leaves a normal map out entirely on a mesh without `ATTRIBUTE_TANGENT` — so a skin dressed
+/// without them would shade its craters flat, silently. They are generated once, on the mesh asset
+/// itself: tangents are a function of the mesh alone, so every instance sharing it wants the same
+/// ones. A mesh that cannot have them (no normals, no UV0, not indexed) warns once and is dressed
+/// anyway, flat. **A skin whose mesh has not loaded yet is left undressed until it has** — still
+/// streaming, not absent — rather than dressed without the tangents it will need.
 #[allow(clippy::too_many_arguments)]
 fn dress(
     mut commands: Commands,
@@ -644,7 +652,8 @@ fn dress(
     images: Option<ResMut<Assets<Image>>>,
     standard: Option<Res<Assets<StandardMaterial>>>,
     flesh: Option<ResMut<Assets<FleshMaterial>>>,
-    undressed: Query<(Entity, &Gore, Option<&MeshMaterial3d<StandardMaterial>>), (With<Mesh3d>, Without<Dressed>)>,
+    meshes: Option<ResMut<Assets<Mesh>>>,
+    undressed: Query<(Entity, &Gore, &Mesh3d, Option<&MeshMaterial3d<StandardMaterial>>), Without<Dressed>>,
 ) {
     let (Some(mut images), Some(standard), Some(mut flesh)) = (images, standard, flesh) else {
         return;
@@ -653,8 +662,25 @@ fn dress(
         // The tables are baked on `Startup`; a `FixedUpdate` before that would dress with nothing.
         return;
     }
+    let mut meshes = meshes;
     let scale = settings.as_ref().map(|s| s.scale).unwrap_or_default();
-    for (entity, gore, material) in &undressed {
+    for (entity, gore, mesh3d, material) in &undressed {
+        if let (GoreKind::Skin(_), Some(meshes)) = (gore.kind, meshes.as_mut()) {
+            match meshes.get(&mesh3d.0).map(|m| m.contains_attribute(Mesh::ATTRIBUTE_TANGENT)) {
+                None => continue,
+                Some(false) => {
+                    if let Some(mut mesh) = meshes.get_mut(&mesh3d.0)
+                        && let Err(e) = mesh.generate_tangents()
+                    {
+                        bevy::log::warn_once!(
+                            "gore: a skin mesh cannot have tangents ({e}), so its wounds will shade flat; \
+                             give it normals, a Float32x2 UV_0 and indices"
+                        );
+                    }
+                }
+                Some(true) => {}
+            }
+        }
         let base = material.and_then(|m| standard.get(&m.0).cloned()).unwrap_or_default();
         let base_srgb = base.base_color.to_srgba();
         let base_srgb = [base_srgb.red, base_srgb.green, base_srgb.blue];
@@ -673,8 +699,7 @@ fn dress(
                     base_color_texture: Some(flay.albedo()),
                     metallic_roughness_texture: Some(flay.roughness()),
                     // The crater's slope, unless the caller's material carries a normal map of its own,
-                    // which is kept. Drawn only on a mesh with tangents; without them Bevy leaves the
-                    // normal map out and the wound shades flat.
+                    // which is kept. The tangents it needs were generated above if the mesh had none.
                     normal_map_texture: base.normal_map_texture.clone().or_else(|| Some(flay.normal())),
                     perceptual_roughness: 1.0,
                     ..base
@@ -1410,17 +1435,16 @@ fn retube(mut meshes: ResMut<Assets<Mesh>>, guts: Query<(&Mesh3d, &Strand), With
 mod tests {
     use super::*;
 
-    /// The preset builds on a headless app, dresses a `Gore` mesh with its canvases and the flesh
-    /// material, and takes a hit without panicking — the two-line contract, exercised.
-    #[test]
-    fn a_gore_entity_is_dressed_and_can_be_hit() {
+    /// A headless app running the preset's chain, with the baked tables faked: any handle other than
+    /// the default passes the gate. The material plugin needs a render app; the preset must still
+    /// build without one.
+    fn headless() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
             .init_asset::<Mesh>()
             .init_asset::<Image>()
             .init_asset::<StandardMaterial>()
             .init_asset::<FleshMaterial>();
-        // The material plugin needs a render app; the preset must still build without one.
         app.init_resource::<FleshTables>()
             .init_resource::<GoreDials>()
             .init_resource::<GoreClock>()
@@ -1432,19 +1456,30 @@ mod tests {
             .init_resource::<WetSettings>()
             .init_resource::<FlaySettings>()
             .add_systems(FixedUpdate, (advance_clock, dress, take_hits, throw_bodies, bleed, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
-        // Fake the baked tables: any handle other than the default passes the gate.
         let images = app.world_mut().resource_mut::<Assets<Image>>().reserve_handle();
         app.world_mut().resource_mut::<FleshTables>().sss = images;
-        let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Sphere::new(0.3).mesh().uv(16, 8));
+        app
+    }
+
+    /// The preset builds on a headless app, dresses a `Gore` mesh with its canvases and the flesh
+    /// material, and takes a hit without panicking — the two-line contract, exercised.
+    #[test]
+    fn a_gore_entity_is_dressed_and_can_be_hit() {
+        let mut app = headless();
+        let sphere = Sphere::new(0.3).mesh().uv(16, 8);
+        assert!(!sphere.contains_attribute(Mesh::ATTRIBUTE_TANGENT), "the premise: Bevy's sphere ships without tangents");
+        let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(sphere);
         let material = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial::default());
         let body = app
             .world_mut()
-            .spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Limb)))
+            .spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Limb)))
             .id();
         app.world_mut().run_schedule(FixedUpdate);
         assert!(app.world().get::<Dressed>(body).is_some(), "dressed on the first tick");
         assert!(app.world().get::<FlayCanvas>(body).is_some() && app.world().get::<WetCanvas>(body).is_some());
         assert!(app.world().get::<MeshMaterial3d<FleshMaterial>>(body).is_some(), "wears the flesh material");
+        let tangents = app.world().resource::<Assets<Mesh>>().get(&mesh).is_some_and(|m| m.contains_attribute(Mesh::ATTRIBUTE_TANGENT));
+        assert!(tangents, "a dressed skin's mesh has the tangents its crater normal map needs");
         app.world_mut().write_message(GoreHit::impact(body, Vec3::new(0.0, 0.0, 2.0), Vec3::NEG_Z, 0.03, 5.0));
         app.world_mut().run_schedule(FixedUpdate);
         let site = app.world().get::<WoundSite>(body).copied();
@@ -1456,6 +1491,23 @@ mod tests {
         }
         let wet = app.world().get::<WetCanvas>(body).map(|w| w.wetted_area()).unwrap_or(0.0);
         assert!(wet > 0.0, "the hit painted blood");
+    }
+
+    /// **A skin whose mesh is still streaming is dressed once it lands**, not before — so it is never
+    /// dressed without the tangents it needs.
+    #[test]
+    fn a_skin_waits_for_its_mesh() {
+        let mut app = headless();
+        let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().reserve_handle();
+        let body = app.world_mut().spawn((Mesh3d(mesh.clone()), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Torso))).id();
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(app.world().get::<Dressed>(body).is_none(), "nothing to dress yet");
+        let inserted = app.world_mut().resource_mut::<Assets<Mesh>>().insert(mesh.id(), Cuboid::new(0.4, 0.6, 0.2).mesh().build());
+        assert!(inserted.is_ok());
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(app.world().get::<Dressed>(body).is_some(), "dressed on the tick after it landed");
+        let tangents = app.world().resource::<Assets<Mesh>>().get(&mesh).is_some_and(|m| m.contains_attribute(Mesh::ATTRIBUTE_TANGENT));
+        assert!(tangents);
     }
 
     /// A blow bruises without bleeding, and the bruise warms the dermis under the blow within the

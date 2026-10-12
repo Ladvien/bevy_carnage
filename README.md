@@ -340,7 +340,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.9`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.10`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.10` changed: the preset gives a skin the tangents its wounds need
+
+0.5.9's crater normal map is tangent-space, and Bevy leaves a normal map out entirely on a mesh with no `ATTRIBUTE_TANGENT`. Bevy's primitives and many exported meshes have none, so under the preset a wound shaded flat. Now `GorePlugin` generates tangents for every `Gore::skin` mesh that lacks them, once, on the mesh asset; a mesh that cannot have them (no normals, no UV0, unindexed) warns once and shades flat. A skin whose mesh is still loading is dressed on the tick it arrives, instead of being dressed before it can have tangents. Every demo GIF is re-recorded from this build.
 
 ### What `0.5.9` changed: a flayed wound looks like one
 
