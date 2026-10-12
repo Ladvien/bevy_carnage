@@ -340,8 +340,9 @@ end to end — the bake, the bond graph, wound extraction and its canonical sort
 droplet draws, the ballistic solve and the pulse schedule. **A digest that differs between two runs
 means something in that chain read a clock, an `Entity`, or an unsorted iteration order**, which are
 the three failures this crate's determinism rules are written against. It is a far sharper instrument
-than holding two GIFs up next to each other; measured on this host, the 382 rendered PNGs are
-byte-identical between runs as well.
+than holding two GIFs up next to each other, and the only one there is: the rendered PNGs are **not**
+byte-identical between runs, because the GPU particles in them have no promised order (measured in
+"Regenerating these", below).
 
 Two things the fracture recorders do not need, both discovered by the frames coming out wrong.
 `TimeUpdateStrategy::ManualDuration` pins `Time<Real>`, which pins `Time<Virtual>`, which pins the
@@ -356,7 +357,8 @@ all, which is the first thing to check if a floor looks wrong.
 
 **No GIF committed, and that is a measurement rather than an omission.** `capture_carnage`'s own
 frames are already proven *not* byte-reproducible on Apple silicon once GPU particles are on screen —
-two runs of one binary differed in 202 of 382 frames while printing the same digest. A clip whose
+two runs of one binary differ in most of the 382 frames while printing the same digest (202 when
+first measured, 361 on 2026-10-11; see "Regenerating these"). A clip whose
 pixels cannot be compared is not worth committing, and `capture_ribbons` prints no digest for the same
 reason: particles are output only, Hanabi 0.19 has no GPU→CPU readback path at all, so the one thing
 this demo shows physically cannot reach a hash.
