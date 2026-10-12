@@ -674,7 +674,7 @@ fn despawn_finished_effects(
     for (entity, spawner, mut ttl) in &mut q {
         ttl.0 = ttl.0.saturating_sub(1);
         if spawner.has_completed() && ttl.0 == 0 {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -719,12 +719,20 @@ fn attach_ribbons(
         let seed = q(p.x)
             ^ q(p.y).wrapping_mul(0x9E37_79B9)
             ^ q(p.z).wrapping_mul(2_654_435_761);
-        commands.entity(entity).with_child((
+        // **Silenced, because the chunk may be gone by the time this runs.** Commands apply at the
+        // next sync point, and a consumer that despawns its chunks from a system this crate cannot be
+        // ordered against (a reset, a cull) does so in between, which logged "Entity despawned" once
+        // per ribbon in the `ribbons` example's every reset. The same holds for the three commands
+        // below, which use the `try_` forms. A chunk that no longer exists needs no ribbon.
+        let ribbon = (
             ParticleEffect { handle: effects.ribbon.clone(), prng_seed: Some(seed) },
             RibbonInstance,
             Transform::default(),
             Visibility::default(),
-        ));
+        );
+        commands.entity(entity).queue_silenced(move |mut chunk: EntityWorldMut| {
+            chunk.with_child(ribbon);
+        });
         live += 1;
     }
 }
@@ -738,7 +746,7 @@ fn fade_landed_ribbons(
 ) {
     for (entity, parent) in &ribbons {
         if bleeding.get(parent.parent()).is_err() {
-            commands.entity(entity).insert(EffectFade(RIBBON_FADE_TICKS));
+            commands.entity(entity).try_insert(EffectFade(RIBBON_FADE_TICKS));
         }
     }
 }
@@ -760,7 +768,7 @@ fn fade_effects(
         }
         fade.0 = fade.0.saturating_sub(1);
         if fade.0 == 0 {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }
