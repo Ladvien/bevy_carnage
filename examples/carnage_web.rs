@@ -161,7 +161,9 @@ fn hud(
     if shots.numbers {
         text.push_str(&format!("\ntick {}   shots {}", clock.0, shots.n));
         for (i, w) in wets.iter().enumerate() {
-            text.push_str(&format!("\nwetmap {i}  {:016x}  wet {:.1} texels", w.digest(), w.wetted_area()));
+            // `wetted_area` is m²; printed as "texels" to one decimal it read 0.0 on every canvas,
+            // after every shot (R4-02). In cm², a pool reads as the number it is.
+            text.push_str(&format!("\nwetmap {i}  {:016x}  wet {:.1} cm2", w.digest(), w.wetted_area() * 1.0e4));
         }
         for (i, f) in flays.iter().enumerate() {
             text.push_str(&format!("\nflaymap {i} {:016x}  bone {} texels", f.digest(), f.bone_texels()));
