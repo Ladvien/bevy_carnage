@@ -577,6 +577,25 @@ impl Blow {
             Blow::Pull => "pull",
         }
     }
+
+    /// **Which way the blow carries what it frees**, on top of the throw away from where it landed.
+    ///
+    /// Without it every piece left radially from the impact, so a shot to the chest threw the head
+    /// straight up, out of the top of every frame and trailing its strand as a vertical line
+    /// (`R4-01`), and three different blows at one aim threw the same pieces the same way (`R2-07`).
+    /// A shot carries along its line, out of the back; a slash along its swing; the swept blade down
+    /// and forward along its sweep; a blast has no direction but out; a pull lifts. Each is weaker
+    /// than the throw away from the impact, so the pieces still fan out: at full strength a shot sent
+    /// everything straight back, behind the body from every camera these demos use.
+    pub fn push(self) -> Vec3 {
+        match self {
+            Blow::Projectile => Vec3::NEG_Z * 0.55,
+            Blow::Slash => Vec3::new(0.7, 0.0, -0.2),
+            Blow::SweptBlade => Vec3::new(0.0, -0.25, 0.6),
+            Blow::Blast => Vec3::ZERO,
+            Blow::Pull => Vec3::Y * 0.5,
+        }
+    }
 }
 
 /// Stand the subject up at one frontier of the hierarchy.
@@ -1003,8 +1022,11 @@ pub fn strike(world: &mut World, blow: Blow, at: Vec3) -> Outcome {
             .unwrap_or(REFERENCE_VOLUME);
         // A piece the blow freed is thrown by it. A piece of a body that lost its footing was not
         // hit; it slumps from where it stood and comes down under gravity.
-        let (velocity, spin) =
-            if fallen.contains(id) { topple(*id, center, fallen_centre, volume) } else { launch(*id, center, at, volume) };
+        let (velocity, spin) = if fallen.contains(id) {
+            topple(*id, center, fallen_centre, volume)
+        } else {
+            launch(*id, center, at, blow.push(), volume)
+        };
         spawn_fragment(world, *id, Some((velocity, spin)));
     }
     if outcome.fell {
@@ -1024,10 +1046,14 @@ pub fn strike(world: &mut World, blow: Blow, at: Vec3) -> Outcome {
 /// "shrapnel".** Throwing every piece at the same speed is what made the old burst read as an
 /// explosion in a quarry: a severed arm and a fingernail left at identical velocity. A blow delivers
 /// roughly an impulse, so light pieces should leave fast and heavy ones should barely move and flop.
-pub fn launch(id: FragmentId, center: Vec3, at: Vec3, volume: f32) -> (Vec3, Vec3) {
+pub fn launch(id: FragmentId, center: Vec3, at: Vec3, push: Vec3, volume: f32) -> (Vec3, Vec3) {
     let h = |n: u32| hash_f32(id.0.wrapping_mul(2_654_435_761).wrapping_add(n));
     let away = (center - at).normalize_or_zero();
-    let dir = (away + Vec3::Y * (0.35 + 0.5 * h(3))).normalize_or_zero();
+    // **A sideways spread of the piece's own.** Pieces stacked on one line from the impact (the
+    // head above a chest shot) were thrown along exactly that line, together, as one column; each now
+    // leaves a little to one side, from the same frozen hash.
+    let spread = Vec3::new(h(5) - 0.5, 0.0, h(6) - 0.5) * 0.9;
+    let dir = (away + push + spread + Vec3::Y * (0.35 + 0.5 * h(3))).normalize_or_zero();
     // Cube root, because velocity from a fixed impulse goes as 1/mass and mass goes as the cube of
     // size — so the linear dimension is the honest scale, and it keeps the spread narrow enough that
     // a heavy piece still moves.

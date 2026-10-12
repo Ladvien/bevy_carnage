@@ -332,7 +332,7 @@ pulls the wedges around a channel apart, and this demo fires one.
 `capture_carnage` prints one line and two runs must print the same one:
 
 ```text
-carnage: frames=382 wounds=289 stains=32043 digest=b540ac712d86e37a
+carnage: frames=382 wounds=289 stains=32043 digest=149329c57da4a7c4
 ```
 
 The digest is FNV-1a over every stain position in placement order, so it covers the whole new layer

@@ -616,7 +616,8 @@ fn begin_kill(
     for f in fracture_mesh(&parts, &body::proxy(), &cut).into_leaves() {
         // `body::launch` is a pure function of the fragment and the blow — the crate's own frozen
         // hash, no RNG — so every tier that dismembers throws the same pieces the same way.
-        let (velocity, spin) = body::launch(f.id, f.center_local, WOUND_LOCAL, f.cell.volume());
+        let (velocity, spin) =
+            body::launch(f.id, f.center_local, WOUND_LOCAL, body::Blow::Projectile.push(), f.cell.volume());
         let lowest = f.cell.points().iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
         let drop_to_rest = (f.cell.center().y - lowest).max(0.0);
         let chunk = commands
