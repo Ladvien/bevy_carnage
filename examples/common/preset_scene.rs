@@ -107,7 +107,13 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut
                 ));
             }
         });
+    spawn_set(commands, meshes, materials);
+}
 
+/// **The set the preset's body stands in**: the sheet hanging in the spray, the slab, and the sun and
+/// its fill. Split out of [`spawn`] so another body can stand in the same light, on the same floor,
+/// beside the same sheet — which is how `skinned` and `capture_skinned` are lit.
+pub fn spawn_set(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
     // A sheet to the right, hanging in the spray.
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::new(Vec3::Z, Vec2::new(0.28, 0.45)).mesh().build())),
@@ -164,7 +170,7 @@ const SKIN: [f32; 3] = [0.80, 0.62, 0.53];
 /// redder flush. 256² because every face of a part maps the whole image, so a torso's front gets
 /// about 2.3 mm a texel, and no finer detail survives the clips' framing. Freckles were tried and
 /// dropped: at that framing each was one dark pixel, and the skin read as dirty.
-fn skin_texture(images: &mut Assets<Image>) -> Handle<Image> {
+pub fn skin_texture(images: &mut Assets<Image>) -> Handle<Image> {
     const SIZE: u32 = 256;
     let mut data = Vec::with_capacity((SIZE * SIZE * 4) as usize);
     for y in 0..SIZE {

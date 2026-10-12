@@ -93,6 +93,8 @@ What a hit does, in order: the flaymap peels to the depth asked; the wound's spa
 
 **The flesh material** is what makes it read as tissue rather than as painted plastic: `bevy_carnage::flesh::FleshMaterial` is an `ExtendedMaterial<StandardMaterial, _>` with subsurface scattering pre-integrated per tissue from Jensen's dipole (`doi:10.1145/383259.383319`) after Penner's 2011 lookup, a wet clear coat driven by the wetmap's wetness byte, the blood film composited over the base from `bloodstain::spectral` so a fabric keeps its hue under a stain, and a dermis map for what lies under intact skin. Forward path, WebGL2-safe, one sampler; both of its tables are CPU-baked and frozen by a golden. `examples/flesh.rs` shows it alone and `examples/carnage_web.rs` — the flagship, which used to be a thousand lines of hand-wiring — is now the preset and nothing else.
 
+**A skinned, animated character needs no extra step.** Put `Gore` on the skinned mesh as on any other. Hits, sprays and drips are cast at the pose the joints put it in, which is the pose on screen; a wound is a triangle and a place in it, so it bleeds from where that spot of skin is now; and the blood runs downhill in the world. A skin whose joints have no transform yet drops a hit with one warning rather than casting it at the bind pose. [`docs/preset.md`](docs/preset.md#skinned-characters) has the list, and `examples/skinned.rs` is the proof.
+
 ## Quick start — the bake by hand
 
 Mark what should break, then read the bake back when it dies. The launch is yours, and so is the solver.
@@ -167,6 +169,10 @@ assert!(pieces.iter().all(|p| p.outer.is_some() || p.cap.is_some()));
 | ![flesh](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/flesh.gif) | ![preset](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/preset.gif) |
 | `capture_flesh` — the material: a banded limb, a skin sphere, a sheet, under a walking light | `capture_preset` — the preset: a blow, a burn, a slash, and shots to the bone |
 
+![A smooth mannequin walks in place with its left arm raised and waving; a shot opens a wound on the raised forearm, a slash opens a thigh, shots open the chest, and each wound keeps bleeding from the limb it is on while blood pools under the feet](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned.gif)
+
+That is `examples/skinned.rs` — **the preset on a skinned, animated body**, made in code with no asset. A game's character is a mesh whose asset is its bind pose, arms at its sides, and a skeleton that carries it somewhere else each frame; before 0.5.19 the preset cast every hit at the asset, and a shot at the raised forearm above did nothing. Now the hit lands where the arm is *drawn*, the wound rides the limb it opened on, and its blood runs downhill in the world rather than along the atlas. Every key aims at where that part of the body is this frame; `capture_skinned` records it.
+
 The seven kernels have a clip each, on their own pages under `docs/`, and every one was cut from a headless recorder in this crate's `examples/` — `capture_gore` for the four cut-face kernels, `capture_family` for the blood pair, `capture_entrails` for the strands — so the clip you see is a script two runs must reproduce digest-for-digest:
 
 | | | |
@@ -187,6 +193,7 @@ cargo run --release --example bullet_holes     # needs a GPU
 cargo run --release --example ribbons          # needs a GPU — a blood strand per flying chunk
 cargo run --release --example entrails         # needs a GPU — torso chunks pull their guts out
 cargo run --release --example fracture_cube    # terminal only — no window, no GPU
+cargo run --release --example skinned          # needs a GPU — the preset on an animated, skinned character
 ```
 
 ```text
@@ -271,6 +278,19 @@ Each query returns a `Reach` — a severity in `[0, 1]` per bond — and **you**
 | `ProxyCell` | One convex cell. `from_box`, `points()` (→ your collider), `volume()` (→ mass) |
 | `audit_proxy` / `audit_render` / `SolidAudit` / `SurfaceReport` | Measure what the fracture produced |
 | `hash_f32` | The frozen integer hash the fracture seeds from |
+
+### Skinned meshes
+
+Everything the preset casts a ray at — a hit, a droplet, a drip — lands on the body *as it is drawn*. `bevy_carnage::skin` is the CPU half of what `bevy_pbr`'s vertex shader does, so a game can ask the same question of an animated body.
+
+| item | what it is for |
+|---|---|
+| `skin::Pose::of(&SkinnedMesh, &SkinnedMeshInverseBindposes, world)` | The joint matrices (`joint_global · inverse_bindpose`) at this instant. `None` while a joint has no transform yet or the lists disagree |
+| `skin::Rig::of(&Mesh)` | A mesh's per-vertex joint indices and weights, borrowed. `None` when it is not skinned |
+| `skin::posed_mesh(&Mesh, &Pose)` | The mesh as the pose draws it, world space, with `UV_0` and indices: cast it with `GlobalTransform::IDENTITY` |
+| `skin::posed_vertex(&Mesh, &Pose, i)` | One vertex under the pose |
+| `preset::SkinAnchor` | A spot on a skinned mesh as a triangle and a place in it, so it can be posed again each tick. Held by `WoundSite::skin` |
+| `preset::RunDirection` | Which way blood runs on a skinned part right now, in UV space: downhill in the world at its wounds |
 
 ### The carnage layer
 

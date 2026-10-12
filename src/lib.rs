@@ -28,6 +28,9 @@ pub mod flesh;
 /// every surface it touches in the flesh material.
 #[cfg(feature = "flesh")]
 pub mod preset;
+/// **A skinned mesh, posed on the CPU** — the shader's blend of joint matrices, so a ray can be cast
+/// at the body as it is drawn rather than at its bind pose. The preset casts every hit through it.
+pub mod skin;
 
 pub use audit::{SolidAudit, SurfaceReport, audit_cell, audit_proxies, audit_proxy, audit_render};
 pub use bake::{

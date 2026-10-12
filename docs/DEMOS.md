@@ -1,7 +1,7 @@
 # Demos
 
-Every example in the repo, and what each one is for. The 24 windowed ones and the terminal
-`fracture_cube` run from a clean checkout with no assets and no setup. Six of them declare a
+Every example in the repo, and what each one is for. The 25 windowed ones and the terminal
+`fracture_cube` run from a clean checkout with no assets and no setup. Seven of them declare a
 `required-features` entry in `Cargo.toml`; both features are on by default, and the flag is shown so
 a `--no-default-features` build knows what to ask for:
 
@@ -15,6 +15,7 @@ cargo run -p bevy_carnage --release --features vfx --example ribbons
 cargo run -p bevy_carnage --release --features vfx --example pooling
 cargo run -p bevy_carnage --release --features flesh --example flesh
 cargo run -p bevy_carnage --release --features flesh --example preset
+cargo run -p bevy_carnage --release --features flesh --example skinned
 cargo run -p bevy_carnage --release --features flesh --example carnage_web
 cargo run -p bevy_carnage --release --example cross_section
 cargo run -p bevy_carnage --release --example fracture_modes
@@ -502,6 +503,18 @@ change.
 
 `examples/preset.rs`, recorded by `capture_preset`; `carnage_web.rs`, the flagship, is the same scene with keys. Every visual is `GorePlugin`, a `Gore` per surface, a `GoreHit` per injury: a blow at frame 30 starts a `bloodstain::bruise` under the left arm that ages through Stam's kinetics in time-lapse; a hot iron on the right thigh runs `bloodstain::burn` and chars to the eschar depth; a slash across the left thigh bleeds and drips; a graze high on the chest opens a wound that keeps bleeding beside the crater the shots make; from frame 60 a shot every half second craters the torso, throws its spatter at the sheet and the slab, opens a bleed that pools under the wound, and the shot that shows cortex hands off to fracture — the body parts along the modes `bevy_fracture_modes` baked over its bonds, the island that stays standing stays, and the rest fly with banded caps. The body's skin is a texture under a white colour factor, the way a glTF exporter writes a textured character: every wound is drawn over it, and the pieces wear it. Run it twice: `preset: frames=360 ticks=359 digest=…` must match, because the clock is one fixed tick per frame rather than the wall.
 
+## `skinned` — the preset on a body that is never in its bind pose
+
+![A smooth skinned mannequin walks in place with its left arm raised and waving; a shot opens a wound on the raised forearm, a slash opens the right thigh, shots open the chest, and every wound keeps bleeding from the limb it is on, the blood running down the world and pooling on the floor](skinned.gif)
+
+`examples/skinned.rs`, recorded by `capture_skinned`, on `examples/common/mannequin.rs`: a character made in code, with no asset. Eleven joints, six skinned meshes sharing them (torso, head, two arms, two legs), smooth limbs with one `UV_0` island per tube, two-bone weights blended through the elbows, knees and waist, and a walk that holds the left forearm above the head and waves it. Every shot is aimed from a muzzle in front of the body at where that part is *drawn at that frame*, from the joint transforms the renderer last used.
+
+**The question the other bodies cannot ask.** Every other body in the examples is a stack of cuboids, rigid and always in the pose it was built in. A game's character is a skinned mesh whose asset is its bind pose, with the arms hanging at its sides, and a skeleton that carries the vertices elsewhere each frame. Before 0.5.19 the preset cast every hit at the asset, so the shot at frame 30 of this clip, which crosses the raised forearm, found nothing in the bind pose at that height and did nothing: no wound, no spray, no bleed, and the digest `a81aef697cc8d4c0` where it is now `b1e7774e9319201a`. Since 0.5.19 the preset poses the mesh the way `bevy_pbr`'s vertex shader does and casts at that.
+
+What to look for, by frame: **30** the shot opens the raised forearm where the ray crosses it; **36–340** that wound rides the arm as it waves, and its blood runs toward the elbow, down the world, where it ran toward the hand when every canvas had one fixed direction (`RunDirection`); **66** the slash across the right thigh is laid out on the bind pose through the pose at the triangle hit, and the blood from it runs the length of the leg while the leg steps; **100** the iron on the swinging right forearm leaves its mark in UV space and so travels with it; **120 and 150** two shots at the chest; **190** a bruise on the shin. The floor under the feet takes the drips from where each wound is *now*.
+
+Run it and you aim it yourself: `1` a shot to the raised forearm, `2` a slash across the thigh, `3` a shot to the chest, `4` a hot iron, `5` a blow, `R` reset. `capture_skinned` prints the digest line two runs must agree on.
+
 ## Regenerating these
 
 Any change that moves emitted geometry should regenerate them, or the picture stops describing the
@@ -531,6 +544,7 @@ cargo run --release --example capture_pooling -- --out frames-pooling
 # 0.4.0: the material and the preset. Each prints a digest; two runs must agree.
 cargo run --release --example capture_flesh  -- --out frames-flesh
 cargo run --release --example capture_preset -- --out frames-preset
+cargo run --release --example capture_skinned -- --out frames-skinned
 
 WIDTH=560 LEGEND=none  tools/gif.sh frames-demo  docs/explode.gif ""
 WIDTH=560 LEGEND=audit tools/gif.sh frames-audit docs/fracture-tier-ab.gif "Tier A/B — every fragment audited as a solid"
@@ -539,6 +553,7 @@ WIDTH=560 LEGEND=none  tools/gif.sh frames-holes docs/holes.gif "Bullet holes �
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-carnage docs/carnage.gif ""
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-flesh   docs/flesh.gif ""
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-preset  docs/preset.gif ""
+WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-skinned docs/skinned.gif ""
 
 # `cross_section.gif` is `capture_gore`'s first clip, frames 0-89, renumbered from frame0000.
 cargo run --release --example capture_gore -- --out frames-gore

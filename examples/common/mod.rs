@@ -36,6 +36,10 @@ pub mod preset_scene;
 /// **The flesh material's scene**, shared the same way by the windowed `flesh` demo and its clip.
 #[cfg(feature = "flesh")]
 pub mod flesh_scene;
+/// **A skinned, animated character**, made in code, for the examples that ask what a hit does to a
+/// body that is not in its bind pose. Behind `flesh` because it wears the preset's `Gore`.
+#[cfg(feature = "flesh")]
+pub mod mannequin;
 /// **The headless PNG recorder — native only.**
 ///
 /// A recorder writes PNGs to a filesystem and a browser has no filesystem, so "absent in a browser"

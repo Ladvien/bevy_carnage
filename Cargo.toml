@@ -1,5 +1,11 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.19`: a shot lands on the body as it is drawn** (`AG-092`). The preset casts hits, sprays and
+# drips at a skinned mesh's pose instead of its bind pose, so a shot at a raised forearm opens the
+# forearm. `bevy_carnage::skin` is new (`Pose`, `Rig`, `posed_mesh`, `posed_vertex`); `WoundSite`
+# gains `skin: Option<SkinAnchor>`; a skinned part gets a `RunDirection` that follows the pose at its
+# wounds. A rigid mesh takes the old path: `capture_preset` is byte-identical.
+#
 # **`0.5.18`: the preset measures the atlas** (`AG-091`). An unstated `Gore::uv_per_metre` (now
 # `Option<f32>`) is measured from the mesh at its world scale when it is dressed, instead of `1.0`.
 #
@@ -99,7 +105,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.18"
+version = "0.5.19"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
@@ -345,4 +351,15 @@ required-features = ["flesh"]
 
 [[example]]
 name = "flesh"
+required-features = ["flesh"]
+
+# **And the two that run the preset on a skinned, animated body** — `skinned` windowed and
+# `capture_skinned` headless, both on `common/mannequin.rs`.
+
+[[example]]
+name = "capture_skinned"
+required-features = ["flesh"]
+
+[[example]]
+name = "skinned"
 required-features = ["flesh"]

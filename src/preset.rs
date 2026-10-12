@@ -41,6 +41,7 @@
 //! the canvases' digests reproducible, and a game that wants the gore on its own step configures
 //! [`GoreSystems`] and drives the clock itself.
 
+use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::transform::helper::TransformHelper;
@@ -52,6 +53,7 @@ use crate::wetmap::{StainShape, WetCanvas, WetSettings, WetmapPlugin};
 use crate::bloodstain::{BloodSettings, Wound as BloodWound, WoundKind, wound_seed};
 
 use crate::flesh::{FleshMaterial, FleshMode, FleshParams, FleshPlugin, FleshTables};
+use crate::skin::{self, Pose, Rig};
 use crate::{CarnagePlugin, FractureCache, FractureSubject, Wounded};
 
 /// **What a surface is, to the preset.**
@@ -130,29 +132,69 @@ fn edge_settings(dials: &GoreDials, settings: Option<&WetSettings>) -> WetSettin
     WetSettings { edge_samples: dials.edge_samples, ..settings.cloned().unwrap_or_default() }
 }
 
+/// **Where a world ray lands on a mesh**, mesh-local: the UV, the point and the triangle's winding
+/// normal, and *which* triangle and where in it. The triangle is what lets a hit on a posed skin be
+/// carried back to the bind pose it was cut from, and be found again once the body has moved.
+#[derive(Clone, Copy, Debug)]
+struct Landing {
+    uv: Vec2,
+    point: Vec3,
+    normal: Vec3,
+    /// The three vertex indices of the triangle that was hit.
+    tri: [u32; 3],
+    /// Barycentric weights of `tri`'s vertices at the hit: `point = Σ bary[i] · position[tri[i]]`.
+    bary: Vec3,
+}
+
+impl Landing {
+    /// **The world matrix at the hit**, for a skinned mesh: its three vertices' blended joint matrices,
+    /// weighted by where in the triangle the ray landed. What a length on the bind pose is multiplied
+    /// by on the way to where the body is. `None` when the mesh has no rig or a vertex cannot be posed.
+    fn matrix(&self, bind: &Mesh, pose: &Pose) -> Option<Mat4> {
+        let rig = Rig::of(bind)?;
+        let mut sum = Mat4::ZERO;
+        for (vertex, weight) in self.tri.into_iter().zip(self.bary.to_array()) {
+            sum += rig.matrix(pose, vertex as usize)? * weight;
+        }
+        Some(sum)
+    }
+}
+
+/// **A landing on a posed skin, carried back to the bind pose**: the point and the winding normal of
+/// the same triangle in the asset, which is what a wound's bleeding and a laceration's path are laid
+/// out on. `None` when a vertex is missing.
+fn bind_landing(bind: &Mesh, landing: &Landing) -> Option<(Vec3, Vec3)> {
+    let Ok(Some(VertexAttributeValues::Float32x3(positions))) = bind.try_attribute_option(Mesh::ATTRIBUTE_POSITION) else {
+        return None;
+    };
+    let [a, b, c] = landing.tri.map(|vertex| positions.get(vertex as usize).copied().map(Vec3::from));
+    let (a, b, c) = (a?, b?, c?);
+    let point = a * landing.bary.x + b * landing.bary.y + c * landing.bary.z;
+    Some((point, (b - a).cross(c - a).normalize_or_zero()))
+}
+
 /// The UV a world ray lands on, by the same Möller–Trumbore walk the canvases use — the preset needs
 /// it for the injuries that live in texture space (a bruise, a burn) rather than on a ray.
-fn ray_hit(mesh: &Mesh, xf: &GlobalTransform, from: Vec3, dir: Vec3) -> Option<(Vec2, Vec3, Vec3)> {
+fn ray_hit(mesh: &Mesh, xf: &GlobalTransform, from: Vec3, dir: Vec3) -> Option<Landing> {
     let inv = xf.affine().inverse();
     let origin = inv.transform_point3(from);
     let d = inv.transform_vector3(dir);
-    let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
-        Some(VertexAttributeValues::Float32x3(p)) => p,
-        _ => return None,
+    let Ok(Some(VertexAttributeValues::Float32x3(positions))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_POSITION) else {
+        return None;
     };
-    let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
-        Some(VertexAttributeValues::Float32x2(u)) => u,
-        _ => return None,
+    let Ok(Some(VertexAttributeValues::Float32x2(uvs))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_UV_0) else {
+        return None;
     };
+    let indices = mesh.try_indices_option().ok()?;
     let tri = |i: usize| -> Option<[usize; 3]> {
-        match mesh.indices() {
-            Some(bevy::mesh::Indices::U32(ix)) => Some([*ix.get(i)? as usize, *ix.get(i + 1)? as usize, *ix.get(i + 2)? as usize]),
-            Some(bevy::mesh::Indices::U16(ix)) => Some([*ix.get(i)? as usize, *ix.get(i + 1)? as usize, *ix.get(i + 2)? as usize]),
+        match indices {
+            Some(Indices::U32(ix)) => Some([*ix.get(i)? as usize, *ix.get(i + 1)? as usize, *ix.get(i + 2)? as usize]),
+            Some(Indices::U16(ix)) => Some([*ix.get(i)? as usize, *ix.get(i + 1)? as usize, *ix.get(i + 2)? as usize]),
             None => Some([i, i + 1, i + 2]),
         }
     };
-    let count = mesh.indices().map(|ix| ix.len()).unwrap_or(positions.len());
-    let mut best: Option<(f32, Vec2, Vec3, Vec3)> = None;
+    let count = indices.map(|ix| ix.len()).unwrap_or(positions.len());
+    let mut best: Option<(f32, Landing)> = None;
     let mut i = 0;
     while i + 2 < count {
         let Some([a, b, c]) = tri(i) else { break };
@@ -178,14 +220,23 @@ fn ray_hit(mesh: &Mesh, xf: &GlobalTransform, from: Vec3, dir: Vec3) -> Option<(
             continue;
         }
         let t = inv_det * e2.dot(q);
-        if t <= 0.0 || best.is_some_and(|(bt, ..)| bt <= t) {
+        if t <= 0.0 || best.is_some_and(|(bt, _)| bt <= t) {
             continue;
         }
         let (Some(ua), Some(ub), Some(uc)) = (uvs.get(a), uvs.get(b), uvs.get(c)) else { continue };
         let uv = Vec2::from(*ua) * (1.0 - u - v) + Vec2::from(*ub) * u + Vec2::from(*uc) * v;
-        best = Some((t, uv, origin + d * t, e1.cross(e2).normalize_or_zero()));
+        best = Some((
+            t,
+            Landing {
+                uv,
+                point: origin + d * t,
+                normal: e1.cross(e2).normalize_or_zero(),
+                tri: [a as u32, b as u32, c as u32],
+                bary: Vec3::new(1.0 - u - v, u, v),
+            },
+        ));
     }
-    best.map(|(_, uv, p, n)| (uv, p, n))
+    best.map(|(_, landing)| landing)
 }
 
 /// **A mesh's atlas density, UV units per metre**: the square root of its total UV area over its
@@ -236,6 +287,122 @@ fn shape_on(gore: &Gore, shape: &StainShape, texels: u32) -> StainShape {
     }
 }
 
+/// **A skinned mesh's pose**, from the inverse bind poses asset and a way to ask for each joint's
+/// world matrix. `None` until both exist — a scene still streaming in has joints no transform
+/// reaches yet, and that is "not yet", never "unskinned".
+fn pose_of(
+    skin: &SkinnedMesh,
+    bindposes: Option<&Assets<SkinnedMeshInverseBindposes>>,
+    world: impl FnMut(Entity) -> Option<Mat4>,
+) -> Option<Pose> {
+    Pose::of(skin, bindposes?.get(&skin.inverse_bindposes)?, world)
+}
+
+/// What the hit systems read to pose a skinned mesh: the inverse bind poses and the joints' world
+/// transforms as the last `PostUpdate` propagated them — the matrices the GPU is drawing this frame
+/// with. `Option` for the arena, because a missing `Res<T>` panics its system in Bevy 0.19.
+#[derive(bevy::ecs::system::SystemParam)]
+struct Rigging<'w, 's> {
+    bindposes: Option<Res<'w, Assets<SkinnedMeshInverseBindposes>>>,
+    joints: Query<'w, 's, &'static GlobalTransform>,
+}
+
+impl Rigging<'_, '_> {
+    /// The pose `skin` is drawn in now.
+    fn pose(&self, skin: &SkinnedMesh) -> Option<Pose> {
+        pose_of(skin, self.bindposes.as_deref(), |joint| self.joints.get(joint).ok().map(|g| g.to_matrix()))
+    }
+}
+
+/// **What a ray is cast at for one mesh entity.**
+enum Drawn {
+    /// The asset, placed by the entity's own `GlobalTransform`.
+    Rigid,
+    /// A skinned mesh as its pose draws it: world-space positions, cast with the identity transform
+    /// because the mesh entity's own transform plays no part in drawing a skin. The pose rides along
+    /// for what is read off the bind pose afterwards.
+    Posed(Box<Mesh>, Pose),
+    /// Skinned, but its joints or inverse bind poses have not arrived, or a vertex names a joint
+    /// that does not exist. Cast at nothing: the bind pose is not where the body is.
+    Unposed,
+}
+
+impl Drawn {
+    /// A mesh is skinned when its entity carries a [`SkinnedMesh`] *and* the mesh has joint indices
+    /// and weights — the same two conditions the renderer uses to take the skinned path.
+    fn of(mesh: &Mesh, skin: Option<&SkinnedMesh>, rigging: &Rigging) -> Self {
+        match skin {
+            Some(skin) if Rig::of(mesh).is_some() => match rigging.pose(skin) {
+                Some(pose) => match skin::posed_mesh(mesh, &pose) {
+                    Some(posed) => Self::Posed(Box::new(posed), pose),
+                    None => Self::Unposed,
+                },
+                None => Self::Unposed,
+            },
+            _ => Self::Rigid,
+        }
+    }
+}
+
+/// **One dressed surface, as a wound's spray sees it**: what to cast at, and what places it.
+struct Surface {
+    entity: Entity,
+    mesh: Handle<Mesh>,
+    xf: GlobalTransform,
+    gore: Gore,
+    /// Present on a skinned surface, whose spray is cast at its pose.
+    skin: Option<SkinnedMesh>,
+}
+
+/// What [`dress`] visits: every [`Gore`] entity that has not been dressed yet.
+type Undressed<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static mut Gore, &'static Mesh3d, Option<&'static MeshMaterial3d<StandardMaterial>>, Option<&'static SkinnedMesh>),
+    Without<Dressed>,
+>;
+
+/// The dressed bodies a hit can reach, with the canvases it paints.
+type Bodies<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Gore,
+        &'static Mesh3d,
+        &'static GlobalTransform,
+        Option<&'static SkinnedMesh>,
+        Option<&'static mut FlayCanvas>,
+        Option<&'static mut WetCanvas>,
+    ),
+    With<Dressed>,
+>;
+
+/// Every dressed surface, for what a wound throws onto the others.
+type Surfaces<'w, 's> =
+    Query<'w, 's, (Entity, &'static Gore, &'static Mesh3d, &'static GlobalTransform, Option<&'static SkinnedMesh>), With<Dressed>>;
+
+/// The parts [`bleed`] pulses.
+type Bleeders<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Gore,
+        &'static mut Wounds,
+        &'static GlobalTransform,
+        &'static Mesh3d,
+        Option<&'static SkinnedMesh>,
+        &'static mut WetCanvas,
+    ),
+    Without<FloorTag>,
+>;
+
+/// The canvases [`tick_canvases`] runs.
+type Canvases<'w, 's> = Query<
+    'w,
+    's,
+    (&'static Gore, &'static mut WetCanvas, &'static Mesh3d, Option<&'static Wounds>, Option<&'static SkinnedMesh>, Option<&'static mut RunDirection>),
+>;
+
 /// Marks an entity the preset has already dressed, and keeps the material it wore before — the
 /// skin a thrown fragment's outer mesh goes back to.
 #[derive(Component, Clone, Debug, Default)]
@@ -252,12 +419,40 @@ pub struct WoundSite {
     /// Until 0.5.16 each pulse re-cast the hit's world ray, which on a moved body landed elsewhere
     /// or nowhere.
     pub uv: Vec2,
-    /// Where the wound is on the mesh, mesh-local, so what runs off falls from where the wound is now.
+    /// Where the wound is on the mesh asset, mesh-local — the bind pose, for a skinned mesh — so what
+    /// runs off falls from where the wound is now. A rigid mesh places it with the entity's transform;
+    /// a skinned one with [`WoundSite::skin`].
     pub at_local: Vec3,
+    /// **The triangle of a skinned mesh the wound is on**, so each pulse can ask where that spot is
+    /// under the pose the body has *now*. `None` on a mesh that is not skinned.
+    pub skin: Option<SkinAnchor>,
     /// The wound as it opened, world space: the pulse schedule's seed and severity.
     pub wound: BloodWound,
     /// The schedule.
     pub bleed: crate::bloodstain::Bleed,
+}
+
+/// **A spot on a skinned mesh, kept as a triangle and a place in it** rather than as a point. A point
+/// stays where it was cut while the body walks away from it; a triangle is carried by the joints that
+/// move its three vertices, so [`SkinAnchor`] is the spot wherever the pose puts it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SkinAnchor {
+    /// The three vertex indices of the triangle.
+    pub tri: [u32; 3],
+    /// Barycentric weights of those vertices: the spot is `Σ bary[i] · posed vertex[tri[i]]`.
+    pub bary: Vec3,
+}
+
+impl SkinAnchor {
+    /// **The spot under `pose`, world space.** `None` when the mesh has no rig or a vertex of the
+    /// triangle cannot be posed.
+    pub fn posed(&self, mesh: &Mesh, pose: &Pose) -> Option<Vec3> {
+        let mut at = Vec3::ZERO;
+        for (vertex, weight) in self.tri.into_iter().zip(self.bary.to_array()) {
+            at += skin::posed_vertex(mesh, pose, vertex as usize)? * weight;
+        }
+        Some(at)
+    }
 }
 
 /// **Every wound this entity is bleeding**, oldest first. A hit away from the open wounds opens a
@@ -791,7 +986,8 @@ fn dress(
     standard: Option<Res<Assets<StandardMaterial>>>,
     flesh: Option<ResMut<Assets<FleshMaterial>>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
-    mut undressed: Query<(Entity, &mut Gore, &Mesh3d, Option<&MeshMaterial3d<StandardMaterial>>), Without<Dressed>>,
+    mut undressed: Undressed,
+    bindposes: Option<Res<Assets<SkinnedMeshInverseBindposes>>>,
     transforms: TransformHelper,
 ) {
     let (Some(mut images), Some(standard), Some(mut flesh)) = (images, standard, flesh) else {
@@ -803,7 +999,7 @@ fn dress(
     }
     let mut meshes = meshes;
     let scale = settings.as_ref().map(|s| s.scale).unwrap_or_default();
-    for (entity, mut gore, mesh3d, material) in &mut undressed {
+    for (entity, mut gore, mesh3d, material, skin) in &mut undressed {
         if let (GoreKind::Skin(_), Some(meshes)) = (gore.kind, meshes.as_mut()) {
             match meshes.get(&mesh3d.0).map(|m| m.contains_attribute(Mesh::ATTRIBUTE_TANGENT)) {
                 None => continue,
@@ -822,8 +1018,25 @@ fn dress(
         }
         if gore.uv_per_metre.is_none() {
             let Some(mesh) = meshes.as_ref().and_then(|m| m.get(&mesh3d.0)) else { continue };
-            let xf = transforms.compute_global_transform(entity).unwrap_or_default();
-            match atlas_density(mesh, &xf, dials.mm_per_unit) {
+            // A skinned mesh is measured as its pose draws it: the scale of a rigged character lives
+            // in its joints (a glTF in centimetres carries its 0.01 on the armature), and the mesh
+            // entity's own transform plays no part in drawing it. Its joints are asked through the
+            // `Transform` chain for the reason below, and a pose that cannot be had yet is waited for.
+            let measured = match skin.filter(|_| Rig::of(mesh).is_some()) {
+                Some(skin) => {
+                    let Some(pose) = pose_of(skin, bindposes.as_deref(), |joint| {
+                        transforms.compute_global_transform(joint).ok().map(|g| g.to_matrix())
+                    }) else {
+                        continue;
+                    };
+                    skin::posed_mesh(mesh, &pose).and_then(|posed| atlas_density(&posed, &GlobalTransform::IDENTITY, dials.mm_per_unit))
+                }
+                None => {
+                    let xf = transforms.compute_global_transform(entity).unwrap_or_default();
+                    atlas_density(mesh, &xf, dials.mm_per_unit)
+                }
+            };
+            match measured {
                 Some(density) => gore.uv_per_metre = Some(density),
                 None => bevy::log::warn_once!(
                     "gore: a dressed mesh has no UV area or no world area to measure its atlas density by, \
@@ -839,6 +1052,10 @@ fn dress(
         entity_commands
             .remove::<MeshMaterial3d<StandardMaterial>>()
             .insert(Dressed { original: material.map(|m| m.0.clone()) });
+        if skin.is_some() {
+            // Which way is down on the atlas is a fact about the pose, once the part moves.
+            entity_commands.insert(RunDirection(gore.gravity_uv));
+        }
         match gore.kind {
             GoreKind::Skin(region) => {
                 let layers = layers_for(region, settings.as_deref());
@@ -914,8 +1131,9 @@ fn take_hits(
     mut hits: MessageReader<GoreHit>,
     mut cx: HitContext,
     lookup: SubjectLookup,
-    mut bodies: Query<(&Gore, &Mesh3d, &GlobalTransform, Option<&mut FlayCanvas>, Option<&mut WetCanvas>), With<Dressed>>,
-    bodies_index: Query<(Entity, &Gore, &Mesh3d, &GlobalTransform), With<Dressed>>,
+    rigging: Rigging,
+    mut bodies: Bodies,
+    bodies_index: Surfaces,
 ) {
     let HitContext {
         clock,
@@ -944,17 +1162,37 @@ fn take_hits(
     }
     let edges = edge_settings(dials, wet_settings.as_deref());
     // Every dressed surface, for what a wound throws onto the others.
-    let surfaces: Vec<(Entity, Handle<Mesh>, GlobalTransform, Gore)> = bodies_index
+    let surfaces: Vec<Surface> = bodies_index
         .iter()
-        .map(|(e, g, m, x)| (e, m.0.clone(), *x, *g))
+        .map(|(entity, gore, mesh, xf, skin)| Surface { entity, mesh: mesh.0.clone(), xf: *xf, gore: *gore, skin: skin.cloned() })
         .collect();
+    // A skinned surface is posed once per batch, the first time a droplet is cast at it: a pose is a
+    // pass over every vertex, and a batch of shots at one body would otherwise pose it once per shot.
+    let mut posed: std::collections::HashMap<Entity, Option<Mesh>> = std::collections::HashMap::new();
+    let identity = GlobalTransform::IDENTITY;
     for hit in hits {
-        let Ok((gore, mesh3d, xf, flay, wet)) = bodies.get_mut(hit.entity) else { continue };
+        let Ok((gore, mesh3d, xf, skin, flay, wet)) = bodies.get_mut(hit.entity) else { continue };
         let gore = *gore;
         let gore = &gore;
         let xf = *xf;
         let xf = &xf;
-        let Some(mesh) = meshes.get(&mesh3d.0).cloned() else { continue };
+        let skin: Option<SkinnedMesh> = skin.cloned();
+        let Some(bind) = meshes.get(&mesh3d.0).cloned() else { continue };
+        // **Cast at the body as it is drawn.** A skinned mesh's asset is its bind pose, and the entity's
+        // own transform plays no part in drawing it; the pose is what the player is aiming at. A rigid
+        // mesh is the asset placed by its transform.
+        let drawn = Drawn::of(&bind, skin.as_ref(), &rigging);
+        let (mesh, xf): (&Mesh, &GlobalTransform) = match &drawn {
+            Drawn::Rigid => (&bind, xf),
+            Drawn::Posed(posed, _) => (posed.as_ref(), &identity),
+            Drawn::Unposed => {
+                bevy::log::warn_once!(
+                    "gore: a hit on a skinned mesh was dropped because its joints or inverse bind poses are not \
+                     there yet, or a vertex names a joint that does not exist; a hit is never cast at the bind pose"
+                );
+                continue;
+            }
+        };
         let radius_uv = (hit.radius_m * gore.density() / crate::flaymap::UV_SPAN_M).max(0.0);
         let region = match gore.kind {
             GoreKind::Skin(r) => r,
@@ -977,7 +1215,7 @@ fn take_hits(
         if let Some(mut flay) = flay
             && let HitKind::Impact { depth_mm: peel_depth } = hit.kind
         {
-            handoff = flay.paint_world(&mesh, xf, hit.from, hit.dir, radius_uv, peel_depth, tick);
+            handoff = flay.paint_world(mesh, xf, hit.from, hit.dir, radius_uv, peel_depth, tick);
             if let Some(s) = flay_settings.as_deref() {
                 flay.shade(s);
             }
@@ -987,8 +1225,8 @@ fn take_hits(
         }
         // Where the ray lands, for every kind of hit — a slash and a blow never peel, so they have no
         // handoff to read a point from.
-        let landed = ray_hit(&mesh, xf, hit.from, hit.dir);
-        let site_uv = landed.map(|(uv, ..)| uv);
+        let landed = ray_hit(mesh, xf, hit.from, hit.dir);
+        let site_uv = landed.map(|l| l.uv);
 
         // A blow: a bruise starts under the skin, pooled to the blow's radius.
         if let HitKind::Blunt = hit.kind
@@ -1031,8 +1269,8 @@ fn take_hits(
             // No open wound: nothing bleeds, nothing is thrown, nothing spills.
             continue;
         }
-        let at_local = handoff.and_then(|h| h.at).or(landed.map(|(_, p, _)| p));
-        let normal_local = handoff.and_then(|h| h.normal).or(landed.map(|(_, _, n)| n));
+        let at_local = handoff.and_then(|h| h.at).or(landed.map(|l| l.point));
+        let normal_local = handoff.and_then(|h| h.normal).or(landed.map(|l| l.normal));
         let (at_world, normal_world) = match (at_local, normal_local) {
             (Some(p), Some(n)) => (xf.transform_point(p), xf.affine().transform_vector3(n).normalize_or_zero()),
             _ => (hit.from, -hit.dir.normalize_or_zero()),
@@ -1059,19 +1297,31 @@ fn take_hits(
         let mut painted = None;
         if let Some(mut wet) = wet {
             let texels = wet.size();
-            painted = wet.paint_world_with(&mesh, xf, hit.from, hit.dir, &shape_on(gore, &shape, texels), tick, &edges);
+            painted = wet.paint_world_with(mesh, xf, hit.from, hit.dir, &shape_on(gore, &shape, texels), tick, &edges);
         }
         // What the wound throws lands on everything else: the closed-form stains on every floor, and
         // the spray's own droplets cast straight at every other dressed surface for what a floor's
         // plane cannot catch — a sheet, a wall, the next body part. Straight rather than ballistic
         // for those: a droplet at 8–40 m/s falls under a centimetre in the metre it travels.
         let droplets = crate::bloodstain::patterns::impact_spatter(&wound, &dials.blood);
-        for (other, other_mesh, other_xf, other_gore) in &surfaces {
+        for surface in &surfaces {
+            let Surface { entity: other, mesh: other_handle, xf: other_xf, gore: other_gore, skin: other_skin } = surface;
             if *other == hit.entity {
                 continue;
             }
-            let Ok((_, _, _, _, Some(mut other_wet))) = bodies.get_mut(*other) else { continue };
-            let Some(other_mesh) = meshes.get(other_mesh) else { continue };
+            let Ok((_, _, _, _, _, Some(mut other_wet))) = bodies.get_mut(*other) else { continue };
+            let Some(other_asset) = meshes.get(other_handle) else { continue };
+            // A skinned surface is cast as its pose draws it, posed once per batch.
+            let (other_mesh, other_xf): (&Mesh, &GlobalTransform) = match other_skin.as_ref().filter(|_| Rig::of(other_asset).is_some()) {
+                None => (other_asset, other_xf),
+                Some(skin) => {
+                    let entry = posed
+                        .entry(*other)
+                        .or_insert_with(|| rigging.pose(skin).and_then(|pose| skin::posed_mesh(other_asset, &pose)));
+                    let Some(body) = entry.as_ref() else { continue };
+                    (body, &identity)
+                }
+            };
             match other_gore.kind {
                 GoreKind::Floor => {
                     let plane_y = other_xf.translation().y;
@@ -1125,10 +1375,19 @@ fn take_hits(
         // The wound bleeds from where it opened on the skin: beside the ones it already has, or in
         // place of one it landed inside. Silenced, as `try_insert` is: an earlier hit this tick may
         // have broken the body and despawned the part.
-        if let (Some(uv), Some(at_local)) = (painted, at_local)
+        // What the wound is on the mesh asset: for a skinned mesh the bind-pose point of the triangle
+        // it landed on, and that triangle as an anchor to be posed again on every pulse.
+        let (site_at, site_skin) = match (&drawn, &landed) {
+            (Drawn::Posed(..), Some(l)) => match bind_landing(&bind, l) {
+                Some((point, _)) => (Some(point), Some(SkinAnchor { tri: l.tri, bary: l.bary })),
+                None => (None, None),
+            },
+            _ => (at_local, None),
+        };
+        if let (Some(uv), Some(at_local)) = (painted, site_at)
             && let Ok(mut e) = commands.get_entity(hit.entity)
         {
-            let site = WoundSite { uv, at_local, wound, bleed: crate::bloodstain::Bleed::new(tick, &wound) };
+            let site = WoundSite { uv, at_local, skin: site_skin, wound, bleed: crate::bloodstain::Bleed::new(tick, &wound) };
             let (reach, cap) = (hit.radius_m * gore.density(), dials.open_wounds);
             e.queue_silenced(move |mut e: EntityWorldMut| match e.get_mut::<Wounds>() {
                 Some(mut wounds) => wounds.open(site, reach, cap),
@@ -1153,32 +1412,43 @@ fn take_hits(
         });
 
         // 4. A slash gapes instead of cratering.
-        if let HitKind::Slash { along, depth_mm } = hit.kind
-            && let Some(p) = at_local
-        {
-            let inv = xf.affine().inverse();
-            let along_local = inv.transform_vector3(along).normalize_or_zero();
-            let n_local = normal_local.unwrap_or(Vec3::Y);
-            let half = hit.radius_m / xf.scale().max_element().max(1.0e-6);
-            let source = meshes.add(mesh.clone());
-            // **The wound is torn into a mesh this entity owns.** The laceration rewrites the
-            // entity's drawn mesh in place, and a loaded scene shares one mesh handle between every
-            // instance of a character: torn through the shared handle, one slash opened the same
-            // gape on every enemy wearing that mesh. The copy keeps whatever the mesh had, tangents
-            // included.
-            let drawn = meshes.add(mesh.clone());
-            commands.entity(hit.entity).try_insert(Mesh3d(drawn));
-            commands.entity(hit.entity).try_insert(Laceration {
-                path: vec![p - along_local * half, p, p + along_local * half],
-                normal: n_local,
-                gape: Gape::default(),
-                tension: Tension::default(),
-                bed_depth_mm: depth_mm.max(1.0),
-                region,
-                opened_at: tick,
-                source,
-                ..Default::default()
-            });
+        if let HitKind::Slash { along, depth_mm } = hit.kind {
+            // The cut is laid out on the mesh asset. For a skinned body that is the bind pose, so the
+            // point, the face normal, the direction of travel and the length are carried back to it
+            // through the pose at the triangle that was hit: the same triangle, the same stretch.
+            let layout = match (&drawn, &landed) {
+                (Drawn::Posed(_, pose), Some(l)) => bind_landing(&bind, l).and_then(|(p, n)| {
+                    let m = l.matrix(&bind, pose)?;
+                    let along_local = m.inverse().transform_vector3(along).normalize_or_zero();
+                    Some((p, n, along_local, hit.radius_m / skin::max_scale(&m).max(1.0e-6)))
+                }),
+                _ => at_local.map(|p| {
+                    let inv = xf.affine().inverse();
+                    let along_local = inv.transform_vector3(along).normalize_or_zero();
+                    (p, normal_local.unwrap_or(Vec3::Y), along_local, hit.radius_m / xf.scale().max_element().max(1.0e-6))
+                }),
+            };
+            if let Some((p, n_local, along_local, half)) = layout {
+                let source = meshes.add(bind.clone());
+                // **The wound is torn into a mesh this entity owns.** The laceration rewrites the
+                // entity's drawn mesh in place, and a loaded scene shares one mesh handle between every
+                // instance of a character: torn through the shared handle, one slash opened the same
+                // gape on every enemy wearing that mesh. The copy keeps whatever the mesh had, tangents
+                // and joint weights included.
+                let torn = meshes.add(bind.clone());
+                commands.entity(hit.entity).try_insert(Mesh3d(torn));
+                commands.entity(hit.entity).try_insert(Laceration {
+                    path: vec![p - along_local * half, p, p + along_local * half],
+                    normal: n_local,
+                    gape: Gape::default(),
+                    tension: Tension::default(),
+                    bed_depth_mm: depth_mm.max(1.0),
+                    region,
+                    opened_at: tick,
+                    source,
+                    ..Default::default()
+                });
+            }
         }
 
         // 5. Guts, from a torso that has been opened to the muscle.
@@ -1418,12 +1688,16 @@ fn bleed(
     dials: Res<GoreDials>,
     wet_settings: Option<Res<WetSettings>>,
     meshes: Res<Assets<Mesh>>,
-    mut sites: Query<(&Gore, &mut Wounds, &GlobalTransform, &mut WetCanvas), Without<FloorTag>>,
+    rigging: Rigging,
+    mut sites: Bleeders,
     mut floors: Query<(&Gore, &Mesh3d, &GlobalTransform, &mut WetCanvas), With<FloorTag>>,
 ) {
     let tick = clock.0;
     let edges = edge_settings(&dials, wet_settings.as_deref());
-    for (gore, mut wounds, xf, mut wet) in &mut sites {
+    for (gore, mut wounds, xf, mesh3d, skin, mut wet) in &mut sites {
+        // The pose a skinned body is drawn in now, read once for every wound it is bleeding and only
+        // if one of them needs it.
+        let mut pose: Option<Option<Pose>> = None;
         // A wound whose perfusion envelope has reached zero can never pulse again: the driving
         // stress is zero from then on, and no yield stress is below it.
         let spent = |s: &WoundSite| crate::bloodstain::bleed::envelope(s.bleed.age(tick), &dials.blood) <= 0.0;
@@ -1456,7 +1730,22 @@ fn bleed(
             };
             let radius = crate::bloodstain::stain::stain_radius(&drop, crate::bloodstain::patterns::DRIP_FALL_SPEED, &dials.blood);
             let wobble = |k: u32| (crate::bloodstain::hash_f32(site.bleed.seed ^ tick.wrapping_mul(0x9E37_79B9) ^ k) - 0.5) * 0.04;
-            let now = xf.transform_point(site.at_local);
+            // Where the wound is now. A rigid mesh carries it with the entity; a skinned one with its
+            // joints, so the anchor is posed again — and if the pose cannot be had this tick the drip
+            // waits rather than falling from where the wound used to be.
+            let now = match (site.skin, skin) {
+                (Some(anchor), Some(skin)) => {
+                    let pose = pose.get_or_insert_with(|| rigging.pose(skin));
+                    match (pose.as_ref(), meshes.get(&mesh3d.0)) {
+                        (Some(pose), Some(mesh)) => match anchor.posed(mesh, pose) {
+                            Some(world) => world,
+                            None => continue,
+                        },
+                        _ => continue,
+                    }
+                }
+                _ => xf.transform_point(site.at_local),
+            };
             let at = Vec3::new(now.x + wobble(1), now.y, now.z + wobble(2));
             for (floor_gore, floor_mesh, floor_xf, mut floor_wet) in &mut floors {
                 let Some(floor_mesh) = meshes.get(&floor_mesh.0) else { continue };
@@ -1569,11 +1858,90 @@ fn flush_dermis(images: Option<ResMut<Assets<Image>>>, mut canvases: Query<&mut 
     }
 }
 
+/// **Which way blood runs on a skinned part, in UV space, right now.** Starts as
+/// [`Gore::gravity_uv`] and is rewritten each tick while the part has an open wound: on a body that
+/// moves, which way is down on the atlas is a fact about the pose, and a forearm held above the head
+/// has blood running along it toward the elbow, not toward the hand, however its atlas is laid out.
+/// Present on every dressed skinned mesh; a rigid mesh keeps the one direction it was given.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct RunDirection(pub Vec2);
+
+/// The shallowest slope blood runs on: a surface within about seven degrees of level holds it, and
+/// it pools instead.
+const RUN_SLOPE: f32 = 0.12;
+
+/// **Downhill in UV space at one triangle of a posed skin**: the UV direction whose image on the
+/// surface points straight down in the world. `Some(ZERO)` where the surface is too level to run on,
+/// `None` when the triangle has no UV area or a vertex cannot be posed.
+fn downhill(mesh: &Mesh, pose: &Pose, tri: [u32; 3]) -> Option<Vec2> {
+    let Ok(Some(VertexAttributeValues::Float32x2(uvs))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_UV_0) else {
+        return None;
+    };
+    let [p0, p1, p2] = tri.map(|vertex| skin::posed_vertex(mesh, pose, vertex as usize));
+    let (p0, p1, p2) = (p0?, p1?, p2?);
+    let [u0, u1, u2] = tri.map(|vertex| uvs.get(vertex as usize).copied().map(Vec2::from));
+    let (u0, u1, u2) = (u0?, u1?, u2?);
+    let (e1, e2, a, b) = (p1 - p0, p2 - p0, u1 - u0, u2 - u0);
+    let det = a.x * b.y - a.y * b.x;
+    if det.abs() < 1.0e-12 {
+        return None;
+    }
+    // Where one UV unit along each axis goes on the surface, from `P(u, v) = p0 + e1 s + e2 t` with
+    // `(s, t)` the solution of `[a b](s, t) = (u, v)`.
+    let dp_du = (e1 * b.y - e2 * a.y) / det;
+    let dp_dv = (e2 * a.x - e1 * b.x) / det;
+    let normal = e1.cross(e2).normalize_or_zero();
+    let down = Vec3::NEG_Y - normal * normal.dot(Vec3::NEG_Y);
+    if down.length() < RUN_SLOPE {
+        return Some(Vec2::ZERO);
+    }
+    // The least-squares UV direction whose image is `down`, on the surface's own two-axis basis.
+    let (g00, g01, g11) = (dp_du.dot(dp_du), dp_du.dot(dp_dv), dp_dv.dot(dp_dv));
+    let (r0, r1) = (dp_du.dot(down), dp_dv.dot(down));
+    let gram = g00 * g11 - g01 * g01;
+    if gram.abs() < 1.0e-12 {
+        return None;
+    }
+    Some(Vec2::new((g11 * r0 - g01 * r1) / gram, (g00 * r1 - g01 * r0) / gram).normalize_or_zero())
+}
+
+/// **Downhill, averaged over the triangles a skinned part's open wounds are on.** `None` when none
+/// of them can say, so the direction already in force stays.
+fn runoff(mesh: &Mesh, pose: &Pose, wounds: &[WoundSite]) -> Option<Vec2> {
+    let (mut sum, mut counted) = (Vec2::ZERO, 0u32);
+    for anchor in wounds.iter().filter_map(|w| w.skin) {
+        if let Some(d) = downhill(mesh, pose, anchor.tri) {
+            sum += d;
+            counted += 1;
+        }
+    }
+    (counted > 0).then(|| sum.normalize_or_zero())
+}
+
 /// Run and dry every wetmap on the fixed tick.
-fn tick_canvases(clock: Res<GoreClock>, settings: Option<Res<WetSettings>>, mut canvases: Query<(&Gore, &mut WetCanvas)>) {
+fn tick_canvases(
+    clock: Res<GoreClock>,
+    settings: Option<Res<WetSettings>>,
+    meshes: Option<Res<Assets<Mesh>>>,
+    rigging: Rigging,
+    mut canvases: Canvases,
+) {
     let Some(settings) = settings else { return };
-    for (gore, mut wet) in &mut canvases {
-        wet.tick(clock.0, gore.gravity_uv, &settings);
+    for (gore, mut wet, mesh3d, wounds, skin, run) in &mut canvases {
+        let gravity = match run {
+            Some(mut run) => {
+                if let (Some(skin), Some(wounds), Some(mesh)) = (skin, wounds, meshes.as_deref().and_then(|m| m.get(&mesh3d.0)))
+                    && !wounds.0.is_empty()
+                    && let Some(pose) = rigging.pose(skin)
+                    && let Some(downhill) = runoff(mesh, &pose, &wounds.0)
+                {
+                    run.0 = downhill;
+                }
+                run.0
+            }
+            None => gore.gravity_uv,
+        };
+        wet.tick(clock.0, gravity, &settings);
     }
 }
 
@@ -1623,7 +1991,8 @@ mod tests {
             .init_asset::<Mesh>()
             .init_asset::<Image>()
             .init_asset::<StandardMaterial>()
-            .init_asset::<FleshMaterial>();
+            .init_asset::<FleshMaterial>()
+            .init_asset::<SkinnedMeshInverseBindposes>();
         app.init_resource::<FleshTables>()
             .init_resource::<GoreDials>()
             .init_resource::<GoreClock>()
@@ -1742,6 +2111,210 @@ mod tests {
         let still = run(false);
         assert!(still.is_some(), "the body has no wetmap");
         assert_eq!(run(true), still, "the moved body's wound bled differently from the one that stood still");
+    }
+
+    /// **A tube along +X from 0 to 2**, five rings of eight sides, skinned to a joint at its root and
+    /// one at x = 1: the rings either side of the elbow follow one joint each and the ring on it
+    /// follows both. Its UVs cover the unit square once, so it can wear a canvas.
+    fn arm() -> Mesh {
+        let (rings, sides, radius) = (5usize, 8usize, 0.2f32);
+        let (mut positions, mut normals, mut uvs, mut joints, mut weights) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for ring in 0..rings {
+            let (joint, weight): ([u16; 4], [f32; 4]) = match ring {
+                0 | 1 => ([0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0]),
+                2 => ([0, 1, 0, 0], [0.5, 0.5, 0.0, 0.0]),
+                _ => ([1, 0, 0, 0], [1.0, 0.0, 0.0, 0.0]),
+            };
+            for side in 0..=sides {
+                let (sin, cos) = (side as f32 / sides as f32 * core::f32::consts::TAU).sin_cos();
+                positions.push([ring as f32 * 0.5, radius * cos, radius * sin]);
+                normals.push([0.0, cos, sin]);
+                uvs.push([ring as f32 / (rings - 1) as f32, side as f32 / sides as f32]);
+                joints.push(joint);
+                weights.push(weight);
+            }
+        }
+        let mut indices = Vec::new();
+        for ring in 0..rings - 1 {
+            for side in 0..sides {
+                let a = (ring * (sides + 1) + side) as u32;
+                let (b, c) = (a + 1, a + (sides + 1) as u32);
+                indices.extend([a, c, b, b, c, c + 1]);
+            }
+        }
+        let mut mesh = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, VertexAttributeValues::Uint16x4(joints));
+        mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, weights);
+        mesh.insert_indices(Indices::U32(indices));
+        mesh
+    }
+
+    /// The elbow's transform with the forearm bent `bend` radians about Z. Its parent is the root, at
+    /// the origin, so local and world agree.
+    fn elbow(bend: f32) -> Transform {
+        Transform::from_xyz(1.0, 0.0, 0.0).with_rotation(Quat::from_rotation_z(bend))
+    }
+
+    /// An arm on a limb `Gore`, and a floor a metre under it, in a headless app, the elbow bent `bend`
+    /// radians. **The mesh entity sits far from the arm on purpose**: drawing a skin ignores its own
+    /// transform, so the hit must too.
+    fn rigged_arm(bend: f32) -> (App, Entity, Entity, Entity) {
+        let mut app = headless();
+        let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(arm());
+        let floor_mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Plane3d::new(Vec3::Y, Vec2::splat(3.0)).mesh().build());
+        let inverse_bindposes = app
+            .world_mut()
+            .resource_mut::<Assets<SkinnedMeshInverseBindposes>>()
+            .add(SkinnedMeshInverseBindposes::from(vec![Mat4::IDENTITY, Mat4::from_translation(Vec3::new(-1.0, 0.0, 0.0))]));
+        let world = app.world_mut();
+        let root = world.spawn((Transform::IDENTITY, GlobalTransform::IDENTITY)).id();
+        let elbow = world.spawn((elbow(bend), GlobalTransform::from(elbow(bend)), ChildOf(root))).id();
+        let away = Transform::from_xyz(5.0, 5.0, 5.0);
+        let body = world
+            .spawn((
+                Mesh3d(mesh),
+                SkinnedMesh { inverse_bindposes, joints: vec![root, elbow] },
+                away,
+                GlobalTransform::from(away),
+                Gore::skin(Region::Limb),
+            ))
+            .id();
+        let floor = world
+            .spawn((Mesh3d(floor_mesh), Transform::from_xyz(0.0, -1.0, 0.0), GlobalTransform::from(Transform::from_xyz(0.0, -1.0, 0.0)), Gore::floor()))
+            .id();
+        app.world_mut().run_schedule(FixedUpdate);
+        (app, body, elbow, floor)
+    }
+
+    /// Bend the elbow of a [`rigged_arm`] without a propagation pass, which a headless app has none of.
+    fn bend_elbow(app: &mut App, elbow_entity: Entity, bend: f32) {
+        app.world_mut().entity_mut(elbow_entity).insert((elbow(bend), GlobalTransform::from(elbow(bend))));
+    }
+
+    /// A shot straight down −Z at the forearm, `along` metres out of the elbow in the pose it is now in
+    /// when bent a quarter-turn (the forearm points up from x = 1).
+    fn shoot_forearm(app: &mut App, body: Entity, along: f32) {
+        app.world_mut().write_message(GoreHit::impact(body, Vec3::new(1.0, along, 2.0), Vec3::NEG_Z, 0.04, 5.0));
+        app.world_mut().run_schedule(FixedUpdate);
+    }
+
+    /// **A shot lands on the limb where it is drawn, not where its asset lies.** With the elbow bent a
+    /// quarter-turn the forearm stands up from x = 1 and the ray at (1, 0.7) meets it. In the bind pose
+    /// that spot is empty air: the same ray at a straight arm opens nothing. The wound is recorded
+    /// against the bind pose too — the point 0.7 m out the forearm, at x = 1.7 — so a laceration or a
+    /// later pose can find it again.
+    #[test]
+    fn a_shot_lands_on_the_limb_where_it_is_drawn() {
+        let (mut app, body, ..) = rigged_arm(core::f32::consts::FRAC_PI_2);
+        assert!(app.world().get::<Dressed>(body).is_some(), "a skinned limb is dressed once its pose can be had");
+        shoot_forearm(&mut app, body, 0.7);
+        let site = app.world().get::<Wounds>(body).and_then(|w| w.0.first().copied());
+        let Some(site) = site else { panic!("a shot at the bent forearm opened no wound") };
+        let at = Vec3::from(site.wound.at);
+        assert!(at.distance(Vec3::new(1.0, 0.7, 0.2)) < 0.03, "the wound opened at {at:?}, where the forearm is drawn");
+        assert!(site.skin.is_some(), "a wound on a skinned mesh keeps its triangle");
+        assert!(site.at_local.distance(Vec3::new(1.7, 0.0, 0.2)) < 0.03, "the bind-pose point was {:?}", site.at_local);
+
+        let (mut straight, body, ..) = rigged_arm(0.0);
+        shoot_forearm(&mut straight, body, 0.7);
+        assert!(
+            straight.world().get::<Wounds>(body).is_none_or(|w| w.0.is_empty()),
+            "the same ray opened a wound on an arm that is straight: it was cast somewhere else"
+        );
+    }
+
+    /// **The hit is cast at nothing while a skin has no pose, never at its bind pose.** A scene still
+    /// streaming in has joints no transform reaches, and the bind pose is not where that body is.
+    #[test]
+    fn a_hit_on_a_skin_with_no_pose_is_dropped() {
+        let (mut app, body, elbow_entity, _) = rigged_arm(core::f32::consts::FRAC_PI_2);
+        app.world_mut().entity_mut(elbow_entity).remove::<GlobalTransform>();
+        shoot_forearm(&mut app, body, 0.7);
+        assert!(app.world().get::<Wounds>(body).is_none_or(|w| w.0.is_empty()), "a wound opened on a body whose pose was missing");
+    }
+
+    /// **A wound on a skin bleeds from where its limb is now.** Two arms take the same shot while bent.
+    /// One stays bent; the other straightens straight after. The drips of the first land under x = 1,
+    /// where the forearm stood when it was hit; the second's land under x = 1.7, where the same spot of
+    /// skin has been carried to. The shot's spray lands elsewhere on the floor (metres out along z),
+    /// so only the drips are in the band.
+    #[test]
+    fn a_wound_on_a_skin_bleeds_from_where_its_limb_is_now() {
+        let drips = |straighten: bool| {
+            let (mut app, body, elbow_entity, floor) = rigged_arm(core::f32::consts::FRAC_PI_2);
+            shoot_forearm(&mut app, body, 0.7);
+            if straighten {
+                bend_elbow(&mut app, elbow_entity, 0.0);
+            }
+            for _ in 0..90 {
+                app.world_mut().run_schedule(FixedUpdate);
+            }
+            let Some(wet) = app.world().get::<WetCanvas>(floor) else { panic!("the floor has no wetmap") };
+            let n = wet.size();
+            // World x of texel column `tx` on a 6 m plane centred on the origin; z likewise from the row.
+            let mass = |x: core::ops::Range<f32>| -> u32 {
+                let mut sum = 0;
+                for ty in 0..n {
+                    for tx in 0..n {
+                        let u = (tx as f32 + 0.5) / n as f32;
+                        let v = (ty as f32 + 0.5) / n as f32;
+                        let (wx, wz) = ((u - 0.5) * 6.0, (v - 0.5) * 6.0);
+                        if x.contains(&wx) && (0.0..0.4).contains(&wz) {
+                            sum += u32::from(wet.amount_at(tx, ty));
+                        }
+                    }
+                }
+                sum
+            };
+            (mass(0.85..1.15), mass(1.55..1.85))
+        };
+        let (bent_under_elbow, bent_further_out) = drips(false);
+        let (straight_under_elbow, straight_further_out) = drips(true);
+        assert!(bent_under_elbow > 0 && bent_further_out == 0, "a bent arm dripped ({bent_under_elbow}, {bent_further_out})");
+        assert!(
+            straight_further_out > 0 && straight_under_elbow == 0,
+            "an arm straightened after the hit dripped ({straight_under_elbow}, {straight_further_out}), from where the wound was"
+        );
+    }
+
+    /// **A slash on a skinned limb is torn into the bind pose, at the triangle that was hit.** The cut
+    /// is laid out on the asset, which is the bind pose; a slash across the bent forearm that was laid
+    /// out in world space would cut the straight forearm somewhere it never was.
+    #[test]
+    fn a_slash_on_a_skinned_limb_is_laid_out_in_the_bind_pose() {
+        let (mut app, body, ..) = rigged_arm(core::f32::consts::FRAC_PI_2);
+        // Along the forearm's own length: up the pose, which is along +X in the bind pose.
+        app.world_mut().write_message(GoreHit::slash(body, Vec3::new(1.0, 0.7, 2.0), Vec3::NEG_Z, Vec3::Y, 0.1, 4.0));
+        app.world_mut().run_schedule(FixedUpdate);
+        let Some(cut) = app.world().get::<Laceration>(body) else { panic!("a slash laid no laceration") };
+        let [from, at, to] = [cut.path[0], cut.path[1], cut.path[2]];
+        assert!(at.distance(Vec3::new(1.7, 0.0, 0.2)) < 0.03, "the cut's middle is at {at:?} in the bind pose");
+        let along = (to - from).normalize_or_zero();
+        assert!(along.dot(Vec3::X) > 0.99, "the cut runs {along:?}; up the bent forearm is along +X in the bind pose");
+        assert!(((to - from).length() - 0.2).abs() < 0.02, "the cut is {} m long, the slash's 0.2", (to - from).length());
+    }
+
+    /// **Blood runs downhill in the world on a skinned limb, whichever way its atlas is laid out.** The
+    /// arm's `u` runs along its length and `v` around it. Straight and level, a wound on its side
+    /// runs around the tube (`+v`, down the world on that face); with the forearm held straight up it
+    /// runs along the tube toward the elbow (`-u`). A rigid mesh keeps the direction it was given, and
+    /// a skinned one starts with it.
+    #[test]
+    fn blood_runs_downhill_in_the_world_on_a_skinned_limb() {
+        let direction = |bend: f32, along: f32| {
+            let (mut app, body, ..) = rigged_arm(bend);
+            assert_eq!(app.world().get::<RunDirection>(body).map(|r| r.0), Some(Vec2::new(0.0, 1.0)), "a skinned part starts with its stated direction");
+            shoot_forearm(&mut app, body, along);
+            app.world_mut().run_schedule(FixedUpdate);
+            app.world().get::<RunDirection>(body).map(|r| r.0)
+        };
+        let up = direction(core::f32::consts::FRAC_PI_2, 0.7).unwrap_or(Vec2::ZERO);
+        assert!(up.x < -0.9 && up.y.abs() < 0.2, "a forearm held up ran blood {up:?}, toward its hand");
+        let level = direction(0.0, 0.0).unwrap_or(Vec2::ZERO);
+        assert!(level.y > 0.9 && level.x.abs() < 0.2, "a level arm ran blood {level:?}, not around it");
     }
 
     /// **A skin whose mesh is still streaming is dressed once it lands**, not before — so it is never
