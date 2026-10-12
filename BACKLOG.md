@@ -950,6 +950,7 @@ defect a ticket and each ticket a commit. The registry release is cut once, afte
 | iter-01 | 12 recorders, 9 terminal, 24 windowed | 83 candidates, not yet re-inspected | 1 (R1-01, `AG-043`) | 0 | 82 |
 | iter-02 (partial) | 24 windowed off screen; the recorders `AG-043`, `AG-044`, `AG-046` and `AG-048` touched; `pooling`, `bullet_holes` and `sever` rescripted; the 14 shared-scene examples after `AG-049`; `drying`, the three preset scenes and the two ribbon examples | 4: 2 found while fixing R1-01, 2 once `AG-047` reached the limbs (a fifth, the vertical strand under `AG-049`, was dismissed under `AG-053`) | R1-02 (`AG-044`), R1-03 (`AG-046`), R1-05 (`AG-047`), R1-04 (`AG-048`), R1-07 (`AG-050`, `AG-052`), R1-23 (`AG-053`); R1-06's colour half (`AG-049`); `AG-051`, a regression `AG-048` shipped in `0.5.3` | 0 | 80 |
 | iter-03 (round 2) | all 45 surfaces at `f370414` (`AG-053`): 12 recorders, 9 terminal, 24 windowed; 0 missing, no hang | 27 candidates, 0 high, 9 medium, 18 low (`docs/visual-pass-round-2.md`); R2-05 and R2-09 are two of iter-02's four | 11 round-1 rows confirmed fixed and 2 partly by eleven inspection agents; R2-05 by `AG-054`, after the render | 0 | 100: 72 round-1 rows, 26 of round 2's, and iter-02's pale cut face and shoulder blade |
+| iter-04 (round 3) | all 45 surfaces at `e137d9b` (`AG-064`): 12 recorders, 9 terminal, 24 windowed; 0 missing, no timeout | 9 candidates, 0 high, 1 medium, 8 low (`docs/visual-pass-round-3.md`) | 9 open rows confirmed fixed: R1-07, R1-18, R1-21, R1-36, R1-38, R1-61, R2-01, R2-05, R2-13; 14 partly | 0 | 102: 92 re-judged rows still open, R2-23 not re-judged, and the 9 new |
 
 **Round 1 found 83 candidates.** The work then moved to performance (`AG-039` … `AG-041`,
 released as `0.5.1` and `0.5.2`, neither of which changed a pixel) and to the harness (`AG-042`).
@@ -971,6 +972,12 @@ two scenes still lit three times too bright for their exposure (`explode`'s cut 
 highest trailing no ribbon, pools that stay separate where `DEMOS.md` promises one slick, a sheet the
 preset says is spattered and never is, `rheology`'s later rods drawn thinner, a fracture-modes clip that
 ends on a long still of a small heap, and the ribbons warnings `AG-054` has since removed.
+
+**Round 3 found nothing high either.** Its list is `docs/visual-pass-round-3.md`. Of round 2's nine
+medium rows, three are confirmed fixed (`explode`'s cut faces and the gut colour by `AG-055`, the
+ribbons warnings by `AG-054`) and the stains at the feet partly (`AG-057`). The one new medium row is a
+settled chunk in `capture_carnage` whose broad flat cut face catches the sun at the mirror angle and
+reads as a pink tile for 160 frames.
 
 ---
 
