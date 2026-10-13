@@ -12,7 +12,7 @@
 //! | 0–89 | `cross_section` | the body exploded slowly, every cap banded by its region |
 //! | 90–179 | `fracture_modes` | a blow on the shoulder; the islands the modes part fly off |
 //! | 180–299 | `flaymap` | a hit every ten frames at one spot, cratering the torso to bone |
-//! | 300–419 | `laceration` | a slash across the thigh, gaping onto its bed |
+//! | 300–419 | `laceration` | a slash down a round thigh, a spindle gaping onto its wet bed, bleeding |
 //!
 //! Native only: it writes PNGs, and the recorder's `device.poll` has no browser equivalent.
 
@@ -193,15 +193,19 @@ fn main() {
     }
     digests[2] = rec.world().query::<&FlayCanvas>().iter(rec.world()).next().map(|c| c.digest()).unwrap_or(0);
 
-    // ---- Phase 4: laceration. A slash across the thigh, opening. ---------------------------
+    // ---- Phase 4: laceration. A slash across the thigh, opening, and bleeding. --------------
+    // The blockout's legs are boxes, and a cut on a flat box face read as a ribbon on a plank; the
+    // clip stands the body on two round, tapering legs instead, dense enough for the cut to open.
+    round_legs(rec.world());
     lacerate(rec.world());
     rec.warm_up(2);
     for frame in 300..420 {
         // A slow swing across the slash, so the lips and the trough's walls catch the light from
         // both sides rather than reading as stripes painted on the thigh.
         let swing = ((frame - 300) as f32 / 120.0 - 0.5) * 0.7;
-        let target = Vec3::new(-0.13, 0.30, 0.12);
-        aim(rec.world(), target + Quat::from_rotation_y(swing) * Vec3::new(0.23, 0.25, 0.63), target);
+        let target = Vec3::new(-0.13, 0.34, 0.12);
+        aim(rec.world(), target + Quat::from_rotation_y(swing) * Vec3::new(0.20, 0.10, 0.48), target);
+        bleed_cut(rec.world(), frame);
         rec.shoot();
     }
     digests[3] = fnv_positions(rec.world());
@@ -337,54 +341,21 @@ fn spawn_intact(world: &mut World) {
             let h = world.resource_mut::<Assets<Mesh>>().add(mesh);
             world.spawn((Mesh3d(h), MeshMaterial3d(material), at, flay, wet, Torso, Phase(3)));
         } else {
-            // **The thigh under the slash is drawn without its front face**, and the skin patch
-            // takes that face's place. Laid proud of a closed cuboid, the patch's trough ran into
-            // the solid thigh and was hidden by its front face, so the wound showed only its upper
-            // walls — two yellow lines on the leg.
-            let mesh = if i == 4 { open_front(mesh) } else { mesh };
             let h = world.resource_mut::<Assets<Mesh>>().add(mesh);
-            world.spawn((Mesh3d(h), MeshMaterial3d(flesh.clone()), at, Phase(3)));
-            if i == 4 {
-                // **The skin the slash cuts is a dense patch laid on the thigh's front.** The
-                // blockout's cuboid has four vertices per face and the tear kernel works with the
-                // vertices a mesh has, so a coarse face cannot open; a 24×24 patch can.
-                let Some((_, c, hx)) = body::parts().get(i).copied() else { continue };
-                let patch = bevy_carnage::laceration::skin_patch(24, 1.0);
-                let source = world.resource_mut::<Assets<Mesh>>().add(patch.clone());
-                let drawn = world.resource_mut::<Assets<Mesh>>().add(patch);
-                // The patch is built facing +Y over [-0.5, 0.5]²; scale it to the face and turn it to +Z.
-                let xf = Transform::from_translation(ORIGIN + c + Vec3::Z * hx.z)
-                    .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
-                    .with_scale(Vec3::new(hx.x * 2.0, 1.0, hx.y * 2.0));
-                world.spawn((Mesh3d(drawn), MeshMaterial3d(flesh.clone()), xf, Phase(3), Thigh, IntactThigh(source)));
+            let mut e = world.spawn((Mesh3d(h), MeshMaterial3d(flesh.clone()), at, Phase(3)));
+            if i >= 4 {
+                e.insert(Leg);
             }
         }
     }
 }
 
-/// `mesh` without the triangles that face `+Z` — a cuboid open at the front.
-fn open_front(mut mesh: Mesh) -> Mesh {
-    let kept: Option<Vec<u32>> = match (mesh.attribute(Mesh::ATTRIBUTE_NORMAL), mesh.indices()) {
-        (Some(bevy::mesh::VertexAttributeValues::Float32x3(normals)), Some(idx)) => {
-            let front = |i: usize| normals.get(i).is_some_and(|n| n[2] > 0.9);
-            let all: Vec<usize> = idx.iter().collect();
-            Some(
-                all.chunks_exact(3)
-                    .filter(|t| !(front(t[0]) && front(t[1]) && front(t[2])))
-                    .flat_map(|t| t.iter().map(|&i| i as u32))
-                    .collect(),
-            )
-        }
-        _ => None,
-    };
-    if let Some(kept) = kept {
-        mesh.insert_indices(bevy::mesh::Indices::U32(kept));
-    }
-    mesh
-}
-
 #[derive(Component)]
 struct IntactThigh(Handle<Mesh>);
+
+/// A leg of the blockout, replaced by a round one for the laceration clip.
+#[derive(Component)]
+struct Leg;
 
 /// Peel the torso with hit `n`, and bleed into it. Each hit lands a little off the last and a little
 /// wider or narrower, on a golden-angle spiral — deterministic, and enough to grow a ragged crater
@@ -430,18 +401,117 @@ fn peel(world: &mut World, tick: u32, n: u32, depth_mm: f32) {
     }
 }
 
+/// **Two round legs in place of the blockout's boxes**, for the laceration clip. Each is a tapering
+/// elliptical tube the size of its box, dense enough — 3–6 mm between vertices — for a cut a few
+/// centimetres wide to open, in a skin texture under the flesh material. The left thigh is the one the
+/// slash cuts: its drawn mesh and its intact source are separate handles, and it carries a wetmap
+/// for the blood.
+fn round_legs(world: &mut World) {
+    let boxes: Vec<Entity> = world.query_filtered::<Entity, With<Leg>>().iter(world).collect();
+    for e in boxes {
+        world.despawn(e);
+    }
+    let (skin, wet) = {
+        let mut images = world.resource_mut::<Assets<Image>>();
+        (common::preset_scene::skin_texture(&mut images), WetCanvas::new(&mut images, 256, [1.0; 3], 0.55))
+    };
+    let layers = Layers::for_region(Region::Limb);
+    let params = FleshParams::for_layers(&layers, FleshMode::Canvas, Scale::default().mm_per_unit);
+    let base = StandardMaterial { base_color_texture: Some(skin), perceptual_roughness: 0.55, ..default() };
+    let (cut, whole) = {
+        let tables = world.resource::<FleshTables>().clone();
+        (tables.material(base.clone(), params, Some(wet.roughness()), None), tables.material(base, params, None, None))
+    };
+    let (cut, whole) = {
+        let mut flesh = world.resource_mut::<Assets<FleshMaterial>>();
+        (flesh.add(cut), flesh.add(whole))
+    };
+    let mut wet = Some(wet);
+    for (i, (_, c, h)) in body::parts().into_iter().enumerate().skip(4) {
+        let tube = limb_tube(h);
+        let at = Transform::from_translation(ORIGIN + c);
+        if i == 4
+            && let Some(wet) = wet.take()
+        {
+            let source = world.resource_mut::<Assets<Mesh>>().add(tube.clone());
+            let drawn = world.resource_mut::<Assets<Mesh>>().add(tube);
+            world.spawn((Mesh3d(drawn), MeshMaterial3d(cut.clone()), at, Phase(4), Thigh, IntactThigh(source), wet));
+        } else {
+            let h = world.resource_mut::<Assets<Mesh>>().add(tube);
+            world.spawn((Mesh3d(h), MeshMaterial3d(whole.clone()), at, Phase(4)));
+        }
+    }
+}
+
+/// Columns around and rings along a [`limb_tube`].
+const TUBE_AROUND: u32 = 128;
+const TUBE_ALONG: u32 = 160;
+
+/// **A tapering elliptical tube** standing in a box of half-extents `h`: the box's radii at the top,
+/// three quarters of them at the bottom, `+z` at angle zero so the front of the leg faces the camera.
+/// `UV_0` is isotropic — a metre is the same UV distance around as along — so a blood stain on it is
+/// round, and `+v` runs down the leg.
+fn limb_tube(h: Vec3) -> Mesh {
+    let (around, along) = (TUBE_AROUND, TUBE_ALONG);
+    let girth = std::f32::consts::TAU * ((h.x * h.x + h.z * h.z) * 0.5).sqrt();
+    let span = girth.max(h.y * 2.0);
+    let (mut pos, mut nrm, mut uv) = (Vec::new(), Vec::new(), Vec::new());
+    for j in 0..=along {
+        let t = j as f32 / along as f32;
+        let s = 1.0 - 0.25 * t;
+        let y = h.y - t * h.y * 2.0;
+        for k in 0..=around {
+            let a = std::f32::consts::TAU * k as f32 / around as f32;
+            let (rx, rz) = (h.x * s, h.z * s);
+            pos.push([rx * a.sin(), y, rz * a.cos()]);
+            nrm.push(Vec3::new(a.sin() / rx, 0.0, a.cos() / rz).normalize_or_zero().to_array());
+            uv.push([k as f32 / around as f32 * girth / span, t * h.y * 2.0 / span]);
+        }
+    }
+    let row = around + 1;
+    let mut idx = Vec::new();
+    for j in 0..along {
+        for k in 0..around {
+            let (a, b, c, d) = (j * row + k, j * row + k + 1, (j + 1) * row + k, (j + 1) * row + k + 1);
+            idx.extend_from_slice(&[a, c, b, b, c, d]);
+        }
+    }
+    let mut mesh = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+    mesh.insert_indices(bevy::mesh::Indices::U32(idx));
+    mesh
+}
+
+/// **Where the slash runs**, in the left thigh's own space: down and across the front of the leg,
+/// sampled on the tube's surface every 2 cm so the polyline lies on the skin it cuts.
+fn slash_path() -> Vec<Vec3> {
+    let Some((_, _, h)) = body::parts().get(4).copied() else { return Vec::new() };
+    let (from, to) = (Vec2::new(-0.045, 0.14), Vec2::new(0.035, -0.06));
+    (0..=10)
+        .map(|i| {
+            let p = from.lerp(to, i as f32 / 10.0);
+            let s = 1.0 - 0.25 * ((h.y - p.y) / (h.y * 2.0));
+            let (rx, rz) = (h.x * s, h.z * s);
+            Vec3::new(p.x, p.y, rz * (1.0 - (p.x / rx).powi(2)).max(0.0).sqrt())
+        })
+        .collect()
+}
+
 fn lacerate(world: &mut World) {
     let now = world.get_resource::<LacerationClock>().map_or(0, |c| c.0);
     let ent: Option<(Entity, Handle<Mesh>)> =
         world.query_filtered::<(Entity, &IntactThigh), With<Thigh>>().iter(world).next().map(|(e, s)| (e, s.0.clone()));
     let Some((entity, source)) = ent else { return };
-    // The patch's own space: a unit square in XZ facing +Y, scaled onto the thigh by its transform.
+    // Metres, on the thigh: a 21 cm slash that gapes 3 cm across, its skin pushed back over 3 cm.
     world.entity_mut(entity).insert(Laceration {
-        path: vec![Vec3::new(-0.35, 0.0, 0.2), Vec3::new(0.35, 0.0, -0.2)],
-        normal: Vec3::Y,
-        gape: Gape { width_max: 0.16, open_ticks: 80 },
-        tension: Tension { skin: 0.9, langer: Some([0.0, 1.0, 0.0]) },
-        influence: 0.25,
+        path: slash_path(),
+        normal: Vec3::Z,
+        gape: Gape { width_max: 0.04, open_ticks: 80 },
+        // A thigh's Langer lines run round the limb, so a cut down it is across them and gapes wide.
+        tension: Tension { skin: 0.9, langer: Some([1.0, 0.0, 0.0]) },
+        influence: 0.03,
         // Into the muscle, well short of the femur at 27.8 mm. At 14 mm the trough was half fat, and
         // a slash read as yellow stripes on the thigh rather than as a cut.
         bed_depth_mm: 24.0,
@@ -450,6 +520,75 @@ fn lacerate(world: &mut World) {
         source,
         ..default()
     });
+}
+
+/// **The cut bleeds.** Blood wells over the lower lip at three points and runs: a drop every other
+/// frame at each, small enough that the wetmap's drip pass draws each into its own rivulet down the
+/// leg rather than a pond around the wound. Painted by UV from the tube's own parametrisation, since a
+/// ray at the wound now goes through it.
+fn bleed_cut(world: &mut World, frame: u32) {
+    let settings = world.get_resource::<WetSettings>().cloned().unwrap_or_default();
+    let Some((_, _, h)) = body::parts().get(4).copied() else { return };
+    let girth = std::f32::consts::TAU * ((h.x * h.x + h.z * h.z) * 0.5).sqrt();
+    let span = girth.max(h.y * 2.0);
+    let uv_of = |p: Vec3| {
+        let t = (h.y - p.y) / (h.y * 2.0);
+        let s = 1.0 - 0.25 * t;
+        let a = (p.x / (h.x * s)).atan2(p.z / (h.z * s)).rem_euclid(std::f32::consts::TAU);
+        Vec2::new(a / std::f32::consts::TAU * girth / span, t * h.y * 2.0 / span)
+    };
+    let path = slash_path();
+    // The lower lip is on the cut's `+x` side: perpendicular to its run, which falls to the right.
+    let (Some(first), Some(last)) = (path.first(), path.last()) else { return };
+    let run = (*last - *first).truncate().normalize_or_zero();
+    let below = Vec3::new(-run.y, run.x, 0.0) * if run.x > 0.0 { -1.0 } else { 1.0 };
+    let mut q = world.query_filtered::<&mut WetCanvas, With<Thigh>>();
+    for mut wet in q.iter_mut(world) {
+        let since = frame.saturating_sub(306);
+        // The margins first: a smear along both lips as the cut opens, as a blade leaves them.
+        if frame == 306 {
+            // Every 4 mm along the cut, either side, as far out as the lip is at that point: the
+            // wound is a spindle, so the smear closes in toward both ends with it.
+            let steps = 54;
+            for j in 0..=steps {
+                let u = j as f32 / steps as f32;
+                let at = u * (path.len() - 1) as f32;
+                let (i0, f) = (at.floor() as usize, at.fract());
+                let (Some(a), Some(b)) = (path.get(i0), path.get((i0 + 1).min(path.len() - 1))) else { continue };
+                let p = a.lerp(*b, f);
+                let open = (std::f32::consts::PI * u).sin().max(0.0).powf(bevy_carnage::laceration::GAPE_TAPER);
+                for side in [1.0f32, -1.0] {
+                    let shape = StainShape {
+                        major: 0.007 / span,
+                        minor: 0.0035 / span,
+                        spines: 0,
+                        satellites: 0,
+                        direction: [run.x, -run.y],
+                        seed: (j as u32).wrapping_mul(0x85EB_CA6B) ^ side.to_bits(),
+                    };
+                    wet.paint_uv_with(uv_of(p + below * (0.0125 * open * side)), &shape, frame, &settings);
+                }
+            }
+        }
+        if frame >= 306 && since % 2 == 0 && since < 100 {
+            // Three runs over the lower lip, each fed its own drop and a little different in size.
+            for (n, k) in [4usize, 7, 9].into_iter().enumerate() {
+                let Some(p) = path.get(k) else { continue };
+                let lip = *p + below * 0.013;
+                let size = (0.0026 + 0.0008 * n as f32) / span;
+                let shape = StainShape {
+                    major: size * 1.4,
+                    minor: size,
+                    spines: 0,
+                    satellites: 0,
+                    direction: [0.0, 1.0],
+                    seed: (n as u32).wrapping_mul(0x9E37_79B9) ^ frame,
+                };
+                wet.paint_uv_with(uv_of(lip), &shape, frame, &settings);
+            }
+        }
+        wet.tick(frame, Vec2::new(0.0, 1.0), &settings);
+    }
 }
 
 /// FNV-1a over every transform's translation bits, in entity order — the phase's digest.

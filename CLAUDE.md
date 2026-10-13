@@ -436,7 +436,7 @@ Only positions and indices are rewritten. Everything else — normals, `UV_0`, `
 
 #### No number without a source, and a made-up number says so
 
-Three papers carry this crate, cited in `src/curve.rs` and `src/tear.rs` module docs with their DOIs. Everything else is flagged in the doc comment as this crate's own: `Gape::open_ticks` (no paper gives a *rate*), the `3` in the exponent (the 95 %-at-`open_ticks` choice), `RAIL_WANDER` and `WANDER_MM` (nothing tabulates the raggedness of a wound margin), and `ALONG_LANGER_FACTOR`, which is a **stiffness** ratio used as a **gape** proxy. A new number goes in with its DOI or with the flag; never silently.
+Three papers carry this crate, cited in `src/curve.rs` and `src/tear.rs` module docs with their DOIs. Everything else is flagged in the doc comment as this crate's own: `Gape::open_ticks` (no paper gives a *rate*), the `3` in the exponent (the 95 %-at-`open_ticks` choice), `RAIL_WANDER` and `WANDER_MM` (nothing tabulates the raggedness of a wound margin), `GAPE_TAPER` (nothing measures a wound's width along its length), `BED_BLOOD` and the film's two strengths (picked by eye against the strip), and `ALONG_LANGER_FACTOR`, which is a **stiffness** ratio used as a **gape** proxy. A new number goes in with its DOI or with the flag; never silently.
 
 #### Nothing panics, and refusals are loud once
 

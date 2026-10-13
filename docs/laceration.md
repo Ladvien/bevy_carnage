@@ -26,6 +26,8 @@ All three of those are cheap. This crate does them on the CPU, from an intact so
 
 **The vertex buffer never changes length.** Only positions and indices are rewritten, so `ATTRIBUTE_JOINT_INDEX`, `ATTRIBUTE_JOINT_WEIGHT`, `UV_0`, normals, vertex colours and anything custom arrive untouched — a wound can be cut into a skinned character without invalidating its skinning.
 
+**A cut is a spindle, not a slot.** A blade parts the skin widest where it went in deepest and not at all at either end, so the half-width at arc length `s` of a path `L` long is `half_width · sin(π·s/L)^GAPE_TAPER`, and the bed's floor shallows with it to the skin at both tips. Every pass above — the clip, the lip, the displacement, the walls — reads that local width, so the mouth, the trough and the floor close together. Until 0.5.33 the gape was one width from end to end with square ends, and on a limb it read as a ribbon laid on the skin rather than an opening in it.
+
 **The gape does not close.** O'Brien, Bargteil & Hodgins (2002) put plastic — permanently retained — deformation ahead of separation in a ductile fracture model. A laceration is the ductile case, so the time curve is monotone and has no closing half:
 
 ```text
@@ -36,6 +38,8 @@ gape(t) = width_max · skin_tension · anisotropy · (1 − e^(−3t/open_ticks)
 
 **The bed is anatomy, not a dark colour.** Every bed vertex gets `UV_1` from `bevy_carnage::cross_section::uv1_at`, so the rails read depth 0 and the floor reads exactly `bed_depth_mm` in that region's strip — skin, fat and muscle at the depths they were measured at, painted by the material the atlas already baked.
 
+**The bed is wet.** A fresh cut fills with its own blood, so every bed vertex carries `ATTRIBUTE_COLOR`, a ratio the material's colour is multiplied by: `BED_BLOOD`, a venous red, at 60 % at the lip and in full on the floor, in long patches along the cut by the same frozen noise the rail wanders by. Fat reads as fat seen through blood in places and is hidden in others; muscle darkens where the blood pools. Bevy's `StandardMaterial` multiplies by a mesh's vertex colour, so the atlas material shows it with no change; a custom bed material that ignores vertex colours shows the clean bands, as before 0.5.33.
+
 **The bed meets the skin.** Its walls rise to the same lip curve the mouth's vertices land on, sampled every 2 mm so they follow the wander. It runs past each end of the path as far as the clip took skin, and a wedge fills the outside of each bend. Until 0.5.3 the walls stopped at the rail while the lips had been pushed past it, so a strip of nothing showed down both sides of the trough. What is left is measured from above: under 5 mm² on a 22 cm slash in 5 mm cells, at the inside corner of its bend, and hairline slivers on a coarse 24-cell patch where the skin's straight edge between two lip vertices cuts inside the walls' curve.
 
 ## What the crate made up, and says so
@@ -43,6 +47,8 @@ gape(t) = width_max · skin_tension · anisotropy · (1 − e^(−3t/open_ticks)
 - **`Gape::open_ticks` is this crate's own number.** No paper in the corpus gives a *rate* at which a wound opens — those are quasi-static tensile tests. The exponential shape is the response of a first-order system relaxing to a new equilibrium, and the `3` in the exponent is the choice that puts 95 % of the width at `open_ticks` (`1 − e⁻³ = 0.9502`).
 - **`ALONG_LANGER_FACTOR` is a stiffness ratio used as a gape proxy.** Ní Annaidh et al. report *moduli*, not wound widths. Equating the ratio of the two moduli with the ratio of the two gapes assumes the lips are released linear springs; that step is this crate's, not the paper's.
 - **`RAIL_WANDER` (15 % of `half_width`) and `WANDER_MM` (8 mm between samples)** are this crate's own: nothing in the corpus tabulates the raggedness of a wound margin. The wander is outward-only, so it can never put a vertex back inside the gap.
+- **`GAPE_TAPER` (0.6) is this crate's own.** Nothing in the corpus measures a wound's width along its length. `sin(π·u)` closes both ends to a point; the power flattens the middle, so most of the cut is near its full width and it narrows over the last fifth at each end, which is how a slash photographs. At `1` the cut is a lens, pointed for half its length.
+- **`BED_BLOOD` and how much of it the bed shows are this crate's own**, picked against the strip's bands so that fat still reads under the film.
 
 
 ## What it exposes
@@ -53,7 +59,8 @@ gape(t) = width_max · skin_tension · anisotropy · (1 − e^(−3t/open_ticks)
 - `LacerationClock` — the integer tick every gape is measured against. Drive it yourself from a fixed step if the wound has to be part of a hashed simulation.
 - `Tension`, `Gape`, `anisotropy`, `gape`, `ALONG_LANGER_FACTOR` — the curve, engine-free apart from `f32`.
 - `tear`, `TearShape`, `Torn`, `tear_direction` — the geometry kernel, a pure function of its arguments.
-- `skin_patch`, `digest` — a flat patch of skin to cut, and FNV-1a over a mesh's positions, which is how the goldens are frozen.
+- `GAPE_TAPER`, `BED_BLOOD` — the cut's profile along its length, and the colour its bed is wet with.
+- `skin_patch`, `digest` — a flat patch of skin to cut, and FNV-1a over a mesh's positions, which is how the goldens are frozen. The bed's colours are not in it: they are cosmetic.
 - `Layers`, `Region` and `Scale` re-exported from `cross_section`, which appear in this crate's own signatures.
 
 The entity's `Mesh3d` handle and `Laceration::source` **must be different handles** — the plugin writes the first and reads the second, and refuses (once, loudly) rather than destroying the intact copy.

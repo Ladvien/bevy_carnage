@@ -7,7 +7,7 @@
 
 use bevy::math::Vec3;
 use bevy::mesh::{Indices, Mesh, PrimitiveTopology, VertexAttributeValues};
-use bevy_carnage::laceration::{Layers, Region, Scale, TearShape, digest, skin_patch, tear};
+use bevy_carnage::laceration::{GAPE_TAPER, Layers, Region, Scale, TearShape, digest, skin_patch, tear};
 
 /// The grid every geometric test cuts: 21 × 21 vertices over one metre, so a cell is 50 mm and a
 /// 60 mm half-gape swallows whole triangles rather than clipping single ones.
@@ -102,7 +102,13 @@ fn tearing_a_grid_removes_faces_and_displaces_neighbours() {
         "the vertex buffer must keep its length, or a skinned mesh's joint weights stop lining up"
     );
 
-    // The gap is empty: no vertex the surviving triangles reference is inside the mouth.
+    // The gap is empty: no vertex the surviving triangles reference is inside the mouth, which is a
+    // spindle — the half-width at a point of the middle row is `half · sin(π·u)^GAPE_TAPER`, `u` the
+    // fraction of the 0.8 m path the point is along.
+    let open_at = |v: Vec3| {
+        let u = ((v.x + 0.4) / 0.8).clamp(0.0, 1.0);
+        half * (std::f32::consts::PI * u).sin().max(0.0).powf(GAPE_TAPER)
+    };
     let moved = positions(&torn.skin);
     for tri in &after {
         for i in tri {
@@ -110,12 +116,19 @@ fn tearing_a_grid_removes_faces_and_displaces_neighbours() {
                 panic!("kept index {i} is out of range");
             };
             let d = flat_distance(*v, &path, Vec3::Y);
-            assert!(
-                d >= half - 1.0e-5,
-                "vertex {i} at {v:?} sits {d} from the cut, inside a {half} half-gape"
-            );
+            let open = open_at(*v);
+            assert!(d >= open - 1.0e-5, "vertex {i} at {v:?} sits {d} from the cut, inside a {open} half-gape there");
         }
     }
+    // And it is a spindle, not a slot: in the middle the mouth is the full half-gape wide, and in the
+    // last eighth of the cut, where `sin(π·u)^GAPE_TAPER` is under 0.57, the surviving skin comes well
+    // inside it. A constant-width slot holds the full half-gape there too, and fails.
+    let closest = |lo: f32, hi: f32| {
+        after.iter().flatten().filter_map(|i| moved.get(*i as usize)).filter(|v| v.x >= lo && v.x <= hi).map(|v| flat_distance(*v, &path, Vec3::Y)).fold(f32::INFINITY, f32::min)
+    };
+    let (middle, end) = (closest(-0.05, 0.05), closest(0.3, 0.4));
+    assert!(middle >= half - 1.0e-5, "the middle of the mouth is {middle} wide, under the {half} half-gape");
+    assert!(end < 0.75 * half, "the mouth is {end} wide near its end against {middle} in its middle: a slot, not a spindle");
 
     // The displacement is local: a vertex outside the influence radius is exactly where it started.
     let original = positions(&patch);
@@ -146,31 +159,30 @@ fn the_bed_floor_sits_at_the_authored_depth() {
     assert!(!pos.is_empty(), "the bed has no geometry");
     assert_eq!(pos.len(), uv.len(), "every bed vertex needs a UV_1, or the strip cannot paint it");
 
-    // The floor is the deepest set of vertices along the surface normal; the rails are on the skin.
+    // The floor is deepest in the middle, at the authored depth; it shallows toward the ends with the
+    // gape. Whatever its depth, every bed vertex reads that depth in the strip — the rails `0`, the
+    // floor at the middle exactly `bed_depth_mm`.
     let deepest = pos.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
     let want_floor = shape.bed_depth_mm / layers.span_mm();
     let expect_depth = -shape.bed_depth_mm / scale.mm_per_unit;
     assert!(
         (deepest - expect_depth).abs() < 1.0e-6,
-        "the floor must sit {expect_depth} below the surface, found {deepest}"
+        "the floor must sit {expect_depth} below the surface at its deepest, found {deepest}"
     );
 
     let mut floors = 0;
     let mut rails = 0;
     for (p, uv) in pos.iter().zip(uv.iter()) {
+        let depth_mm = -p.y * scale.mm_per_unit;
+        let want = depth_mm / layers.span_mm();
+        assert!((uv[0] - want).abs() < 1.0e-4, "a bed vertex {depth_mm} mm down reads {} in the strip, expected {want}", uv[0]);
         if (p.y - deepest).abs() < 1.0e-6 {
             floors += 1;
-            assert!(
-                (uv[0] - want_floor).abs() < 1.0e-4,
-                "a floor vertex reads depth {} in the strip, expected {want_floor}",
-                uv[0]
-            );
+            assert!((uv[0] - want_floor).abs() < 1.0e-4, "the floor reads {} in the strip, expected {want_floor}", uv[0]);
         } else if p.y.abs() < 1.0e-6 {
             rails += 1;
-            assert!(uv[0].abs() < 1.0e-4, "a rail is ON the skin, so its depth must be 0, found {}", uv[0]);
-        } else {
-            panic!("a bed vertex is neither on the skin nor on the floor: {p:?}");
         }
+        assert!(p.y <= 1.0e-6 && p.y >= deepest - 1.0e-6, "a bed vertex is above the skin or below the floor: {p:?}");
     }
     assert!(floors > 0 && rails > 0, "the bed must have both a floor and rails, got {floors}/{rails}");
 
@@ -345,9 +357,11 @@ fn the_tear_is_frozen() {
     // triangle beside it), and every vertex on the mouth lands on one lip curve. The bed: its walls
     // rise to that curve, follow the rail's wander and run past both ends as far as the clip did.
     // Before, a diagonal cut opened as a row of pits bridged by skin, with nothing between the walls
-    // and the lips.
-    const FROZEN: u64 = 0xd8df_f15d_9bd8_3f00;
-    const FROZEN_BED: u64 = 0x7baa_cbd6_447e_feb3;
+    // and the lips. Re-blessed again in 0.5.33 (`AG-106`), both halves: the gape is a spindle,
+    // `sin(π·u)^GAPE_TAPER` of the half-width along the cut, and the bed's floor shallows with it, where
+    // it had been a constant-width slot with square ends that read as a ribbon laid on the skin.
+    const FROZEN: u64 = 0x5d7e_ee46_aa39_3f74;
+    const FROZEN_BED: u64 = 0xef18_0e14_5aae_8af6;
     let patch = skin_patch(CELLS, SIZE);
     let torn = tear(
         &patch,

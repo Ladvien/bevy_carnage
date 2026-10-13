@@ -4,7 +4,7 @@ mod curve;
 mod tear;
 
 pub use curve::{ALONG_LANGER_FACTOR, Gape, Tension, anisotropy, gape};
-pub use tear::{RAIL_WANDER, TearShape, Torn, WANDER_MM, digest, skin_patch, tear, tear_direction};
+pub use tear::{BED_BLOOD, GAPE_TAPER, RAIL_WANDER, TearShape, Torn, WANDER_MM, digest, skin_patch, tear, tear_direction};
 
 /// The three types that appear in this crate's own signatures — [`tear`] takes all three and
 /// [`Laceration`] carries a [`Region`]. Re-exported so calling this crate does not oblige a caller to

@@ -1,5 +1,10 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.33`: a laceration is a spindle** (`AG-106`). Every slash opened one width from end to end
+# with square ends, onto a clean dry bed, and on a limb it read as a ribbon laid on the skin. The gape
+# now closes to a point at both ends (`GAPE_TAPER`), the floor shallows with it, and the bed is wet with
+# its own blood (`BED_BLOOD`, as vertex colour). `the_tear_is_frozen` is re-blessed, both halves.
+#
 # **`0.5.32`: the spray stops at what it reaches** (`AG-105`). Every surface took every droplet aimed
 # at it. Each droplet now stains the nearest thing on its line, flies through a cloth's hole, and one a
 # surface caught does not also land on the floor.
@@ -176,7 +181,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.32"
+version = "0.5.33"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

@@ -11,9 +11,10 @@
 //! things:
 //!
 //! 1. **A user-defined width along a sampled path** (§3.1). The path is a polyline the caller hands
-//!    in; the width is [`TearShape::half_width`] either side of it. Not a physical crack criterion —
-//!    the paper's tear is authored, and so is this one, which is why a gape can be driven from a
-//!    time curve instead of a stress solve.
+//!    in; the width is [`TearShape::half_width`] either side of it at the middle, closing to nothing
+//!    at both ends by [`GAPE_TAPER`]. Not a physical crack criterion — the paper's tear is authored,
+//!    and so is this one, which is why a gape can be driven from a time curve instead of a stress
+//!    solve.
 //! 2. **Faces inside the gap are clipped** (§3.1). Here: a triangle whose three vertices all lie
 //!    within `half_width` of the polyline is removed outright, and so, once the wound is open at all,
 //!    is every triangle the path itself passes through. The paper subdivides the partially covered
@@ -31,8 +32,8 @@
 //! **A vertex on the mouth lands on one curve, the lip**: the rail, pushed by the same falloff a
 //! vertex sitting at the rail would get. That is every vertex inside the gape and every vertex of a
 //! clipped triangle within the influence radius. The bed's walls rise to that same curve, sampled
-//! finely enough to follow the rail's wander, and run `half_width` past each end of the path, where
-//! the clipped slot reaches.
+//! finely enough to follow the rail's wander, and run past each end of the path as far as the clip
+//! took skin, closed to a point there with the lips.
 //!
 //! Both halves were measured wrong before. Clipping only triangles with all three vertices inside
 //! left every triangle the cut crossed diagonally in place, stretched across the gap as a bridge, so
@@ -57,8 +58,9 @@
 //!
 //! # Where the numbers come from
 //!
-//! [`RAIL_WANDER`] and [`WANDER_MM`] are **this crate's own** — no paper in the corpus tabulates the
-//! raggedness of a wound margin. Everything else geometric is the caller's authoring.
+//! [`RAIL_WANDER`], [`WANDER_MM`], [`GAPE_TAPER`] and [`BED_BLOOD`] are **this crate's own** — no
+//! paper in the corpus tabulates the raggedness of a wound margin, its width along its length or the
+//! colour of the blood in it. Everything else geometric is the caller's authoring.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::log::warn_once;
@@ -80,6 +82,14 @@ pub const RAIL_WANDER: f32 = 0.15;
 /// **Millimetres between wander samples.** This crate's own number, in millimetres rather than mesh
 /// units so the raggedness is the same physical size whatever a caller's mesh is authored at.
 pub const WANDER_MM: f32 = 8.0;
+
+/// **How the gape narrows to the ends of the cut**: the half-width at arc length `u` of the way along
+/// is `half_width · sin(π·u)^GAPE_TAPER`, and the bed's depth follows the same profile. An incised
+/// wound gapes as a spindle — widest where the skin was cut furthest from either end, closed at both
+/// tips, which is the fusiform shape of every photographed one — and shallows toward its tail. A
+/// constant width opened a parallelogram with square ends, a ribbon laid on the skin. The exponent is
+/// this crate's own: under one so the body of the wound is full and only the last fifth or so narrows.
+pub const GAPE_TAPER: f32 = 0.6;
 
 /// **The shape of the wound right now** — a snapshot, not a schedule. The caller advances
 /// `half_width` from [`crate::laceration::gape`] and hands in a new one each time the gape moves.
@@ -202,7 +212,9 @@ pub fn tear(
     }
     let scale = sane(scale);
     let seed = region_seed(region);
-
+    // The wound's length, which the taper is a fraction of, and the half-width at an arc length.
+    let total = segs.last().map_or(0.0, |s| s.along + s.len);
+    let half_at = |along: f32| shape.half_width * taper(along, total);
     // Pass one: measure. Every later decision reads these, so the distance is computed once.
     let near: Vec<Option<Near>> = verts.iter().map(|v| nearest(*v, &segs, n)).collect();
 
@@ -239,7 +251,7 @@ pub fn tear(
     // whole face — would leave a hole the bed cannot fill: `0.5.3` cut the face off a cuboid leg that
     // way and the leg looked severed. Such a mesh is too coarse to open, and its wound stays closed.
     let open = shape.half_width > 0.0;
-    let inside = |i: u32| near.get(i as usize).and_then(|n| n.as_ref()).is_some_and(|n| n.dist < shape.half_width);
+    let inside = |i: u32| near.get(i as usize).and_then(|n| n.as_ref()).is_some_and(|n| n.dist < half_at(n.along));
     let plane = Plane2::new(n);
     let flat: Vec<Vec2> = verts.iter().map(|v| plane.at(*v)).collect();
     let cut: Vec<[Vec2; 2]> = segs.iter().map(|s| [plane.at(s.a), plane.at(s.a + s.dir * s.len)]).collect();
@@ -294,8 +306,8 @@ pub fn tear(
         let mut p = *v;
         if let Some(near) = near {
             let lateral = near.sign * n.cross(near.dir);
-            let mouth = near.dist < shape.half_width
-                || (on_mouth.get(i).copied().unwrap_or(false) && near.dist < shape.influence);
+            let half = half_at(near.along);
+            let mouth = near.dist < half || (on_mouth.get(i).copied().unwrap_or(false) && near.dist < shape.influence);
             if open && mouth {
                 // **Pushed sideways only, never repositioned.** Setting the vertex to
                 // `nearest + lip·lateral` would look right in the middle of the cut and pinch at
@@ -305,9 +317,9 @@ pub fn tear(
                 // components exactly as authored, so a slash ends in a slot rather than a purse.
                 // A clipped triangle's outside vertex can sit past the lip, and comes back to it.
                 let lat = (*v - near.point).dot(lateral);
-                p += lateral * (lip(shape, inv_influence, near.along, near.sign, seed, &scale) - lat);
+                p += lateral * (lip(half, inv_influence, near.along, near.sign, seed, &scale) - lat);
             } else if near.dist < shape.influence {
-                p += lateral * (shape.half_width * falloff(near.dist, inv_influence).powi(2));
+                p += lateral * (half * falloff(near.dist, inv_influence).powi(2));
             }
         }
         if p != *v {
@@ -487,17 +499,28 @@ fn nearest(v: Vec3, segs: &[Seg], normal: Vec3) -> Option<Near> {
     best
 }
 
-/// Where the rail sits: `half_width` plus the outward wander at this arc length.
+/// Where the rail sits: the local half-width plus the outward wander at this arc length.
 fn rail(half_width: f32, along: f32, sign: f32, seed: u32, scale: &Scale) -> f32 {
     half_width * (1.0 + wander(along, lip_seed(seed, sign), scale))
 }
 
 /// **Where the lip sits**: the rail, pushed by the falloff a vertex at the rail would get. A vertex
 /// just outside the gape is pushed by about the same amount, so the skin stays in order across the
-/// lip, and the bed's walls rise to exactly this curve.
-fn lip(shape: &TearShape, inv_influence: f32, along: f32, sign: f32, seed: u32, scale: &Scale) -> f32 {
-    let r = rail(shape.half_width, along, sign, seed, scale);
-    r + shape.half_width * falloff(r, inv_influence).powi(2)
+/// lip, and the bed's walls rise to exactly this curve. `half_width` is the local one, tapered.
+fn lip(half_width: f32, inv_influence: f32, along: f32, sign: f32, seed: u32, scale: &Scale) -> f32 {
+    let r = rail(half_width, along, sign, seed, scale);
+    r + half_width * falloff(r, inv_influence).powi(2)
+}
+
+/// **How open the wound is at arc length `along` of `total`**, from `0` at each end to `1` at the
+/// middle: `sin(π·u)^GAPE_TAPER`. See [`GAPE_TAPER`].
+fn taper(along: f32, total: f32) -> f32 {
+    if total.is_nan() || total <= 0.0 {
+        return 1.0;
+    }
+    let u = (along / total).clamp(0.0, 1.0);
+    // `sin(π)` is a hair below zero in `f32`, and a negative base has no real power: clamp it.
+    libm::powf(libm::sinf(core::f32::consts::PI * u).max(0.0), GAPE_TAPER)
 }
 
 /// `1 - d/influence`, floored at zero, and zero when there is no influence radius at all.
@@ -619,10 +642,11 @@ struct BedVert {
 #[allow(clippy::too_many_arguments)]
 fn bed_mesh(segs: &[Seg], n: Vec3, shape: &TearShape, inv_influence: f32, reach: [f32; 2], seed: u32, layers: &Layers, scale: &Scale) -> Mesh {
     let depth = (shape.bed_depth_mm / scale.mm_per_unit).max(0.0);
+    let total = segs.last().map_or(0.0, |s| s.along + s.len);
     // A quarter of the wander's sample spacing, so the walls follow the smoothstep between samples
     // instead of cutting straight across the ragged lip they are meant to meet.
     let step = (WANDER_MM * 0.25 / scale.mm_per_unit).max(1.0e-6);
-    let mut b = Bed::default();
+    let mut b = Bed { deepest: depth, seed: seed ^ 0x0B10_0D5E, ..Bed::default() };
     let last = segs.len().saturating_sub(1);
     // The previous segment's far section and its `side`, for the wedge on the outside of a bend.
     let mut previous: Option<([BedVert; 3], Vec3)> = None;
@@ -634,15 +658,19 @@ fn bed_mesh(segs: &[Seg], n: Vec3, shape: &TearShape, inv_influence: f32, reach:
         let start = if i == 0 { -reach[0] } else { 0.0 };
         let stop = seg.len + if i == last { reach[1] } else { 0.0 };
         let pieces = ((stop - start) / step).ceil().clamp(1.0, MAX_BED_PIECES) as u32;
+        // The walls rise to the tapered lip, and the floor shallows with the same profile, so the
+        // trough closes to a point at both ends of the cut rather than ending in a square cap.
         let section = |s: f32| -> [BedVert; 3] {
             let surface = seg.a + seg.dir * s;
             let along = seg.along + s;
-            let hl = lip(shape, inv_influence, along, 1.0, seed, scale);
-            let hr = lip(shape, inv_influence, along, -1.0, seed, scale);
+            let open = taper(along, total);
+            let half = shape.half_width * open;
+            let hl = lip(half, inv_influence, along, 1.0, seed, scale);
+            let hr = lip(half, inv_influence, along, -1.0, seed, scale);
             [
                 BedVert { p: surface + side * hl, surface, along, across: hl },
                 BedVert { p: surface - side * hr, surface, along, across: -hr },
-                BedVert { p: surface - n * depth, surface, along, across: 0.0 },
+                BedVert { p: surface - n * depth * open, surface, along, across: 0.0 },
             ]
         };
         let mut near_end = section(start);
@@ -654,17 +682,18 @@ fn bed_mesh(segs: &[Seg], n: Vec3, shape: &TearShape, inv_influence: f32, reach:
             b.tri([l, r, f], seg.dir, n, layers, scale);
         }
         if let Some((before, side_before)) = &previous {
-            wedge(&mut b, before, &near_end, (*side_before + side).normalize_or_zero(), n, depth, layers, scale);
+            wedge(&mut b, before, &near_end, (*side_before + side).normalize_or_zero(), n, layers, scale);
         }
         for k in 1..=pieces {
             let far_end = section(start + (stop - start) * k as f32 / pieces as f32);
             let [l0, r0, f0] = &near_end;
             let [l1, r1, f1] = &far_end;
             // Left wall, wound counter-clockwise about `h·n - depth·side`, which points at the
-            // trough's axis: down and inward from the `+side` lip.
-            b.quad([l0, f0, f1, l1], (n * l0.across - side * depth).normalize_or_zero(), n, layers, scale);
+            // trough's axis: down and inward from the `+side` lip; the depth is this section's own.
+            let d0 = (f0.surface - f0.p).dot(n);
+            b.quad([l0, f0, f1, l1], (n * l0.across - side * d0).normalize_or_zero(), n, layers, scale);
             // Right wall, the mirror: `h·n + depth·side`.
-            b.quad([r0, r1, f1, f0], (n * -r0.across + side * depth).normalize_or_zero(), n, layers, scale);
+            b.quad([r0, r1, f1, f0], (n * -r0.across + side * d0).normalize_or_zero(), n, layers, scale);
             near_end = far_end;
         }
         if i == last {
@@ -685,9 +714,9 @@ const MAX_BED_PIECES: f32 = 4096.0;
 /// turn and splay apart on the outside, leaving a triangle of nothing between them. One triangle per
 /// wall closes it; the inside one would be wound backwards, so a wedge is drawn only where its own
 /// winding agrees with the way a wall there faces.
-#[allow(clippy::too_many_arguments)]
-fn wedge(b: &mut Bed, before: &[BedVert; 3], after: &[BedVert; 3], side: Vec3, n: Vec3, depth: f32, layers: &Layers, scale: &Scale) {
+fn wedge(b: &mut Bed, before: &[BedVert; 3], after: &[BedVert; 3], side: Vec3, n: Vec3, layers: &Layers, scale: &Scale) {
     let ([lp, rp, f], [ln, rn, _]) = (before, after);
+    let depth = (f.surface - f.p).dot(n);
     let left = (n * lp.across - side * depth).normalize_or_zero();
     if (f.p - lp.p).cross(ln.p - lp.p).dot(left) > 0.0 {
         b.tri([lp, f, ln], left, n, layers, scale);
@@ -698,6 +727,18 @@ fn wedge(b: &mut Bed, before: &[BedVert; 3], after: &[BedVert; 3], side: Vec3, n
     }
 }
 
+/// **The ratio a fresh cut's own blood multiplies its bed by**, where it lies thickest: a venous red
+/// over whatever tissue is under it, so fat reads as fat seen through blood and muscle darkens toward
+/// the floor where it pools. This crate's own colour, picked against the strip's bands.
+pub const BED_BLOOD: [f32; 3] = [0.55, 0.10, 0.09];
+
+/// How much of [`BED_BLOOD`] the bed shows at the lip and at the floor: a film down the walls, a pool
+/// in the trough, in patches along the cut by the same frozen noise the rail wanders by, so the fat
+/// shows through yellow in places and is hidden in others. Own numbers; at `0.35`, and at `0.45`, the
+/// fat still read as a clean pale band from the lip to the muscle.
+const BED_WET_LIP: f32 = 0.6;
+const BED_WET_FLOOR: f32 = 1.0;
+
 /// Accumulator for [`bed_mesh`]. Vertices are duplicated per face on purpose: the walls meet the
 /// floor at a hard crease, and a shared vertex there would average the two normals into a rounded
 /// gutter that no cut has.
@@ -707,7 +748,13 @@ struct Bed {
     nrm: Vec<[f32; 3]>,
     uv0: Vec<[f32; 2]>,
     uv1: Vec<[f32; 2]>,
+    /// The blood over the anatomy, as a ratio the material's colour is multiplied by.
+    color: Vec<[f32; 4]>,
     idx: Vec<u32>,
+    /// The floor's depth at the middle of the cut, mesh units: where the blood is thickest.
+    deepest: f32,
+    /// Seeds the streaks.
+    seed: u32,
 }
 
 impl Bed {
@@ -718,10 +765,24 @@ impl Bed {
         self.uv0.push([v.along, v.across]);
         let plane = [SkinPlane { point: v.surface, normal: n }];
         self.uv1.push(uv1_at(v.p, v.along, &plane, layers, scale).to_array());
+        // **The bed is wet with its own blood**: a film at the lip, a pool on the floor, streaked.
+        let down = if self.deepest > 0.0 { ((v.surface - v.p).dot(n) / self.deepest).clamp(0.0, 1.0) } else { 0.0 };
+        // At the rail's own 8 mm the patches came round as regular stripes across the wall; stretched
+        // to about 23 mm they read as where the blood happened to run.
+        let streak = wander(v.along * 0.35, self.seed, scale) / RAIL_WANDER;
+        let wet = ((BED_WET_LIP + (BED_WET_FLOOR - BED_WET_LIP) * down) * (0.55 + 0.9 * streak)).clamp(0.0, 1.0);
+        self.color.push([1.0 + (BED_BLOOD[0] - 1.0) * wet, 1.0 + (BED_BLOOD[1] - 1.0) * wet, 1.0 + (BED_BLOOD[2] - 1.0) * wet, 1.0]);
         at
     }
 
+    /// One face, unless it has no area — the tapered trough closes to a point at both ends, where a
+    /// section's three vertices meet. A face whose authored normal vanished there takes its own.
     fn tri(&mut self, v: [&BedVert; 3], face: Vec3, n: Vec3, layers: &Layers, scale: &Scale) {
+        let geometric = (v[1].p - v[0].p).cross(v[2].p - v[0].p);
+        if geometric.length_squared().is_nan() || geometric.length_squared() <= 1.0e-24 {
+            return;
+        }
+        let face = if face == Vec3::ZERO { geometric.normalize_or_zero() } else { face };
         let a = self.push(v[0], face, n, layers, scale);
         let b = self.push(v[1], face, n, layers, scale);
         let c = self.push(v[2], face, n, layers, scale);
@@ -729,11 +790,8 @@ impl Bed {
     }
 
     fn quad(&mut self, v: [&BedVert; 4], face: Vec3, n: Vec3, layers: &Layers, scale: &Scale) {
-        let a = self.push(v[0], face, n, layers, scale);
-        let b = self.push(v[1], face, n, layers, scale);
-        let c = self.push(v[2], face, n, layers, scale);
-        let d = self.push(v[3], face, n, layers, scale);
-        self.idx.extend_from_slice(&[a, b, c, a, c, d]);
+        self.tri([v[0], v[1], v[2]], face, n, layers, scale);
+        self.tri([v[0], v[2], v[3]], face, n, layers, scale);
     }
 
     fn finish(self) -> Mesh {
@@ -742,6 +800,7 @@ impl Bed {
         mesh.try_insert_attribute(Mesh::ATTRIBUTE_NORMAL, self.nrm).ok();
         mesh.try_insert_attribute(Mesh::ATTRIBUTE_UV_0, self.uv0).ok();
         mesh.try_insert_attribute(Mesh::ATTRIBUTE_UV_1, self.uv1).ok();
+        mesh.try_insert_attribute(Mesh::ATTRIBUTE_COLOR, self.color).ok();
         mesh.try_insert_indices(Indices::U32(self.idx)).ok();
         mesh
     }

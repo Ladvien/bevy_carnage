@@ -87,7 +87,8 @@ wound under a suit was never seen and the suit took a flat, glossy patch that ra
 as long as the blade and `SLIT_WIDTH` (0.3) of its half-length wide at the middle, its edges wavering
 and frayed, with no wipe around it. Its direction is the blade's travel read in the cloth's own UVs at
 the triangle it crossed, so it lies along the cut whatever way the garment's atlas is laid out. What
-shows through is the laceration as it looks on bare skin: a pale line, its bed the fat layer.
+shows through is the laceration as it looks on bare skin: a spindle closed at both ends, its bed the
+fat layer under a film of its own blood (0.5.33, `laceration::GAPE_TAPER` and `BED_BLOOD`).
 
 **A shot that goes through** (0.5.30). Whether a projectile leaves a body is the game's ballistics —
 calibre, energy, armour — so the game says so: `GoreHit::impact(..).through()`. The preset finds where
