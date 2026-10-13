@@ -34,6 +34,15 @@
 //! caller dials. The film's *colour* is not recomputed here — `wetmap` already composites it on
 //! the CPU from the same spectral model, and that CPU byte is what a golden hashes.
 //!
+//! **A film has a surface** (0.5.47). The film's depth, read from the wet map as a cubic B-spline,
+//! is a height above what it lies on, drawn `FILM_RELIEF` (6) times its depth because a meniscus is
+//! far narrower than a canvas texel, and that height tilts the shading normal and the coat's, by
+//! screen-space derivatives so no tangents are needed (Mikkelsen 2010), never past 25°. A pool's edge
+//! curves down to the floor and catches the light, a run stands up off the skin, and a pool at a
+//! light's mirror angle shows a glint where it was one white sticker. Blood in a peeled crater lies
+//! level in the hollow and a weave holds its blood between the yarns, so neither is lifted; the
+//! relief fades out where a canvas texel is under a pixel. Wet films are at roughness `0.3`.
+//!
 //! **Blood on cloth.** Where the surface under the blood is a fabric rather than skin, the film
 //! colour is composited on the GPU instead: [`blood_lut`] tabulates the Kubelka–Munk film
 //! reflectance from `crate::bloodstain::spectral` over a black and over a white substrate, and the shader
@@ -79,7 +88,11 @@
 //! display, whose WebGL2 is Mesa's llvmpipe (headless Firefox offered none): WebGL 2.0, GLSL ES
 //! 3.00, the `Gl` backend; the limb, the sphere's crater and its run and the sheet's streaks drew,
 //! and the console held only Bevy's notices about the software driver and the plugins that need what
-//! WebGL2 lacks. The demo site itself stays WebGPU, like every other module on it.
+//! WebGL2 lacks. Again after a film was given a surface (2026-10-13, 0.5.47, `AG-120`), whose shader
+//! takes screen-space derivatives of the world position and the UV and samples the wet map five
+//! times: the same build, browser and driver drew the sphere's run standing and shining, the limb and
+//! the sheet, with the same notices and nothing else. The demo site itself stays WebGPU, like every
+//! other module on it.
 //!
 //! The uniform block is sixteen-byte aligned, there are no storage buffers, and the extension adds
 //! five textures and one sampler to `StandardMaterial`'s. The shader reads the metallic-roughness
@@ -129,8 +142,9 @@ pub enum FleshMode {
     /// A body canvas: tissue from the flaymap's depth byte, wetness from the wetmap's.
     Canvas,
     /// A fabric canvas: no subsurface; the wetmap's amount byte composites blood over the base. Blood
-    /// in a weave is held between the yarns, so a wet patch stays matte where a film on a floor
-    /// shines: its roughness goes to `0.7` rather than `0.45`, and its clear coat is a third.
+    /// in a weave is held between the yarns, so a wet patch stays matte and flat where a film on a
+    /// floor shines and stands: its roughness goes to `0.7` rather than `0.3`, its clear coat is a
+    /// third, and it is not lifted.
     Cloth,
     /// A floor, a wall or a slab: as [`Cloth`](Self::Cloth), but blood stands on it as a film and
     /// pools shine.

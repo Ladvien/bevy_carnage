@@ -61,6 +61,18 @@ const PI: f32 = 3.141592653589793;
 // crate's own number; at 8 % the thin smear a blade leaves along a cut's lips was cut away.
 const WET_EDGE: f32 = 0.04;
 
+// **How much higher a film's surface is drawn than its depth**: 6. A pool's edge is a meniscus a
+// millimetre or two wide, far narrower than a canvas texel, so the smoothed depth climbs over a
+// texel what the blood climbs over its meniscus; drawn at its true depth, a 2 mm pool on a floor of
+// 12 mm texels tilts its edge 10° and catches no light. This crate's own number.
+const FILM_RELIEF: f32 = 6.0;
+
+// **The steepest a film's surface is drawn**, as the cosine of its tilt from what it lies on: 25°.
+// Without a cap the relief that lifts a floor's 12 mm texels stood a skin's 3.6 mm ones on end; at 35°
+// the gaps between a wound's runs, and between the clots in a crater seen close, shaded as dark
+// crevices. This crate's own number.
+const FILM_MAX_TILT_COS: f32 = 0.906;
+
 // The cubic B-spline weights of the four texels around a sample at fraction `v` between the middle two.
 fn bspline(v: f32) -> vec4<f32> {
     let n = vec4<f32>(1.0, 2.0, 3.0, 4.0) - v;
@@ -137,6 +149,26 @@ fn blood_over(base: vec3<f32>, depth_mm: f32) -> vec3<f32> {
     return black + (white - black) * base;
 }
 
+// **The normal of a surface lifted above the one at `N`**, given how fast the lift changes across the
+// screen (`dh`, world units per pixel in x and y), so it needs no tangents (Mikkelsen, "Bump Mapping
+// Unparametrized Surfaces on the GPU", 2010). Derivatives: call it only in uniform control flow.
+fn lifted_normal(N: vec3<f32>, P: vec3<f32>, dh: vec2<f32>) -> vec3<f32> {
+    let dpx = dpdx(P);
+    let dpy = dpdy(P);
+    let r1 = cross(dpy, N);
+    let r2 = cross(N, dpx);
+    let det = dot(dpx, r1);
+    let grad = sign(det) * (dh.x * r1 + dh.y * r2);
+    let n = normalize(abs(det) * N - grad);
+    let c = dot(n, N);
+    if c >= FILM_MAX_TILT_COS {
+        return n;
+    }
+    // Turned toward `N` until it leans no further than the cap allows.
+    let side = normalize(n - N * c);
+    return N * FILM_MAX_TILT_COS + side * sqrt(1.0 - FILM_MAX_TILT_COS * FILM_MAX_TILT_COS);
+}
+
 @fragment
 fn fragment(
     in: VertexOutput,
@@ -152,6 +184,9 @@ fn fragment(
     var wetness = 0.0;     // fresh 1 → dry 0
     var depth_frac = 0.0;  // depth over the layer span
     var peeled = 0.0;      // 1 where the skin is gone
+    var film_n = pbr_input.N;            // the normal of a film's own surface
+    var film_cn = pbr_input.clearcoat_N; // and of the coat on it
+    var film_dh = vec2<f32>(0.0);        // how fast the film's surface rises across the screen
 #ifdef VERTEX_UVS_A
     if (flags & FLAG_WET) != 0u {
         // Smooth inside, and its rim drawn crisp at `WET_EDGE`: a film's edge is a line, and the
@@ -162,6 +197,35 @@ fn fragment(
         let aa = max(fwidth(w.r), 1.0e-4);
         amount = w.r * clamp((w.r - WET_EDGE) / aa + 0.5, 0.0, 1.0);
         wetness = w.a;
+#ifndef PREPASS_PIPELINE
+        // **A film has a surface.** Its depth, smooth to its second derivative, is a height above
+        // what it lies on, and that height tilts the normal: a pool's edge curves down to the floor
+        // and catches the light as a meniscus does, a run stands up off the skin, and a pool's
+        // unevenness breaks a light's mirror image into a glint. Before 0.5.47 a film was flat however
+        // deep, a decal of one colour to its rim, and a pool at a light's mirror angle was one white
+        // sticker. A weave holds its blood between the yarns, so cloth stays flat. Leveling a pool
+        // above a quarter of its depth, as a liquid at rest would be, was tried and made that sticker
+        // again.
+        //
+        // The slope is the spline's own, a central difference a quarter of a texel either way, carried
+        // to the screen by the UV's derivatives, which are constant across a triangle; taken by `dpdx`
+        // of the height instead it was a step per 2×2 pixels, and a run on a distant arm glittered. It
+        // fades out where a texel is under a pixel and a surface that fine cannot be drawn.
+        if mode != MODE_CLOTH {
+            let size = vec2<f32>(textureDimensions(wet_map));
+            let du = vec2<f32>(0.25 / size.x, 0.0);
+            let dv = vec2<f32>(0.0, 0.25 / size.y);
+            let slope = vec2<f32>(
+                (wet_smooth(in.uv + du).r - wet_smooth(in.uv - du).r) / (2.0 * du.x),
+                (wet_smooth(in.uv + dv).r - wet_smooth(in.uv - dv).r) / (2.0 * dv.y),
+            );
+            let uv_x = dpdx(in.uv);
+            let uv_y = dpdy(in.uv);
+            let px_per_texel = 1.0 / max(max(length(uv_x * size), length(uv_y * size)), 1.0e-6);
+            let lift = flesh.wet.z / max(flesh.sss.y, 1.0e-6) * FILM_RELIEF * smoothstep(0.35, 1.0, px_per_texel);
+            film_dh = vec2<f32>(dot(slope, uv_x), dot(slope, uv_y)) * lift;
+        }
+#endif
     }
     if (flags & FLAG_FLAY) != 0u {
         // The canvas's roughness image is in the base's metallic-roughness slot (see
@@ -196,6 +260,16 @@ fn fragment(
             pbr_input.material.base_color = vec4<f32>(pbr_input.material.base_color.rgb * ratio, pbr_input.material.base_color.a);
         }
     }
+#ifndef PREPASS_PIPELINE
+    // **Blood in a crater lies level.** It fills a hollow the skin was peeled from, so the relief
+    // is a film's on intact skin and none of it shows over a peeled texel; lifted there, the clots of
+    // a crater seen close stood up as cobbles with dark crevices between them.
+    if (flags & FLAG_WET) != 0u && mode != MODE_CLOTH {
+        let dh = film_dh * (1.0 - peeled);
+        film_n = lifted_normal(pbr_input.N, pbr_input.world_position.xyz, dh);
+        film_cn = lifted_normal(pbr_input.clearcoat_N, pbr_input.world_position.xyz, dh);
+    }
+#endif
 #endif
 #ifdef VERTEX_UVS_B
     if mode == MODE_CAP {
@@ -241,20 +315,24 @@ fn fragment(
     // **How much liquid there is to shine**, as a share of enough to mirror: nothing under two per cent
     // of the film's depth, all of it from a quarter of it up. A smear a few microns deep follows the
     // surface it lies on and only a pool smooths it. Every film used to count as a pool, and a wet
-    // surface went to a roughness of 0.25 and a coat of 1.0 at the first texel of blood. At 0.25 a
-    // flat pool in a light's mirror angle clips to white, because a directional light has no size and a
-    // flat pool has no ripples; 0.45 keeps the sheen as a pale gloss.
+    // surface went to a roughness of 0.25 and a coat of 1.0 at the first texel of blood. A flat pool in
+    // a light's mirror angle then clipped to white, so 0.5.23 took the gloss to 0.45. Since 0.5.47 a
+    // film's surface has relief, which breaks that mirror into a glint, and the gloss is 0.3. A liquid's
+    // own 0.1 was tried: with no environment to reflect, the sheen that says "wet" shrank to a speck
+    // and runs and pools read as matte paint.
     let pool = smoothstep(0.02, 0.25, amount);
     // Blood in a weave is held between the yarns rather than stood on them, so a soaked shirt is
-    // darker and a little smoother, never a mirror: 0.7 and a third of the coat, where a film is 0.45.
+    // darker and a little smoother, never a mirror: 0.7 and a third of the coat, where a film is 0.3.
     let weave = mode == MODE_CLOTH;
-    let wet_rough = select(0.45, 0.7, weave);
+    let wet_rough = select(0.3, 0.7, weave);
     if amount > 0.0 {
         let depth_mm = amount * flesh.wet.z;
         let base = pbr_input.material.base_color.rgb;
         pbr_input.material.base_color = vec4<f32>(blood_over(base, depth_mm), pbr_input.material.base_color.a);
         // A wet film smooths whatever it lies on; a dried one is matte again.
         pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, wet_rough, wetness * pool);
+        pbr_input.N = film_n;
+        pbr_input.clearcoat_N = film_cn;
     }
 
     // ---- The wet clear coat: a specular layer of liquid above the diffuse colour. --------------

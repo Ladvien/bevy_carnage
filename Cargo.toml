@@ -1,5 +1,12 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.47`: blood has a surface** (`AG-120`). Every film of blood the flesh material drew was flat,
+# one colour to its rim: a pool read as a red decal, and at a light's mirror angle it lit up whole as
+# a white sticker. The film's own depth now lifts the shading normal, so a pool's edge curves down
+# and catches the light, a run stands up off the skin, and the mirror breaks into a glint; blood in a
+# crater lies level, cloth stays flat, and wet films are at roughness 0.3. Shader only; every digest
+# holds; WebGL2 checked again.
+#
 # **`0.5.46`: the canvases tick in parallel** (`AG-119`). With forty characters dressed, the wetmaps'
 # tick was the dearest system on every tick, hit or not: 2.8 ms on an M4 Pro with 49 bloody canvases.
 # A canvas's tick reads and writes only itself, so `tick_canvases` now runs them across Bevy's compute
@@ -259,7 +266,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.46"
+version = "0.5.47"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
