@@ -1,5 +1,13 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.44`: a bruise is a blotch** (`AG-117`). The preset painted the bruise model's colour as a
+# disc of one tone with a hard rim — the model is a radial reduction whose pool is uniform inside its
+# diameter, and its change was shown six times over — so a blow left a flat brown dot. Its outline now
+# wanders by up to `BRUISE_WOBBLE` and its optical density is mottled by `BRUISE_MOTTLE` either way,
+# both seeded by where it is, and it is shown exactly as dark as the model makes it. The model's
+# colour is read once per shell rather than once per texel: 3.8 ms of spectral colour a repaint
+# becomes 0.27 ms on a 256 canvas. Dermis only; every recorder digest holds.
+#
 # **`0.5.43`: a burn has zones** (`AG-116`). A contact burn was one colour per degree fading to its
 # edge, so a third-degree iron burn read as a grey-brown smudge, the same as a bruise. It now shows
 # Jackson's three zones as far in as its degree reached — a charred eschar, a pale ring of stasis, a
@@ -239,7 +247,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.43"
+version = "0.5.44"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

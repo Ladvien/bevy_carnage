@@ -2403,11 +2403,11 @@ fn take_hits(
         {
             let contact_mm = radius_uv * 1000.0 / gore.density().max(1.0e-6);
             let mm_per_uv = 1000.0 / gore.density().max(1.0e-6);
-            let wobble = BurnEdge::at(uv);
+            let margin = Margin::at(uv, 0);
             entity_ref.queue(move |mut e: EntityWorldMut| {
                 if let Some(mut dermis) = e.get_mut::<DermisCanvas>() {
                     dermis.paint_radial(uv, radius_uv * BURN_FLARE * (1.0 + BURN_WOBBLE), mm_per_uv, |r_mm, dir| {
-                        burn_zone(burn_degree, r_mm / (contact_mm * wobble.scale(dir)).max(1.0e-6))
+                        burn_zone(burn_degree, r_mm / (contact_mm * margin.scale(dir, BURN_WOBBLE)).max(1.0e-6))
                     });
                 }
             });
@@ -2883,33 +2883,88 @@ fn smooth01(t: f32) -> f32 {
 /// perfectly round its three zones read as a target. This crate's own number.
 pub const BURN_WOBBLE: f32 = 0.15;
 
-/// The shape of one burn's margin: two lobed waves round it, with amplitudes and phases from the
-/// place it was burnt, so a burn is the same shape every run and two burns are not.
+/// **How far a bruise's outline wanders off round**, as a share of its radius either way: `0.25`.
+/// The model is a radial reduction, so it hands back a disc; blood under the skin tracks along the
+/// tissue planes it meets, and drawn as the disc a bruise read as a flat brown dot. Wider than a
+/// burn's, whose margin is the shape of what touched the skin. This crate's own number.
+pub const BRUISE_WOBBLE: f32 = 0.25;
+
+/// **How patchy a bruise is**: its optical density varies by this share either way across it,
+/// `0.4`, as a pool that much thicker or thinner would. An ecchymosis is mottled where the blood
+/// pooled unevenly; the model's pool is uniform inside its diameter. This crate's own number.
+pub const BRUISE_MOTTLE: f32 = 0.4;
+
+/// The size of a bruise's mottle, mm: the larger of its two scales of noise. This crate's own.
+const BRUISE_MOTTLE_MM: f32 = 9.0;
+
+/// The shape of one injury's margin under intact skin: two lobed waves round it, with amplitudes
+/// and phases from the place it was made, so an injury is the same shape every run and two are not.
 #[derive(Clone, Copy, Debug)]
-struct BurnEdge {
+struct Margin {
+    seed: u32,
     three: Vec2,
     five: Vec2,
 }
 
-impl BurnEdge {
-    /// The margin a burn at `uv` has.
-    fn at(uv: Vec2) -> Self {
-        let seed = uv.x.to_bits() ^ uv.y.to_bits().rotate_left(16);
+impl Margin {
+    /// The margin an injury at `uv` has; `salt` keeps a bruise's from a burn's at the same place.
+    fn at(uv: Vec2, salt: u32) -> Self {
+        let seed = uv.x.to_bits() ^ uv.y.to_bits().rotate_left(16) ^ salt;
         let h = |salt: u32| 2.0 * crate::bloodstain::hash_f32(seed ^ salt) - 1.0;
-        Self { three: Vec2::new(h(0x3A11), h(0x3A12)), five: Vec2::new(h(0x5B21), h(0x5B22)) }
+        Self { seed, three: Vec2::new(h(0x3A11), h(0x3A12)), five: Vec2::new(h(0x5B21), h(0x5B22)) }
     }
 
-    /// **The zones' radius in direction `dir`**, as a multiple of the round one: within
-    /// [`BURN_WOBBLE`] of one. The waves are the third and fifth harmonics of the direction's angle,
-    /// taken as powers of `dir` read as a complex number, so no angle is ever computed.
-    fn scale(self, dir: Vec2) -> f32 {
+    /// **The injury's radius in direction `dir`**, as a multiple of the round one: within `wobble`
+    /// of one. The waves are the third and fifth harmonics of the direction's angle, taken as powers
+    /// of `dir` read as a complex number, so no angle is ever computed.
+    fn scale(self, dir: Vec2, wobble: f32) -> f32 {
         let mul = |a: Vec2, b: Vec2| Vec2::new(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
         let d2 = mul(dir, dir);
         let d3 = mul(d2, dir);
         let d5 = mul(d3, d2);
         let wave = 0.6 * self.three.dot(d3) + 0.4 * self.five.dot(d5);
-        1.0 + BURN_WOBBLE * (wave / core::f32::consts::SQRT_2).clamp(-1.0, 1.0)
+        1.0 + wobble * (wave / core::f32::consts::SQRT_2).clamp(-1.0, 1.0)
     }
+}
+
+/// Salts a bruise's [`Margin`] apart from a burn's at the same place.
+const BRUISE_SALT: u32 = 0xB205_E000;
+
+/// **A bruise's colour in each of the model's shells**, linear. The model is a step per shell, so
+/// these are every colour it can show at its age, read once a repaint rather than once a texel.
+fn bruise_shells(bruise: &crate::bloodstain::Bruise) -> [[f32; 3]; crate::bloodstain::bruise::SHELLS] {
+    use crate::bloodstain::bruise::DR_MM;
+    core::array::from_fn(|i| linear(bruise.srgb_through_at((i as f32 + 0.5) * DR_MM)))
+}
+
+/// **What a bruise shows `r_mm` from its centre in the unit direction `dir`**: the linear ratio the
+/// skin is multiplied by, and how much of it shows. `shells` is [`bruise_shells`].
+///
+/// The colour is the model's — the bruise seen through the whole skin, over the same skin with
+/// nothing in it (the outermost shell), so the caller's skin tone is what the chromophores modulate —
+/// read at a radius stretched by the bruise's [`Margin`] and darkened more or less by its mottle. Far
+/// out, where the model holds no chromophore, the ratio is one and nothing shows. Until 0.5.44 the
+/// ratio was read at the true radius with no mottle and shown six times as strongly as it changed,
+/// so a bruise was a disc of one colour with a hard rim.
+fn bruise_texel(shells: &[[f32; 3]; crate::bloodstain::bruise::SHELLS], margin: Margin, r_mm: f32, dir: Vec2) -> ([f32; 3], f32) {
+    use crate::bloodstain::bruise::DR_MM;
+    let r = r_mm / margin.scale(dir, BRUISE_WOBBLE);
+    // The shell `srgb_through_at` reads: the one the radius falls in, the outermost past the grid.
+    let shell = if r.is_finite() { (r / DR_MM) as usize } else { 0 };
+    let (Some(here), Some(blank)) = (shells.get(shell).or(shells.last()), shells.last()) else {
+        return ([1.0; 3], 0.0);
+    };
+    let at = dir * (r_mm / BRUISE_MOTTLE_MM);
+    let tile = 65_536.0;
+    let coarse = crate::cross_section::value_noise(at.x, at.y, tile, margin.seed ^ 0x40B7);
+    let fine = crate::cross_section::value_noise(at.x * 2.3, at.y * 2.3, tile, margin.seed ^ 0x9C2D);
+    let mottle = 1.0 + BRUISE_MOTTLE * (2.0 * (0.65 * coarse + 0.35 * fine) - 1.0);
+    // The mottle scales the optical density, as a pool that much thicker or thinner would: a power of
+    // the ratio, which never clamps, so on average the bruise is as dark as the model says.
+    let ratio = core::array::from_fn(|c| (here[c] / blank[c].max(1.0e-4)).clamp(0.0, 1.0).powf(mottle));
+    let change = ratio.iter().fold(0.0f32, |m, &v| m.max(1.0 - v));
+    // Shown wherever it changes the skin at all; how much it changes it is the ratio's to say.
+    (ratio, (change * 50.0).clamp(0.0, 1.0))
 }
 
 /// **The thickest film of blood exposed tissue wears**, mm, on a broken body's cut face and, since
@@ -3235,21 +3290,9 @@ fn age_bruises(
         let mm_per_uv = 1000.0 / gore.density().max(1.0e-6);
         let radius_uv = crate::bloodstain::bruise::RADIUS_MM / mm_per_uv;
         let uv = bruising.uv;
-        let bruise = &bruising.bruise;
-        // The ratio of the bruised skin to the same skin with nothing in it, in linear light, so the
-        // caller's skin tone is what the chromophores modulate. Far out, where the model holds no
-        // chromophore, the ratio is one and the alpha is zero.
-        let blank = linear(bruise.srgb_through_at(crate::bloodstain::bruise::RADIUS_MM));
-        dermis.paint_radial(uv, radius_uv, mm_per_uv, |r_mm, _| {
-            let here = linear(bruise.srgb_through_at(r_mm));
-            let ratio = [
-                (here[0] / blank[0].max(1.0e-4)).clamp(0.0, 1.0),
-                (here[1] / blank[1].max(1.0e-4)).clamp(0.0, 1.0),
-                (here[2] / blank[2].max(1.0e-4)).clamp(0.0, 1.0),
-            ];
-            let change = (1.0 - ratio[0]).max(1.0 - ratio[1]).max(1.0 - ratio[2]);
-            (ratio, (change * 6.0).clamp(0.0, 1.0))
-        });
+        let shells = bruise_shells(&bruising.bruise);
+        let margin = Margin::at(uv, BRUISE_SALT);
+        dermis.paint_radial(uv, radius_uv * (1.0 + BRUISE_WOBBLE), mm_per_uv, |r_mm, dir| bruise_texel(&shells, margin, r_mm, dir));
     }
 }
 
@@ -4258,6 +4301,49 @@ mod tests {
         let (c, a) = burn_zone(Degree::First, 0.0);
         assert!(red(c) && a > 0.5, "a first-degree burn is {c:?} at {a}, not reddened");
         assert_eq!(burn_zone(Degree::None, 0.0).1, 0.0, "a burn of no degree shows");
+    }
+
+    /// **A bruise is a blotch, not a disc, and its colour is still the model's.** A day-old 40 mm
+    /// bruise, read round its centre: at one radius inside its front some directions are a third
+    /// denser than others, and how far it reaches differs by a fifth between directions; past where
+    /// the wobble can carry its front nothing shows; and everywhere in its uniform core its density is
+    /// the model's within the mottle, some texels denser and some fainter.
+    #[test]
+    fn a_bruise_is_a_blotch_whose_colour_is_the_models() {
+        use crate::bloodstain::bruise::{Bruise, Chromophore, Params, STEP_H};
+        let mut bruise = Bruise::new(Params { pool_diameter_mm: 40.0, ..Params::default() });
+        bruise.advance((24.0 / STEP_H) as u32);
+        let shells = bruise_shells(&bruise);
+        let margin = Margin::at(Vec2::new(0.31, 0.62), BRUISE_SALT);
+        // Optical density, summed over the channels: what the mottle scales.
+        let dark = |r_mm: f32, dir: Vec2| {
+            let (c, a) = bruise_texel(&shells, margin, r_mm, dir);
+            a * c.iter().map(|&v| -v.max(1.0e-6).ln()).sum::<f32>()
+        };
+        let dirs: Vec<Vec2> = (0..48).map(|i| Vec2::from_angle(i as f32 * core::f32::consts::TAU / 48.0)).collect();
+
+        let ring: Vec<f32> = dirs.iter().map(|&d| dark(8.0, d)).collect();
+        let (lo, hi) = ring.iter().fold((f32::MAX, 0.0f32), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+        assert!(lo > 0.0 && hi > lo * 1.33, "at 8 mm the bruise runs {lo} to {hi}: a flat disc, not a blotch");
+
+        let reach: Vec<f32> = dirs.iter().map(|&d| (0..200).map(|k| k as f32 * 0.5).filter(|&r| dark(r, d) > 0.02).fold(0.0, f32::max)).collect();
+        let (near, far) = reach.iter().fold((f32::MAX, 0.0f32), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+        assert!(far > near * 1.2, "the bruise reaches {near} to {far} mm: a round outline");
+
+        let front = bruise.front_mm(Chromophore::Bilirubin, 0.05).max(bruise.front_mm(Chromophore::Hemoglobin, 0.05));
+        let beyond = front * (1.0 + BRUISE_WOBBLE) + 6.0;
+        assert!(dirs.iter().all(|&d| dark(beyond, d) < 0.02), "the bruise shows at {beyond} mm, past its front at {front}");
+
+        let model = {
+            let (here, blank) = (shells[(8.0 / crate::bloodstain::bruise::DR_MM) as usize], shells[shells.len() - 1]);
+            (0..3).map(|c| -(here[c] / blank[c]).ln()).sum::<f32>()
+        };
+        let core: Vec<f32> = (1..=24).flat_map(|k| dirs.iter().map(move |&d| (k as f32 * 0.5, d))).map(|(r, d)| dark(r, d) / model).collect();
+        let (lo, hi) = core.iter().fold((f32::MAX, 0.0f32), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+        assert!(
+            lo >= 1.0 - BRUISE_MOTTLE - 1.0e-3 && hi <= 1.0 + BRUISE_MOTTLE + 1.0e-3 && lo < 0.95 && hi > 1.05,
+            "inside 12 mm the bruise runs {lo} to {hi} of the model's density {model}"
+        );
     }
 
     /// A blow bruises without bleeding, and the bruise warms the dermis under the blow within the

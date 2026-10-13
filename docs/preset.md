@@ -162,6 +162,10 @@ renderer asks for. Nothing is asked of the game. Put `Gore` on the skinned mesh 
   degree is a dark eschar in a pale ring of stasis in a red flare out to `BURN_FLARE` times
   `GoreHit::radius_m`, its margin off round by up to `BURN_WOBBLE`. The flare is wider than the
   contact, so give the radius of what touched the skin, not of the mark you want.
+  A bruise is the model's colour over an outline off round by up to `BRUISE_WOBBLE` and a density
+  mottled by `BRUISE_MOTTLE` (0.5.44). Its hue is the model's and goes where the model goes: a dull
+  darkening in its first hours, bilirubin's orange from about a day of model time on, which
+  `GoreDials::bruise_hours_per_tick` (0.02 h) puts twenty seconds into a fight at 60 Hz.
 - **The atlas density is measured from the pose**, because the scale of a rigged character lives in
   its joints, not in the mesh entity.
 - **A skin with no pose yet is not cast at the bind pose.** While the joints have no transform, or
