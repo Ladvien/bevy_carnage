@@ -2,7 +2,14 @@
 
 > ⚠️ **Vibe Coded** — written by an AI agent working from a human's direction. It is used in a shipping game and covered by tests, but it has had no line-by-line human audit. Read it before you trust it.
 
-**Deterministic runtime gore for Bevy.** Plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result.
+**Runtime gore for Bevy characters, deterministic to the bit.** Add a plugin, dress a loaded character with one component, and send a `GoreHit` per injury. A wound peels through skin, fat and muscle to bone, bleeds and runs along the pose of an animated body, pools on the floor and dries; a body that takes enough comes apart into watertight-capped chunks. A violence setting the player controls is honoured, and every canvas is owned by the CPU, so the state of a whole fight can be hashed and replayed.
+
+| | |
+|---|---|
+| ![A textured blocked-out body takes a blow, a burn, a slash and shots to the chest; the wounds bleed and pool on the floor and the body comes apart](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/preset.gif) | ![A smooth mannequin walks in place with its left arm raised; a shot opens the raised forearm, a slash the thigh, shots the chest, and each wound keeps bleeding from the limb it is on](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned.gif) |
+| `examples/preset.rs` — a blow, a burn, a slash and shots to the bone | `examples/skinned.rs` — the same on a skinned, animated body, the wounds riding the limbs |
+
+Underneath is the fracture it was built on: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result.
 
 ![A blue blocked-out humanoid standing intact, then bursting into tumbling rounded chunks whose cut faces are raw red while their outer surfaces stay blue](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/explode.gif)
 
