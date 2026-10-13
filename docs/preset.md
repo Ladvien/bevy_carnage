@@ -157,7 +157,11 @@ renderer asks for. Nothing is asked of the game. Put `Gore` on the skinned mesh 
 - **A slash is laid out on the bind pose**, which is what the laceration tears: the point, the face
   normal, the direction of travel and the length are carried back through the pose at the triangle
   that was hit.
-- **A bruise and a burn live in UV space**, and so ride the limb with no extra work.
+- **A bruise and a burn live in UV space**, and so ride the limb with no extra work. A burn is
+  drawn as Jackson's three zones as far in as its degree reached (0.5.43, `burn_zone`): a third
+  degree is a dark eschar in a pale ring of stasis in a red flare out to `BURN_FLARE` times
+  `GoreHit::radius_m`, its margin off round by up to `BURN_WOBBLE`. The flare is wider than the
+  contact, so give the radius of what touched the skin, not of the mark you want.
 - **The atlas density is measured from the pose**, because the scale of a rigged character lives in
   its joints, not in the mesh entity.
 - **A skin with no pose yet is not cast at the bind pose.** While the joints have no transform, or

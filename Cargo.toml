@@ -1,5 +1,12 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.43`: a burn has zones** (`AG-116`). A contact burn was one colour per degree fading to its
+# edge, so a third-degree iron burn read as a grey-brown smudge, the same as a bruise. It now shows
+# Jackson's three zones as far in as its degree reached — a charred eschar, a pale ring of stasis, a
+# red flare of hyperaemia past the contact (`preset::burn_zone`, `BURN_FLARE`) — round a margin that
+# wanders off round by up to `BURN_WOBBLE`, seeded by where it was burnt. `DermisCanvas::paint_radial`'s
+# painter takes the texel's direction as well. Dermis only; every recorder digest holds.
+#
 # **`0.5.42`: a crater is a wound, not a ring of fat** (`AG-115`). A flaymap crater showed the tissue it
 # bared dry: a pink graze, a wide ring of yellow fat and a red centre, read as a fried egg. The flesh
 # material's film of blood (`FleshParams::with_cut_film`) now lies over a canvas's peeled tissue as it
@@ -232,7 +239,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.42"
+version = "0.5.43"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

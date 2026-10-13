@@ -1201,10 +1201,11 @@ impl DermisCanvas {
         self.px.len()
     }
 
-    /// Paint a radial field: `colour(r_mm)` returns the linear ratio the skin is multiplied by and an
-    /// alpha, for the texel `r_mm` from `uv`, out to `radius_uv`. Alpha is taken as the max of what
-    /// was there, so two injuries overlap rather than erase.
-    pub fn paint_radial(&mut self, uv: Vec2, radius_uv: f32, mm_per_uv: f32, mut colour: impl FnMut(f32) -> ([f32; 3], f32)) {
+    /// Paint a radial field: `colour(r_mm, dir)` returns the linear ratio the skin is multiplied by and
+    /// an alpha, for the texel `r_mm` from `uv` in the unit direction `dir` (in UV, zero at the centre),
+    /// out to `radius_uv`. Alpha is taken as the max of what was there, so two injuries overlap rather
+    /// than erase.
+    pub fn paint_radial(&mut self, uv: Vec2, radius_uv: f32, mm_per_uv: f32, mut colour: impl FnMut(f32, Vec2) -> ([f32; 3], f32)) {
         if !uv.is_finite() || !radius_uv.is_finite() || radius_uv <= 0.0 {
             return;
         }
@@ -1222,7 +1223,7 @@ impl DermisCanvas {
                 if r_uv > radius_uv {
                     continue;
                 }
-                let (c, a) = colour(r_uv * mm_per_uv);
+                let (c, a) = colour(r_uv * mm_per_uv, Vec2::new(du, dv).normalize_or_zero());
                 let a = if a.is_finite() { a.clamp(0.0, 1.0) } else { 0.0 };
                 if a <= 0.0 {
                     continue;
@@ -2394,28 +2395,19 @@ fn take_hits(
             commands.entity(hit.entity).try_insert(Bruising { uv, bruise: crate::bloodstain::Bruise::new(params), carry: 0.0 });
         }
 
-        // A burn: the degree colours the dermis — reddened, blistered, charred. **These three colours
-        // are this crate's own**; the degree that picks one and the depth that is peeled are the model's.
+        // A burn: Jackson's three zones round the contact, as far in as the degree reached — see
+        // [`burn_zone`]. The degree is the model's; the colours are this crate's own.
         if let HitKind::Burn { .. } = hit.kind
             && let Some(uv) = site_uv
             && let Ok(mut entity_ref) = commands.get_entity(hit.entity)
         {
-            let (tint, alpha): ([f32; 3], f32) = match burn_degree {
-                crate::bloodstain::burn::Degree::None => ([1.0; 3], 0.0),
-                // Erythema: the dermis flushes, so red is kept and green and blue are taken.
-                crate::bloodstain::burn::Degree::First => ([1.0, 0.45, 0.40], 0.7),
-                // A blister: the epidermis lifts white over a pale bed.
-                crate::bloodstain::burn::Degree::Second => ([1.0, 0.92, 0.80], 0.6),
-                // Eschar: charred, near black.
-                crate::bloodstain::burn::Degree::Third => ([0.10, 0.06, 0.04], 1.0),
-            };
-            let radius_uv_burn = radius_uv;
+            let contact_mm = radius_uv * 1000.0 / gore.density().max(1.0e-6);
             let mm_per_uv = 1000.0 / gore.density().max(1.0e-6);
+            let wobble = BurnEdge::at(uv);
             entity_ref.queue(move |mut e: EntityWorldMut| {
                 if let Some(mut dermis) = e.get_mut::<DermisCanvas>() {
-                    dermis.paint_radial(uv, radius_uv_burn, mm_per_uv, |r_mm| {
-                        let edge = 1.0 - (r_mm / (radius_uv_burn * mm_per_uv)).clamp(0.0, 1.0);
-                        (tint, alpha * edge.sqrt())
+                    dermis.paint_radial(uv, radius_uv * BURN_FLARE * (1.0 + BURN_WOBBLE), mm_per_uv, |r_mm, dir| {
+                        burn_zone(burn_degree, r_mm / (contact_mm * wobble.scale(dir)).max(1.0e-6))
                     });
                 }
             });
@@ -2843,6 +2835,83 @@ fn cap_material(
     flesh.add(tables.material(base, params, None, None))
 }
 
+/// **How far past the contact a burn's reddening reaches**, as a multiple of the contact's radius:
+/// `1.7`. The zone of hyperaemia is the inflamed skin round a burn, not under the thing that burnt
+/// it, and it fades into the skin rather than stopping: drawn out to `1.4` it fell off over two
+/// texels of a 128 canvas and read as a thin red outline. This crate's own number.
+pub const BURN_FLARE: f32 = 1.7;
+
+/// **What a burn of `degree` shows at `t` contact radii from its centre**: the linear ratio the skin is
+/// multiplied by, and how much of it shows.
+///
+/// Jackson's three zones (Jackson 1953, `doi:10.1002/bjs.18004016413`): **coagulation** at the
+/// centre, where the tissue is dead — a charred eschar, near black; **stasis** round it, pale and
+/// blistered; and **hyperaemia** outermost, reddened, fading from the stasis ring out to
+/// [`BURN_FLARE`]. A burn has the zones up to the degree it reached and no deeper: a first-degree
+/// burn is all hyperaemia, a second a blister in a red ring, a third an eschar in a pale ring in a
+/// red one. Until 0.5.43 a burn of each degree was one colour fading to its edge, and a third-degree
+/// contact read as a grey smudge. The zones' widths and colours are this crate's own.
+pub fn burn_zone(degree: crate::bloodstain::burn::Degree, t: f32) -> ([f32; 3], f32) {
+    use crate::bloodstain::burn::Degree;
+    const ESCHAR: [f32; 3] = [0.10, 0.06, 0.04];
+    const STASIS: [f32; 3] = [1.0, 0.93, 0.84];
+    const HYPERAEMIA: [f32; 3] = [1.0, 0.45, 0.40];
+    let t = if t.is_finite() { t.max(0.0) } else { return ([1.0; 3], 0.0) };
+    // The edge of a zone, blended over a tenth of the radius either side of it.
+    let inside = |edge: f32| 1.0 - smooth01((t - edge + 0.1) / 0.2);
+    let (coagulation, stasis) = match degree {
+        Degree::None => return ([1.0; 3], 0.0),
+        Degree::First => (0.0, 0.0),
+        Degree::Second => (0.0, inside(0.7)),
+        Degree::Third => (inside(0.55), inside(0.85)),
+    };
+    let stasis = (stasis - coagulation).max(0.0);
+    // The flare fades from where the stasis ring of a third-degree burn ends, whatever the degree.
+    let hyperaemia = (1.0 - coagulation - stasis).max(0.0) * (1.0 - smooth01((t - 0.85) / (BURN_FLARE - 0.85)));
+    let mix = |c: usize| coagulation * ESCHAR[c] + stasis * STASIS[c] + (1.0 - coagulation - stasis) * HYPERAEMIA[c];
+    ([mix(0), mix(1), mix(2)], coagulation + 0.65 * stasis + 0.75 * hyperaemia)
+}
+
+/// The cubic smoothstep over `[0, 1]`, clamped.
+fn smooth01(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// **How far a burn's zones wander off round**, as a share of their radius either way: `0.15`. A
+/// contact burn's margin follows the skin's give and the object's edge, not a compass; drawn
+/// perfectly round its three zones read as a target. This crate's own number.
+pub const BURN_WOBBLE: f32 = 0.15;
+
+/// The shape of one burn's margin: two lobed waves round it, with amplitudes and phases from the
+/// place it was burnt, so a burn is the same shape every run and two burns are not.
+#[derive(Clone, Copy, Debug)]
+struct BurnEdge {
+    three: Vec2,
+    five: Vec2,
+}
+
+impl BurnEdge {
+    /// The margin a burn at `uv` has.
+    fn at(uv: Vec2) -> Self {
+        let seed = uv.x.to_bits() ^ uv.y.to_bits().rotate_left(16);
+        let h = |salt: u32| 2.0 * crate::bloodstain::hash_f32(seed ^ salt) - 1.0;
+        Self { three: Vec2::new(h(0x3A11), h(0x3A12)), five: Vec2::new(h(0x5B21), h(0x5B22)) }
+    }
+
+    /// **The zones' radius in direction `dir`**, as a multiple of the round one: within
+    /// [`BURN_WOBBLE`] of one. The waves are the third and fifth harmonics of the direction's angle,
+    /// taken as powers of `dir` read as a complex number, so no angle is ever computed.
+    fn scale(self, dir: Vec2) -> f32 {
+        let mul = |a: Vec2, b: Vec2| Vec2::new(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+        let d2 = mul(dir, dir);
+        let d3 = mul(d2, dir);
+        let d5 = mul(d3, d2);
+        let wave = 0.6 * self.three.dot(d3) + 0.4 * self.five.dot(d5);
+        1.0 + BURN_WOBBLE * (wave / core::f32::consts::SQRT_2).clamp(-1.0, 1.0)
+    }
+}
+
 /// **The thickest film of blood exposed tissue wears**, mm, on a broken body's cut face and, since
 /// 0.5.42, on a crater's walls where a skin is peeled: `1.0`, the blood table's last column, where
 /// whole blood is opaque and the tissue under it no longer shows. A quarter of it lies over the fat at
@@ -3171,7 +3240,7 @@ fn age_bruises(
         // caller's skin tone is what the chromophores modulate. Far out, where the model holds no
         // chromophore, the ratio is one and the alpha is zero.
         let blank = linear(bruise.srgb_through_at(crate::bloodstain::bruise::RADIUS_MM));
-        dermis.paint_radial(uv, radius_uv, mm_per_uv, |r_mm| {
+        dermis.paint_radial(uv, radius_uv, mm_per_uv, |r_mm, _| {
             let here = linear(bruise.srgb_through_at(r_mm));
             let ratio = [
                 (here[0] / blank[0].max(1.0e-4)).clamp(0.0, 1.0),
@@ -4165,6 +4234,30 @@ mod tests {
         }
         let later = mass(&app);
         assert!(later > 2 * at_break.max(1), "the floor held {at_break} when the body broke and {later} five seconds on");
+    }
+
+    /// **A burn shows the zones its degree reached, deepest at the centre.** A third-degree burn is
+    /// an eschar at its centre, near black and wholly shown; a pale ring round it; a red ring past the
+    /// contact; and nothing at [`BURN_FLARE`]. A second-degree burn is pale at its centre in a red
+    /// ring, a first-degree one red all over, and a burn of no degree shows nothing.
+    #[test]
+    fn a_burn_shows_the_zones_its_degree_reached() {
+        use crate::bloodstain::burn::Degree;
+        let pale = |c: [f32; 3]| c.iter().all(|&v| v > 0.8);
+        let red = |c: [f32; 3]| c[0] > c[1] + 0.3 && c[0] > c[2] + 0.3;
+        let (c, a) = burn_zone(Degree::Third, 0.0);
+        assert!(c.iter().all(|&v| v < 0.2) && a > 0.99, "a third-degree centre is {c:?} at {a}, not an eschar");
+        let (c, a) = burn_zone(Degree::Third, 0.7);
+        assert!(pale(c) && a > 0.3, "a third-degree burn's stasis ring is {c:?} at {a}");
+        let (c, a) = burn_zone(Degree::Third, 1.1);
+        assert!(red(c) && a > 0.3, "a third-degree burn's hyperaemia is {c:?} at {a}");
+        assert_eq!(burn_zone(Degree::Third, BURN_FLARE).1, 0.0, "the reddening reaches past the flare");
+        let (c, _) = burn_zone(Degree::Second, 0.0);
+        assert!(pale(c), "a second-degree centre is {c:?}, not a blister");
+        assert!(red(burn_zone(Degree::Second, 1.1).0), "a second-degree burn has no red ring");
+        let (c, a) = burn_zone(Degree::First, 0.0);
+        assert!(red(c) && a > 0.5, "a first-degree burn is {c:?} at {a}, not reddened");
+        assert_eq!(burn_zone(Degree::None, 0.0).1, 0.0, "a burn of no degree shows");
     }
 
     /// A blow bruises without bleeding, and the bruise warms the dermis under the blow within the
