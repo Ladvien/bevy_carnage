@@ -253,6 +253,12 @@ under a tier; it draws the spark at `Stylised` from the `Wounded` message, the w
   at, and its fate: thrown by the blow, fallen with a body that lost its footing, or still standing.
   Written whether or not the preset spawns the pieces. When it does, they carry `Flying` or
   `Standing`, and a settled piece costs nothing per tick; despawning them is the game's call.
+- `CutFaceBleed`, a component on each spawned piece's cut face (0.5.37): the face as a wound — its
+  area, its centre, its facing — opened on the tick the body broke. Each pulse pours a stain
+  `CUT_FACE_POUR` (1.5) of the size a wound of that area pulses at onto the floor, off the face's side
+  by as far as the face reaches, so a heap of pieces lies in a pool of its own blood until the
+  perfusion runs out; before 0.5.37 a burst body left its floor clean. A game that spawns the pieces
+  itself keeps the pours by inserting `CutFaceBleed::of(cap_mesh, &transform, tick)` on its cut face.
 - `Wounds`, a component on each hurt part: every wound it is bleeding, each a UV on its wetmap and
   a point on its mesh. A hit away from the open wounds opens another, up to
   `GoreDials::open_wounds` (16), and a hit inside one reopens it. A wound leaves the list once its

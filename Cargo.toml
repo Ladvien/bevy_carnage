@@ -1,5 +1,10 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.37`: a broken body lies in its own blood** (`AG-110`). A body that burst left its floor as clean
+# as it was. Every spawned piece's cut face is now a wound (`CutFaceBleed`) that pours onto the floor
+# beside the piece each pulse (`CUT_FACE_POUR`), so the heap lies in a pool; a game that spawns its own
+# pieces keeps the pours with `CutFaceBleed::of`.
+#
 # **`0.5.36`: a film's edge is a line** (`AG-109`). The flesh material read the wet map with one
 # bilinear tap, so every blood rim was the canvas's texel staircase, soft and fringed. It is now read
 # as a cubic B-spline in four taps and its rim drawn crisp at 4 % film depth: runs end in round drops.
@@ -196,7 +201,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.36"
+version = "0.5.37"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

@@ -1464,6 +1464,72 @@ pub struct Flying(pub Vec3);
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Standing;
 
+/// **A broken body's cut face, still bleeding.** The preset spawns every piece with a cut face with
+/// one: its wound is the face — its area, its centre, the way it faces — opened on the tick the body
+/// broke, and each pulse of it pours onto the floor beneath it until the perfusion runs out, so a heap
+/// of pieces lies in its own pool. Before 0.5.37 a body that burst left its floor as clean as it was.
+///
+/// A game that spawns the pieces itself (`GoreDials::spawn_fragments` off) keeps the pours by
+/// inserting [`CutFaceBleed::of`] on each piece's cut face, with the piece's `Transform`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct CutFaceBleed {
+    /// The face's centre, in the piece's own space, so the pour follows the piece as it falls.
+    pub centre_local: Vec3,
+    /// The face as a wound, where it was when the body broke: the pulse schedule's seed and area.
+    pub wound: BloodWound,
+    /// The schedule.
+    pub bleed: crate::bloodstain::Bleed,
+}
+
+impl CutFaceBleed {
+    /// **A cut face that opened on `tick`**, from its mesh and where the piece is. `None` for a face
+    /// with no area.
+    pub fn of(cap: &Mesh, place: &Transform, tick: u32) -> Option<Self> {
+        let (area, centre_local, normal) = face_measure(cap)?;
+        let scale = place.scale.abs().max_element();
+        let wound = BloodWound {
+            at: place.transform_point(centre_local).to_array(),
+            normal: (place.rotation * normal).to_array(),
+            area: area * scale * scale,
+            severity: 1.0,
+            kind: WoundKind::Severance,
+        };
+        Some(Self { centre_local, wound, bleed: crate::bloodstain::Bleed::new(tick, &wound) })
+    }
+}
+
+/// **How much of a cut face's pulse pours onto the floor**, as a share of the stain a wound of its
+/// area paints a pulse at. A face is all wound and nothing holds it shut, and a body that burst lies in
+/// most of its blood: at `0.5` each pour was a stain under a fifth of a metre across, hidden under the
+/// piece it came from. This crate's own number.
+pub const CUT_FACE_POUR: f32 = 1.5;
+
+/// **A mesh's area, centre and facing**, in its own space: the triangles' total area, their
+/// area-weighted centre and the unit sum of their normals. `None` for a mesh with no area.
+fn face_measure(mesh: &Mesh) -> Option<(f32, Vec3, Vec3)> {
+    let Ok(Some(VertexAttributeValues::Float32x3(positions))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_POSITION) else {
+        return None;
+    };
+    let (mut area, mut centre, mut normal) = (0.0f32, Vec3::ZERO, Vec3::ZERO);
+    let mut add = |t: [usize; 3]| {
+        let [Some(a), Some(b), Some(c)] = t.map(|i| positions.get(i).copied().map(Vec3::from)) else { return };
+        let n = (b - a).cross(c - a);
+        let s = 0.5 * n.length();
+        if s.is_finite() {
+            area += s;
+            centre += (a + b + c) / 3.0 * s;
+            normal += n;
+        }
+    };
+    match mesh.try_indices_option() {
+        Ok(Some(Indices::U32(ix))) => ix.as_chunks::<3>().0.iter().for_each(|t| add(t.map(|i| i as usize))),
+        Ok(Some(Indices::U16(ix))) => ix.as_chunks::<3>().0.iter().for_each(|t| add(t.map(usize::from))),
+        Ok(None) => (0..positions.len() / 3).for_each(|t| add([3 * t, 3 * t + 1, 3 * t + 2])),
+        Err(_) => return None,
+    }
+    (area > 0.0 && area.is_finite()).then(|| (area, centre / area, normal.normalize_or_zero()))
+}
+
 /// A rendered gut tube the preset keeps in step with its strand.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Gut;
@@ -1763,7 +1829,7 @@ impl Plugin for GorePlugin {
             .configure_sets(FixedUpdate, GoreSystems.before(VisceraSystems))
             .add_systems(
                 FixedUpdate,
-                (advance_clock, dress, take_hits, throw_bodies, bleed, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly)
+                (advance_clock, dress, take_hits, throw_bodies, bleed, pour_cut_faces, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly)
                     .chain()
                     .in_set(GoreSystems),
             )
@@ -2684,7 +2750,7 @@ fn take_hits(
                 let cap = cap_material(region, atlas.as_deref(), standard, tables, flesh, dials);
                 let pieces = place(leaves, root_xf, at_world, posing.as_ref().map(|p| (p, &**meshes)));
                 if dials.spawn_fragments {
-                    spawn_pieces(&mut commands, &pieces, &skin, &cap);
+                    spawn_pieces(&mut commands, meshes, tick, &pieces, &skin, &cap);
                     commands.entity(root).despawn();
                 } else {
                     commands.entity(root).try_insert(Broken);
@@ -2838,13 +2904,14 @@ impl Posing {
 }
 
 /// Spawn placed pieces: skin outside, a banded cap inside. The ones that stood stay [`Standing`];
-/// the rest are [`Flying`] at their velocity.
-fn spawn_pieces(commands: &mut Commands, pieces: &[GorePiece], skin: &Handle<StandardMaterial>, cap: &Handle<FleshMaterial>) {
+/// the rest are [`Flying`] at their velocity. Every cut face bleeds from `tick` ([`CutFaceBleed`]).
+fn spawn_pieces(commands: &mut Commands, meshes: &Assets<Mesh>, tick: u32, pieces: &[GorePiece], skin: &Handle<StandardMaterial>, cap: &Handle<FleshMaterial>) {
     for fate in [PieceFate::Stood, PieceFate::Thrown, PieceFate::Fell] {
         for piece in pieces.iter().filter(|p| p.fate == fate) {
-            let meshes = [(piece.outer.clone(), None), (piece.cap.clone(), Some(cap.clone()))];
-            for (mesh, cap) in meshes {
+            let parts = [(piece.outer.clone(), None), (piece.cap.clone(), Some(cap.clone()))];
+            for (mesh, cap) in parts {
                 let Some(mesh) = mesh else { continue };
+                let pours = cap.as_ref().and_then(|_| meshes.get(&mesh)).and_then(|m| CutFaceBleed::of(m, &piece.transform, tick));
                 let mut e = match cap {
                     Some(cap) => commands.spawn((Mesh3d(mesh), MeshMaterial3d(cap), piece.transform)),
                     None => commands.spawn((Mesh3d(mesh), MeshMaterial3d(skin.clone()), piece.transform)),
@@ -2853,6 +2920,9 @@ fn spawn_pieces(commands: &mut Commands, pieces: &[GorePiece], skin: &Handle<Sta
                     e.insert(Standing);
                 } else {
                     e.insert(Flying(piece.velocity));
+                }
+                if let Some(pours) = pours {
+                    e.insert(pours);
                 }
             }
         }
@@ -2863,6 +2933,7 @@ fn spawn_pieces(commands: &mut Commands, pieces: &[GorePiece], skin: &Handle<Sta
 /// [`GoreFractured`], and — when the preset owns the pieces — spawn them and despawn the body.
 fn throw_bodies(
     mut commands: Commands,
+    clock: Res<GoreClock>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut fractured: MessageWriter<GoreFractured>,
     mut bodies: Query<(Entity, &GlobalTransform, &mut ThrowNow)>,
@@ -2889,7 +2960,7 @@ fn throw_bodies(
             .collect();
         let pieces = place(leaves, xf, throw.at, throw.posing.as_ref().map(|p| (p, &*meshes)));
         if throw.spawn {
-            spawn_pieces(&mut commands, &pieces, &throw.skin, &throw.cap);
+            spawn_pieces(&mut commands, &meshes, clock.0, &pieces, &throw.skin, &throw.cap);
             commands.entity(entity).despawn();
         } else {
             commands.entity(entity).remove::<ThrowNow>();
@@ -2997,6 +3068,55 @@ fn bleed(
                 let texels = floor_wet.size();
                 let _ = floor_wet.paint_world_with(floor_mesh, floor_xf, at, Vec3::NEG_Y, &shape_on(floor_gore, &drip, texels), tick, &edges);
             }
+        }
+    }
+}
+
+/// **Pour every cut face of a broken body onto the floor beneath it**, a pulse at a time, until its
+/// perfusion runs out ([`CutFaceBleed`]). Each pulse is a stain [`CUT_FACE_POUR`] of the radius a
+/// wound of the face's area paints, cast straight down from above the face's centre as the piece is
+/// now, so a piece in the air leaves a trail and one at rest grows a pool that the floor's wetmap
+/// spreads. A tier that paints no blood pours none.
+#[allow(clippy::too_many_arguments)]
+fn pour_cut_faces(
+    mut commands: Commands,
+    clock: Res<GoreClock>,
+    dials: Res<GoreDials>,
+    wet_settings: Option<Res<WetSettings>>,
+    meshes: Res<Assets<Mesh>>,
+    faces: Query<(Entity, &CutFaceBleed, &Transform)>,
+    mut floors: Query<(&Gore, &Mesh3d, &GlobalTransform, &mut WetCanvas), With<FloorTag>>,
+    policy: Option<Res<GorePolicy>>,
+) {
+    let tick = clock.0;
+    let drips = policy.as_deref().is_none_or(|p| p.draws_blood() && p.blood_decals);
+    let edges = edge_settings(&dials, wet_settings.as_deref());
+    for (entity, face, xf) in &faces {
+        if crate::bloodstain::bleed::envelope(face.bleed.age(tick), &dials.blood) <= 0.0 {
+            commands.entity(entity).remove::<CutFaceBleed>();
+            continue;
+        }
+        if !drips {
+            continue;
+        }
+        let Some(pulse) = crate::bloodstain::bleed::pulse_wound(&face.bleed, &face.wound, tick, dials.hz, &dials.blood) else {
+            continue;
+        };
+        let reach = (face.wound.area / core::f32::consts::PI).sqrt().max(0.002);
+        let r = reach * (0.6 + pulse.severity) * CUT_FACE_POUR;
+        let shape = StainShape { major: r * 1.25, minor: r, spines: 0, satellites: 3, direction: [0.0, 1.0], seed: face.bleed.seed ^ tick };
+        // **Where the blood leaves the face**: off its side by as far as the face reaches, so a face
+        // turned sideways pours beside its piece and one turned up or down pours round its foot. From
+        // above, so a piece lying on the floor, its centre at the floor's height, still casts onto it.
+        // Pieces fly without turning, so the face's normal is still the one it broke with.
+        let at = xf.transform_point(face.centre_local);
+        let n = Vec3::from_array(face.wound.normal);
+        let out = Vec3::new(n.x, 0.0, n.z) * reach;
+        let from = Vec3::new(at.x + out.x, at.y.max(dials.floor_y) + 0.25, at.z + out.z);
+        for (floor_gore, floor_mesh, floor_xf, mut floor_wet) in &mut floors {
+            let Some(floor_mesh) = meshes.get(&floor_mesh.0) else { continue };
+            let texels = floor_wet.size();
+            let _ = floor_wet.paint_world_with(floor_mesh, floor_xf, from, Vec3::NEG_Y, &shape_on(floor_gore, &shape, texels), tick, &edges);
         }
     }
 }
@@ -3267,7 +3387,7 @@ mod tests {
             .init_resource::<WetSettings>()
             .init_resource::<FlaySettings>()
             .add_systems(FixedUpdate, scene_gore.before(dress))
-            .add_systems(FixedUpdate, (advance_clock, dress, take_hits, throw_bodies, bleed, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
+            .add_systems(FixedUpdate, (advance_clock, dress, take_hits, throw_bodies, bleed, pour_cut_faces, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
         let images = app.world_mut().resource_mut::<Assets<Image>>().reserve_handle();
         app.world_mut().resource_mut::<FleshTables>().sss = images;
         app
@@ -3988,6 +4108,37 @@ mod tests {
         assert!(app.world().get_entity(root).is_ok(), "the preset despawned a body the game owns");
     }
 
+    /// **A broken body's pieces pour onto the floor beneath them.** A body over a floor is hit to bone
+    /// and breaks; from then on its pieces' cut faces are the only blood that can arrive on the floor,
+    /// since the part that was hit is gone with its wound. Over the next five seconds the floor's blood
+    /// grows by more than it held when the body broke; with no pours it can only shrink, as the floor
+    /// soaks it up.
+    #[test]
+    fn a_broken_body_pours_onto_the_floor_beneath_its_pieces() {
+        let mut app = headless();
+        let floor = {
+            let world = app.world_mut();
+            let mesh = world.resource_mut::<Assets<Mesh>>().add(Plane3d::new(Vec3::Y, Vec2::splat(2.0)).mesh().build());
+            world.spawn((Mesh3d(mesh), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::floor())).id()
+        };
+        let (_, parts, _) = breakable_body(&mut app);
+        app.world_mut().write_message(GoreHit::impact(parts[0], Vec3::new(0.0, 1.0, 2.0), Vec3::NEG_Z, 0.03, 60.0));
+        app.world_mut().run_schedule(FixedUpdate);
+        app.world_mut().run_schedule(FixedUpdate);
+        let pours = app.world_mut().query::<&CutFaceBleed>().iter(app.world()).count();
+        assert!(pours > 0, "the body broke into pieces with no cut face bleeding");
+        let mass = |app: &App| {
+            let Some(wet) = app.world().get::<WetCanvas>(floor) else { panic!("the floor was not dressed") };
+            (0..wet.size()).flat_map(|y| (0..wet.size()).map(move |x| (x, y))).map(|(x, y)| u64::from(wet.amount_at(x, y))).sum::<u64>()
+        };
+        let at_break = mass(&app);
+        for _ in 0..300 {
+            app.world_mut().run_schedule(FixedUpdate);
+        }
+        let later = mass(&app);
+        assert!(later > 2 * at_break.max(1), "the floor held {at_break} when the body broke and {later} five seconds on");
+    }
+
     /// A blow bruises without bleeding, and the bruise warms the dermis under the blow within the
     /// first hours; a contact burn hot enough for a third-degree eschar blackens the dermis without
     /// peeling anything, and neither opens a wound.
@@ -4009,7 +4160,7 @@ mod tests {
             .init_resource::<FractureCache>()
             .init_resource::<WetSettings>()
             .init_resource::<FlaySettings>()
-            .add_systems(FixedUpdate, (advance_clock, dress, take_hits, throw_bodies, bleed, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
+            .add_systems(FixedUpdate, (advance_clock, dress, take_hits, throw_bodies, bleed, pour_cut_faces, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
         let images = app.world_mut().resource_mut::<Assets<Image>>().reserve_handle();
         app.world_mut().resource_mut::<FleshTables>().sss = images;
         let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.4, 0.4, 0.2).mesh().build());
@@ -4075,7 +4226,7 @@ mod tests {
             .init_resource::<FractureCache>()
             .init_resource::<WetSettings>()
             .init_resource::<FlaySettings>()
-            .add_systems(FixedUpdate, (advance_clock, dress, take_hits, throw_bodies, bleed, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
+            .add_systems(FixedUpdate, (advance_clock, dress, take_hits, throw_bodies, bleed, pour_cut_faces, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
         let images = app.world_mut().resource_mut::<Assets<Image>>().reserve_handle();
         app.world_mut().resource_mut::<FleshTables>().sss = images;
         let sphere = app.world_mut().resource_mut::<Assets<Mesh>>().add(Sphere::new(0.3).mesh().uv(16, 8));
