@@ -154,6 +154,9 @@ struct Landing {
     tri: [u32; 3],
     /// Barycentric weights of `tri`'s vertices at the hit: `point = Σ bary[i] · position[tri[i]]`.
     bary: Vec3,
+    /// How far along the ray it landed, in multiples of `dir`. The map into a mesh's own space is
+    /// affine, so this is the same number in world space: two surfaces' landings compare directly.
+    t: f32,
 }
 
 impl Landing {
@@ -243,6 +246,7 @@ fn ray_hit(mesh: &Mesh, xf: &GlobalTransform, from: Vec3, dir: Vec3) -> Option<L
                 normal: e1.cross(e2).normalize_or_zero(),
                 tri: [a as u32, b as u32, c as u32],
                 bary: Vec3::new(1.0 - u - v, u, v),
+                t,
             },
         ));
     }
@@ -439,6 +443,75 @@ impl Bounds {
         }
         true
     }
+}
+
+/// **What to cast at for one dressed surface**: its asset placed by its own transform, or, for a
+/// skinned one, the pose it is drawn in, cast with the identity. A pose is built once per batch and
+/// kept in `posed`. `None` when the pose cannot be had: a skin is never cast at its bind pose.
+fn cast_at<'a>(
+    surface: &'a Surface,
+    asset: &'a Mesh,
+    rigging: &Rigging,
+    posed: &'a mut std::collections::HashMap<Entity, Option<Mesh>>,
+    identity: &'a GlobalTransform,
+) -> Option<(&'a Mesh, &'a GlobalTransform)> {
+    match surface.skin.as_ref().filter(|_| Rig::of(asset).is_some()) {
+        None => Some((asset, &surface.xf)),
+        Some(skin) => posed
+            .entry(surface.entity)
+            .or_insert_with(|| rigging.pose(skin).and_then(|pose| skin::posed_mesh(asset, &pose)))
+            .as_mut()
+            .map(|body| (&*body, identity)),
+    }
+}
+
+/// Whether `entity` is `root` or one of its descendants.
+fn is_under(root: Entity, entity: Entity, parents: &Query<&ChildOf>) -> bool {
+    let mut at = entity;
+    loop {
+        if at == root {
+            return true;
+        }
+        match parents.get(at) {
+            Ok(parent) => at = parent.parent(),
+            Err(_) => return false,
+        }
+    }
+}
+
+/// **The skin a ray reaches first under a character**: the nearest landing among the [`GoreKind::Skin`]
+/// surfaces below `hit.entity`, as each is drawn now. Clothing is not a candidate, because it is
+/// not what a wound opens on: the spray soaks it from the wound. Ties go to the lower entity, so the
+/// answer does not depend on the order a query happened to yield them. `None` when the ray reaches
+/// none of them.
+#[allow(clippy::too_many_arguments)]
+fn nearest_skin(
+    hit: &GoreHit,
+    surfaces: &[Surface],
+    parents: &Query<&ChildOf>,
+    meshes: &Assets<Mesh>,
+    rigging: &Rigging,
+    posed: &mut std::collections::HashMap<Entity, Option<Mesh>>,
+    bounds: &mut std::collections::HashMap<Entity, Option<Bounds>>,
+    identity: &GlobalTransform,
+) -> Option<Entity> {
+    let mut best: Option<(f32, Entity)> = None;
+    for surface in surfaces {
+        if !matches!(surface.gore.kind, GoreKind::Skin(_)) || !is_under(hit.entity, surface.entity, parents) {
+            continue;
+        }
+        let Some(asset) = meshes.get(&surface.mesh) else { continue };
+        let Some((mesh, xf)) = cast_at(surface, asset, rigging, posed, identity) else { continue };
+        let bound = bounds.entry(surface.entity).or_insert_with(|| Bounds::of(mesh, xf));
+        if bound.as_ref().is_some_and(|b| !b.reached_by(hit.from, hit.dir)) {
+            continue;
+        }
+        let Some(landing) = ray_hit(mesh, xf, hit.from, hit.dir) else { continue };
+        if best.is_none_or(|(t, entity)| landing.t < t || (landing.t == t && surface.entity < entity)) {
+            best = Some((landing.t, surface.entity));
+        }
+    }
+    best.map(|(_, entity)| entity)
 }
 
 /// What [`dress`] visits: every [`Gore`] entity that has not been dressed yet.
@@ -884,10 +957,17 @@ pub enum HitKind {
     Burn { temp_c: f32, seconds: f32 },
 }
 
-/// **A hit, addressed to a dressed entity.**
+/// **A hit, addressed to a dressed entity or to a character.**
+///
+/// **Address it to whatever your physics found.** A game's raycast finds a collider, a capsule on the
+/// character or a box on its head, rarely the mesh that was struck. Name any entity with dressed
+/// skins below it and the preset casts the ray at each of them, as it is drawn now, and hurts the
+/// nearest. Clothing is not a candidate, since the spray soaks it from the wound, and a ray that
+/// reaches no skin is dropped. A mesh with its own [`Gore`] is hurt directly, as it always was.
 #[derive(Message, Clone, Copy, Debug)]
 pub struct GoreHit {
-    /// The entity to hurt. It needs a [`Gore`] and a `Mesh3d`.
+    /// The entity to hurt: a mesh with a [`Gore`] and a `Mesh3d`, or an ancestor of meshes that have
+    /// one, in which case the nearest [`Gore::skin`] under it along the ray is hurt.
     pub entity: Entity,
     /// Ray origin, world.
     pub from: Vec3,
@@ -1268,6 +1348,16 @@ fn take_hits(
     let mut bounds: std::collections::HashMap<Entity, Option<Bounds>> = std::collections::HashMap::new();
     let identity = GlobalTransform::IDENTITY;
     for hit in hits {
+        // **A hit at a character** names the entity the game's physics found, which is rarely the mesh
+        // that was struck: the preset casts the ray at every skin under it and hurts the nearest.
+        let hit = if bodies.contains(hit.entity) {
+            hit
+        } else {
+            let Some(entity) = nearest_skin(&hit, &surfaces, parents, meshes, &rigging, &mut posed, &mut bounds, &identity) else {
+                continue;
+            };
+            GoreHit { entity, ..hit }
+        };
         let Ok((gore, mesh3d, xf, skin, flay, wet)) = bodies.get_mut(hit.entity) else { continue };
         let gore = *gore;
         let gore = &gore;
@@ -1415,23 +1505,13 @@ fn take_hits(
         // for those: a droplet at 8–40 m/s falls under a centimetre in the metre it travels.
         let droplets = crate::bloodstain::patterns::impact_spatter(&wound, &dials.blood);
         for surface in surfaces.iter().filter(|_| spray) {
-            let Surface { entity: other, mesh: other_handle, xf: other_xf, gore: other_gore, skin: other_skin } = surface;
+            let Surface { entity: other, mesh: other_handle, gore: other_gore, .. } = surface;
             if *other == hit.entity {
                 continue;
             }
             let Ok((_, _, _, _, _, Some(mut other_wet))) = bodies.get_mut(*other) else { continue };
             let Some(other_asset) = meshes.get(other_handle) else { continue };
-            // A skinned surface is cast as its pose draws it, posed once per batch.
-            let (other_mesh, other_xf): (&Mesh, &GlobalTransform) = match other_skin.as_ref().filter(|_| Rig::of(other_asset).is_some()) {
-                None => (other_asset, other_xf),
-                Some(skin) => {
-                    let entry = posed
-                        .entry(*other)
-                        .or_insert_with(|| rigging.pose(skin).and_then(|pose| skin::posed_mesh(other_asset, &pose)));
-                    let Some(body) = entry.as_ref() else { continue };
-                    (body, &identity)
-                }
-            };
+            let Some((other_mesh, other_xf)) = cast_at(surface, other_asset, &rigging, &mut posed, &identity) else { continue };
             match other_gore.kind {
                 GoreKind::Floor => {
                     let plane_y = other_xf.translation().y;
@@ -2871,5 +2951,68 @@ mod tests {
         assert_eq!(floor, 0.0, "world blood was off and the floor took {floor}");
         let (_, control) = run(true);
         assert!(control > 0.0, "the control put nothing on the floor, so the test proves nothing");
+    }
+
+    /// How many open wounds an entity has.
+    fn open_wounds(app: &App, e: Entity) -> usize {
+        app.world().get::<Wounds>(e).map_or(0, |w| w.0.len())
+    }
+
+    /// **A hit at a character wounds the skin the ray reaches first.** The game's physics finds the
+    /// character, rarely the mesh. Three parts under one root: a skin in front, a skin behind it that
+    /// the ray would also reach, and a shirt in front of both. Only the front skin is wounded: the
+    /// nearer one of the two skins, and not the shirt, which is not what a wound opens on.
+    #[test]
+    fn a_hit_at_a_character_wounds_the_skin_the_ray_reaches_first() {
+        let mut app = headless();
+        let cube = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.4, 0.4, 0.4).mesh().build());
+        let world = app.world_mut();
+        let root = world.spawn((Transform::IDENTITY, GlobalTransform::IDENTITY)).id();
+        let mut part = |z: f32, gore: Gore| {
+            world.spawn((Mesh3d(cube.clone()), Transform::from_xyz(0.0, 0.0, z), GlobalTransform::from_xyz(0.0, 0.0, z), gore, ChildOf(root))).id()
+        };
+        let (behind, front, shirt) = (part(-1.0, Gore::skin(Region::Limb)), part(0.0, Gore::skin(Region::Limb)), part(0.5, Gore::cloth()));
+        app.world_mut().run_schedule(FixedUpdate);
+        app.world_mut().write_message(GoreHit::impact(root, Vec3::new(0.0, 0.0, 3.0), Vec3::NEG_Z, 0.03, 4.0));
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!((open_wounds(&app, front), open_wounds(&app, behind), open_wounds(&app, shirt)), (1, 0, 0), "front, behind, shirt");
+        let wound = app.world().get::<Wounds>(front).and_then(|w| w.0.first().copied());
+        assert!(wound.is_some_and(|w| (w.wound.at[2] - 0.2).abs() < 0.02), "the wound is not on the front skin's face: {wound:?}");
+        assert_eq!(announced(&app).0.len(), 1, "one hit announced more or fewer than one wound");
+    }
+
+    /// **A hit at a character finds a limb where it is drawn.** The bent arm of `rigged_arm`, now under
+    /// a root, is struck by naming the root: the ray crosses the posed forearm, so it is wounded; the
+    /// same ray at a straight arm crosses nothing, so no part is wounded and nothing is announced.
+    #[test]
+    fn a_hit_at_a_character_finds_the_posed_limb() {
+        let strike = |bend: f32| {
+            let (mut app, body, ..) = rigged_arm(bend);
+            let root = app.world_mut().spawn((Transform::IDENTITY, GlobalTransform::IDENTITY)).id();
+            app.world_mut().entity_mut(body).insert(ChildOf(root));
+            app.world_mut().write_message(GoreHit::impact(root, Vec3::new(1.0, 0.7, 2.0), Vec3::NEG_Z, 0.04, 5.0));
+            app.world_mut().run_schedule(FixedUpdate);
+            (open_wounds(&app, body), announced(&app).0.len())
+        };
+        assert_eq!(strike(core::f32::consts::FRAC_PI_2), (1, 1), "the bent forearm was not found");
+        assert_eq!(strike(0.0), (0, 0), "a ray through empty air wounded something");
+    }
+
+    /// **Two skins the ray reaches at the same distance go to the lower entity**, so which one is
+    /// wounded does not depend on the order a query yields them.
+    #[test]
+    fn a_tie_between_two_skins_goes_to_the_lower_entity() {
+        let mut app = headless();
+        let cube = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.4, 0.4, 0.4).mesh().build());
+        let world = app.world_mut();
+        let root = world.spawn((Transform::IDENTITY, GlobalTransform::IDENTITY)).id();
+        let mut part = || world.spawn((Mesh3d(cube.clone()), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Limb), ChildOf(root))).id();
+        let (first, second) = (part(), part());
+        app.world_mut().run_schedule(FixedUpdate);
+        app.world_mut().write_message(GoreHit::impact(root, Vec3::new(0.0, 0.0, 3.0), Vec3::NEG_Z, 0.03, 4.0));
+        app.world_mut().run_schedule(FixedUpdate);
+        // Which of the two is lower is Bevy's to say; the rule is that it is the one wounded.
+        let (lower, higher) = if first < second { (first, second) } else { (second, first) };
+        assert_eq!((open_wounds(&app, lower), open_wounds(&app, higher)), (1, 0));
     }
 }

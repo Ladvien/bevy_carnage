@@ -81,11 +81,13 @@ fn dress(mut commands: Commands, torso: Entity, shirt: Entity, floor: Entity) {
     commands.entity(floor).insert(Gore::floor().with_uv_per_metre(0.3));
 }
 
-fn on_raycast(mut hits: MessageWriter<GoreHit>, torso: Entity, from: Vec3, dir: Vec3) {
-    hits.write(GoreHit::impact(torso, from, dir, 0.03, 12.0));   // a crater 3 cm wide, 12 mm deep
-    hits.write(GoreHit::blunt(torso, from, dir, 0.04));           // a bruise that ages
-    hits.write(GoreHit::burn(torso, from, dir, 0.03, 150.0, 1.0)); // a hot iron, one second
-    hits.write(GoreHit::slash(torso, from, dir, Vec3::X, 0.06, 8.0)); // a cut that gapes
+// `target` is a dressed mesh, or any ancestor of dressed meshes — the character your physics found.
+// An ancestor is cast at every skin under it, as drawn, and the nearest is hurt.
+fn on_raycast(mut hits: MessageWriter<GoreHit>, target: Entity, from: Vec3, dir: Vec3) {
+    hits.write(GoreHit::impact(target, from, dir, 0.03, 12.0));   // a crater 3 cm wide, 12 mm deep
+    hits.write(GoreHit::blunt(target, from, dir, 0.04));           // a bruise that ages
+    hits.write(GoreHit::burn(target, from, dir, 0.03, 150.0, 1.0)); // a hot iron, one second
+    hits.write(GoreHit::slash(target, from, dir, Vec3::X, 0.06, 8.0)); // a cut that gapes
 }
 ```
 

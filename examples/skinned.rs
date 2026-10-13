@@ -23,7 +23,7 @@ use bevy::prelude::*;
 use bevy_carnage::preset::{GoreHit, GorePlugin, GoreSystems};
 
 mod common;
-use common::mannequin::{self, Bone, Limb, Mannequin};
+use common::mannequin::{self, Bone, Mannequin};
 use common::preset_scene::{self, Sheet, Slab, Sun};
 
 fn main() {
@@ -80,15 +80,15 @@ fn keys(
     scene: Query<Entity, Scene>,
 ) {
     let hit = if input.just_pressed(KeyCode::Digit1) {
-        aim.shot(Limb::ArmL, Bone::ArmLowL, 0.13, 0.03, 7.0)
+        aim.shot(Bone::ArmLowL, 0.13, 0.03, 7.0)
     } else if input.just_pressed(KeyCode::Digit2) {
-        aim.slash(Limb::LegR, Bone::LegUpR, 0.20, Vec3::new(0.8, -0.6, 0.0).normalize(), 0.07, 6.0)
+        aim.slash(Bone::LegUpR, 0.20, Vec3::new(0.8, -0.6, 0.0).normalize(), 0.07, 6.0)
     } else if input.just_pressed(KeyCode::Digit3) {
-        aim.shot(Limb::Torso, Bone::Spine, -0.22, 0.035, 9.0)
+        aim.shot(Bone::Spine, -0.22, 0.035, 9.0)
     } else if input.just_pressed(KeyCode::Digit4) {
-        aim.iron(Limb::ArmR, Bone::ArmLowR, 0.10, 0.035)
+        aim.iron(Bone::ArmLowR, 0.10, 0.035)
     } else if input.just_pressed(KeyCode::Digit5) {
-        aim.blow(Limb::LegL, Bone::LegLowL, 0.12, 0.04)
+        aim.blow(Bone::LegLowL, 0.12, 0.04)
     } else {
         None
     };

@@ -515,6 +515,8 @@ What to look for, by frame: **30** the shot opens the raised forearm where the r
 
 Run it and you aim it yourself: `1` a shot to the raised forearm, `2` a slash across the thigh, `3` a shot to the chest, `4` a hot iron, `5` a blow, `R` reset. `capture_skinned` prints the digest line two runs must agree on.
 
+**Every shot is addressed to the character's root**, which is all a game's physics would hand it: the capsule it found belongs to the character, and which of the six meshes the ray reaches first is the preset's to say, from each mesh as it is drawn (`Aim` in `common/mannequin.rs`). Since 0.5.22 that is a supported way to send a hit, and the clip is byte-identical to the one the shots made when each named the part it was aimed at.
+
 ## `tiers` — the player's violence setting
 
 ![The same scripted scene three times side by side: at the stylised tier a yellow spark marks each shot and nothing bleeds; at the blood tier the wounds bleed and pool on the floor and the body stays standing; at blood and gore the body comes apart and the guts spill](tiers.gif)

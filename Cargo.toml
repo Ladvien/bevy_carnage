@@ -1,5 +1,11 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.22`: hit the character, not the mesh** (`AG-095`). `GoreHit::entity` may be any ancestor of
+# dressed meshes: the preset casts the ray at every `Gore::skin` under it, as drawn, and hurts the
+# nearest, ties going to the lower entity. A game's physics finds a capsule on a character, rarely the
+# mesh that was struck, and Bevy's own `MeshRayCast` tests a skinned mesh's bind pose. A mesh with its
+# own `Gore` is hurt directly, as before; the clips are byte-identical.
+#
 # **`0.5.21`: the preset obeys the player's violence setting** (`AG-094`). `GorePolicy` was a
 # resource nothing in the crate read, so the two-line inclusion had no way to offer a gore setting.
 # The preset now reads `tier` (at `Stylised` a hit is announced as `Wounded` and nothing is painted),
@@ -117,7 +123,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.21"
+version = "0.5.22"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

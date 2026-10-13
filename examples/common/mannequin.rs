@@ -574,12 +574,15 @@ pub fn view() -> Transform {
 }
 
 /// **What aiming at the body reads**: the joints' `GlobalTransform`s — the ones the renderer last
-/// drew with, which is the pose a player aiming at the screen is aiming at — and which entity wears
-/// which part. A `SystemParam` so a system takes it and a recorder reads it through a `SystemState`.
+/// drew with, which is the pose a player aiming at the screen is aiming at — and the character's
+/// root. A `SystemParam` so a system takes it and a recorder reads it through a `SystemState`.
+///
+/// **Every hit is addressed to the root**, which is all a game's physics would tell it: the capsule it
+/// found belongs to the character, and which mesh the ray then reaches is the preset's to say.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct Aim<'w, 's> {
     joints: Query<'w, 's, (&'static Joint, &'static GlobalTransform)>,
-    parts: Query<'w, 's, (Entity, &'static Part)>,
+    root: Query<'w, 's, Entity, With<Mannequin>>,
 }
 
 impl Aim<'_, '_> {
@@ -588,35 +591,30 @@ impl Aim<'_, '_> {
         self.joints.iter().find(|(j, _)| j.0 == bone).map(|(_, g)| g.transform_point(Vec3::new(0.0, -along, 0.0)))
     }
 
-    /// The entity wearing a part's mesh.
-    pub fn part(&self, limb: Limb) -> Option<Entity> {
-        self.parts.iter().find(|(_, p)| p.0 == limb).map(|(e, _)| e)
-    }
-
     /// **Aim a ray from the muzzle at `along` metres down `bone`**: the ray a rifle would fire, so
     /// what the preset does with it is what a game's own raycast would get.
-    fn ray(&self, limb: Limb, bone: Bone, along: f32) -> Option<(Vec3, Vec3, Entity)> {
+    fn ray(&self, bone: Bone, along: f32) -> Option<(Vec3, Vec3, Entity)> {
         let target = self.on_bone(bone, along)?;
-        Some((MUZZLE, (target - MUZZLE).normalize_or_zero(), self.part(limb)?))
+        Some((MUZZLE, (target - MUZZLE).normalize_or_zero(), self.root.iter().next()?))
     }
 
     /// A shot at a joint of the body, `radius_m` wide and `depth_mm` deep.
-    pub fn shot(&self, limb: Limb, bone: Bone, along: f32, radius_m: f32, depth_mm: f32) -> Option<GoreHit> {
-        self.ray(limb, bone, along).map(|(from, dir, entity)| GoreHit::impact(entity, from, dir, radius_m, depth_mm))
+    pub fn shot(&self, bone: Bone, along: f32, radius_m: f32, depth_mm: f32) -> Option<GoreHit> {
+        self.ray(bone, along).map(|(from, dir, entity)| GoreHit::impact(entity, from, dir, radius_m, depth_mm))
     }
 
     /// A slash along `along`, centred where [`Aim::shot`] would land.
-    pub fn slash(&self, limb: Limb, bone: Bone, at: f32, along: Vec3, radius_m: f32, depth_mm: f32) -> Option<GoreHit> {
-        self.ray(limb, bone, at).map(|(from, dir, entity)| GoreHit::slash(entity, from, dir, along, radius_m, depth_mm))
+    pub fn slash(&self, bone: Bone, at: f32, along: Vec3, radius_m: f32, depth_mm: f32) -> Option<GoreHit> {
+        self.ray(bone, at).map(|(from, dir, entity)| GoreHit::slash(entity, from, dir, along, radius_m, depth_mm))
     }
 
     /// A blow that bruises.
-    pub fn blow(&self, limb: Limb, bone: Bone, along: f32, radius_m: f32) -> Option<GoreHit> {
-        self.ray(limb, bone, along).map(|(from, dir, entity)| GoreHit::blunt(entity, from, dir, radius_m))
+    pub fn blow(&self, bone: Bone, along: f32, radius_m: f32) -> Option<GoreHit> {
+        self.ray(bone, along).map(|(from, dir, entity)| GoreHit::blunt(entity, from, dir, radius_m))
     }
 
     /// A hot iron.
-    pub fn iron(&self, limb: Limb, bone: Bone, along: f32, radius_m: f32) -> Option<GoreHit> {
-        self.ray(limb, bone, along).map(|(from, dir, entity)| GoreHit::burn(entity, from, dir, radius_m, 150.0, 1.0))
+    pub fn iron(&self, bone: Bone, along: f32, radius_m: f32) -> Option<GoreHit> {
+        self.ray(bone, along).map(|(from, dir, entity)| GoreHit::burn(entity, from, dir, radius_m, 150.0, 1.0))
     }
 }
