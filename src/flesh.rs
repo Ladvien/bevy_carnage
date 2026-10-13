@@ -41,6 +41,13 @@
 //! composite (grey substrate) cannot. The *spread* of blood into cloth is not here either: it is
 //! `crate::bloodstain::wick`'s Lucas–Washburn front driving the wetmap's spread rate, on the CPU.
 //!
+//! **A film's edge is a line.** The wet map is read as a cubic B-spline in four bilinear taps (Sigg &
+//! Hadwiger, *GPU Gems 2*, ch. 20), not one bilinear tap, and its rim is drawn crisp at 4 % of the
+//! canvas's film depth (`WET_EDGE` in `flesh.wgsl`, own number), sharpened over one pixel's change
+//! in the smoothed amount. A bilinear read of a canvas whose texels are wet or not drew every rim as
+//! the texels' staircase, soft and fringed; the spline's level set is a curve, so a run ends in a
+//! round drop and a pool in a smooth line however far the canvas is magnified. Since 0.5.36.
+//!
 //! # Determinism
 //!
 //! Both lookup tables are pure functions of their inputs, computed with `libm` so two machines bake
@@ -60,7 +67,12 @@
 //! carries `AG-096`): `carnage_web`, built from the mirror's tip with `webgl2`, in Chrome on ANGLE over
 //! Metal, took a shot, a slash, an arterial spurt and three shots to bone. It drew the wounds, the pools
 //! and the broken body, and the console held nothing but Bevy's notices that its optional plugins need
-//! storage buffers WebGL2 lacks. The demo site itself stays WebGPU, like every other module on it.
+//! storage buffers WebGL2 lacks. Again after the wet map became a B-spline with a crisp rim
+//! (2026-10-13, 0.5.36, `AG-109`): `flesh` with `webgl2` for `webgpu`, in Firefox 157 on an Xvfb
+//! display, whose WebGL2 is Mesa's llvmpipe (headless Firefox offered none): WebGL 2.0, GLSL ES
+//! 3.00, the `Gl` backend; the limb, the sphere's crater and its run and the sheet's streaks drew,
+//! and the console held only Bevy's notices about the software driver and the plugins that need what
+//! WebGL2 lacks. The demo site itself stays WebGPU, like every other module on it.
 //!
 //! The uniform block is sixteen-byte aligned, there are no storage buffers, and the extension adds
 //! five textures and one sampler to `StandardMaterial`'s. The shader reads the metallic-roughness

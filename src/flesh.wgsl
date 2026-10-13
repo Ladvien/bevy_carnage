@@ -55,6 +55,44 @@ const SSS_MAX_RADIUS_MM: f32 = 64.0;
 const BLOOD_LUT_MAX_MM: f32 = 1.0;
 const PI: f32 = 3.141592653589793;
 
+// **The film depth at which a wet map's rim is drawn**, as a share of the canvas's full depth: 4 %,
+// 0.08 mm at the shipped 2 mm. Below it the smoothed field is the blur's own skirt, not blood. This
+// crate's own number; at 8 % the thin smear a blade leaves along a cut's lips was cut away.
+const WET_EDGE: f32 = 0.04;
+
+// The cubic B-spline weights of the four texels around a sample at fraction `v` between the middle two.
+fn bspline(v: f32) -> vec4<f32> {
+    let n = vec4<f32>(1.0, 2.0, 3.0, 4.0) - v;
+    let s = n * n * n;
+    let x = s.x;
+    let y = s.y - 4.0 * s.x;
+    let z = s.z - 4.0 * s.y + 6.0 * s.x;
+    return vec4<f32>(x, y, z, 6.0 - x - y - z) * (1.0 / 6.0);
+}
+
+// **The wet map, reconstructed as a cubic B-spline** in four bilinear taps (Sigg & Hadwiger, "Fast
+// third-order texture filtering", GPU Gems 2, ch. 20). A bilinear read of a canvas whose texels are
+// wet or not draws every rim as the texels' staircase; the spline is smooth to its second derivative,
+// so a level set of it is a curve.
+fn wet_smooth(uv: vec2<f32>) -> vec4<f32> {
+    let size = vec2<f32>(textureDimensions(wet_map));
+    let p = uv * size - 0.5;
+    let f = fract(p);
+    let i = p - f;
+    let xc = bspline(f.x);
+    let yc = bspline(f.y);
+    let c = vec4<f32>(i.x - 0.5, i.x + 1.5, i.y - 0.5, i.y + 1.5);
+    let s = vec4<f32>(xc.x + xc.y, xc.z + xc.w, yc.x + yc.y, yc.z + yc.w);
+    let o = (c + vec4<f32>(xc.y, xc.w, yc.y, yc.w) / s) / vec4<f32>(size.x, size.x, size.y, size.y);
+    let s0 = textureSample(wet_map, flesh_sampler, vec2<f32>(o.x, o.z));
+    let s1 = textureSample(wet_map, flesh_sampler, vec2<f32>(o.y, o.z));
+    let s2 = textureSample(wet_map, flesh_sampler, vec2<f32>(o.x, o.w));
+    let s3 = textureSample(wet_map, flesh_sampler, vec2<f32>(o.y, o.w));
+    let sx = s.x / (s.x + s.y);
+    let sy = s.z / (s.z + s.w);
+    return mix(mix(s3, s2, sx), mix(s1, s0, sx), sy);
+}
+
 // Which of the five tissue blocks a depth fraction falls in: 0 skin … 4 marrow.
 fn layer_of(depth_frac: f32) -> f32 {
     var layer = 0.0;
@@ -115,8 +153,13 @@ fn fragment(
     var peeled = 0.0;      // 1 where the skin is gone
 #ifdef VERTEX_UVS_A
     if (flags & FLAG_WET) != 0u {
-        let w = textureSample(wet_map, flesh_sampler, in.uv);
-        amount = w.r;
+        // Smooth inside, and its rim drawn crisp at `WET_EDGE`: a film's edge is a line, and the
+        // B-spline alone would leave a soft skirt a texel wide. `fwidth` is the smoothed amount's
+        // change over one pixel, so the rim is a pixel wide however far the canvas is magnified, and
+        // anti-aliased rather than stepped where it is minified.
+        let w = wet_smooth(in.uv);
+        let aa = max(fwidth(w.r), 1.0e-4);
+        amount = w.r * clamp((w.r - WET_EDGE) / aa + 0.5, 0.0, 1.0);
         wetness = w.a;
     }
     if (flags & FLAG_FLAY) != 0u {
