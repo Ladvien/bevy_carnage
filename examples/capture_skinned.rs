@@ -8,7 +8,9 @@
 //! `--break` makes the body breakable and takes a heavy shot to the chest at frame 200: it breaks where
 //! its skeleton is, mid-walk with the arm raised, and its pieces fall to the floor. `--shirt` dresses
 //! the body in a sleeveless shirt: the two chest shots hole it and the wound is seen through the hole,
-//! with the blood the shirt soaks up around it. The holes are folded into the digest.
+//! with the blood the shirt soaks up around it. The holes are folded into the digest. `--through` puts
+//! a wall behind the body and every shot goes through it: an exit wound opens on the far side and its
+//! forward spatter lands on the wall and the floor behind, and runs down the wall.
 //!
 //! Writes `frame0000.png …` and prints one digest line; two runs must print the same line.
 //!
@@ -32,7 +34,7 @@ use std::time::Duration;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use bevy_carnage::preset::{ClothHoles, GoreClock, GorePlugin};
+use bevy_carnage::preset::{ClothHoles, GoreClock, GorePlugin, HitKind};
 use bevy_carnage::wetmap::WetCanvas;
 
 mod common;
@@ -71,6 +73,7 @@ fn main() {
     }
     rec.warm_up(6);
     let breaking = breaking();
+    let through = flag("--through");
     let mut aim = bevy::ecs::system::SystemState::<mannequin::Aim>::new(rec.world());
     for frame in 0..FRAMES {
         {
@@ -85,6 +88,7 @@ fn main() {
                 _ => None,
             });
             if let Some(hit) = hit {
+                let hit = if through && matches!(hit.kind, HitKind::Impact { .. }) { hit.through() } else { hit };
                 world.write_message(hit);
             }
         }
@@ -114,7 +118,12 @@ fn breaking() -> bool {
 
 /// Whether `--shirt` was given: the mannequin wears a shirt.
 fn shirted() -> bool {
-    std::env::args().any(|a| a == "--shirt")
+    flag("--shirt")
+}
+
+/// Whether a bare flag was given.
+fn flag(name: &str) -> bool {
+    std::env::args().any(|a| a == name)
 }
 
 fn setup(
@@ -129,4 +138,7 @@ fn setup(
         commands.entity(root).insert(mannequin::breakable());
     }
     preset_scene::spawn_set(&mut commands, &mut meshes, &mut materials);
+    if flag("--through") {
+        preset_scene::spawn_wall(&mut commands, &mut meshes, &mut materials);
+    }
 }

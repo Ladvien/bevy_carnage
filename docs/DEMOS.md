@@ -533,6 +533,12 @@ The same mannequin, with `mannequin::breakable()` on its root and a 60 mm shot a
 
 The same mannequin in a sleeveless shirt: a seventh skinned mesh named `Shirt`, the torso's tube a centimetre out and weighted as the torso is, which the mannequin's `GoreScene` dresses as cloth. The two chest shots at frames 120 and 150 cross the shirt before the skin, so each opens a hole in it where its ray crossed, and the wound's crater is seen through it. The blood the wound throws soaks into the cotton along a frayed front, red where it is heavy and pinker at its edge, and stays there: a weave runs only once it is saturated. Before 0.5.29 the wound under the shirt was never seen and the shirt took a flat, glossy patch that ran down it in a column. The clip is cut from frames 100–299; `--shirt` prints its own digest, `2631dab026ec592b`, which folds the holes in, and the default clip is unchanged by the flag. `C` in the windowed demo puts the shirt on or takes it off.
 
+### `capture_skinned --through` — a shot that goes through
+
+![The mannequin walks in front of a plaster wall; a shot through the raised forearm and two through the chest throw a cone of fine spatter onto the wall behind, each drop its own small stain](skinned_through.gif)
+
+The same mannequin with a plaster wall 1.2 m behind it (`preset_scene::spawn_wall`, `Gore::wall()` at 512 a side), and every shot sent through with `GoreHit::through()`: the forearm at frame 30 and the chest at 120 and 150. Each opens an exit on the far side of the part, wider than the entry, and throws its forward spatter along the shot; on the wall every droplet is its own stain from the bloodstain impact law, so the pattern is a cone of small drops, densest on the shot's line, rather than a few large blobs. The exit wounds are on the back, out of this camera's sight; `--eye 0.6,1.35,-1.0` looks at them. The clip is cut from frames 20–199; `--through` prints its own digest, `030e33e540be7c91`, and two runs are byte-identical in all 360 frames.
+
 ## `tiers` — the player's violence setting
 
 ![The same scripted scene three times side by side: at the stylised tier a yellow spark marks each shot and nothing bleeds; at the blood tier the wounds bleed and pool on the floor and the body stays standing; at blood and gore the body comes apart and the guts spill](tiers.gif)
@@ -592,6 +598,12 @@ cargo run --release --example capture_skinned -- --shirt --out frames-skinned-sh
 mkdir -p frames-ss && for n in $(seq 100 299); do
   cp "frames-skinned-shirt/frame$(printf %04d "$n").png" "frames-ss/frame$(printf %04d $((n - 100))).png"; done
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-ss docs/skinned_shirt.gif ""
+
+# `skinned_through.gif` is `capture_skinned --through`, frames 20-199 renumbered from frame0000.
+cargo run --release --example capture_skinned -- --through --out frames-skinned-through
+mkdir -p frames-st && for n in $(seq 20 199); do
+  cp "frames-skinned-through/frame$(printf %04d "$n").png" "frames-st/frame$(printf %04d $((n - 20))).png"; done
+WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-st docs/skinned_through.gif ""
 
 # `tiers.gif` is `capture_preset` three times, once per tier, cropped to the middle, labelled and set
 # side by side, one frame in two. `--tier` is `stylised`, `blood` or `gore` (or `0`, `1`, `2`).

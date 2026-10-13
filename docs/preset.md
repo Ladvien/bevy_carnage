@@ -83,6 +83,24 @@ comes through soaks into the weave along a frayed front, pinker at its edge and 
 wet, and runs down the cloth only once it is saturated (`GoreDials::cloth_holds`). Before 0.5.29 the
 wound under a suit was never seen and the suit took a flat, glossy patch that ran in a straight column.
 
+**A shot that goes through** (0.5.30). Whether a projectile leaves a body is the game's ballistics —
+calibre, energy, armour — so the game says so: `GoreHit::impact(..).through()`. The preset finds where
+the ray leaves the part it entered and opens an exit there, `EXIT_SCALE` (1.6) times the entry's
+radius, cut from outside along the way the shot left; the exit bleeds as the entry does, is announced
+as a second `Wounded`, and throws the **forward spatter**: a cone along the shot, `FORWARD_MIST` (4)
+times the blood its area alone would throw, onto whatever is behind. Cloth the shot crosses behind the
+body, the back of a shirt or a curtain, is holed where it last crosses. Without `through()` nothing
+changes: the shot stops in the body and nothing behind it is touched.
+
+**Walls.** `Gore::wall()` dresses an upright hard surface. The spray's droplets are cast at it as at a
+sheet, but each lands as its own stain from the bloodstain model's impact law: sized by its drop's
+diameter and speed (the spread factor), drawn out to `1/sin θ` by the angle it struck at, and turned so
+its spines point the way it was going, through the triangle's UVs. A body part or a sheet still takes a
+larger blob for each droplet, standing for the many a game cannot afford to cast. A wall is cast at up
+to 128 droplets a wound, where every other surface takes 24; it is nearly always a few triangles. Give
+a wall a canvas fine enough for the drops, `Gore::wall().with_canvas(512)` for a three-metre wall,
+and mind the bill below.
+
 ## What a dressed skin keeps
 
 Since 0.5.15 a skin keeps the material it was authored with: its colour factor, its
@@ -144,6 +162,11 @@ records it.
 `Shirt`, and the two chest shots hole it; `C` in the windowed demo puts it on or takes it off.
 
 ![The mannequin walks in a pale sleeveless shirt; two shots to the chest punch a ragged hole in it, the wound shows through, and the blood soaks out through the cotton along a frayed, pinkish front](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_shirt.gif)
+
+`capture_skinned --through` stands a wall behind the body and sends every shot through it; `6` in
+the windowed demo fires one through the chest.
+
+![The mannequin walks in front of a plaster wall; a shot through the raised forearm and two through the chest throw a cone of fine spatter onto the wall behind, each drop its own small stain](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_through.gif)
 
 ![The mannequin walks with its left arm raised; a heavy shot to the chest breaks it mid-stride into pieces that keep the pose, the raised arm up and the legs mid-step, before they fall and settle among its guts](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_break.gif)
 
@@ -256,6 +279,8 @@ scratch a first wound allocates is on top.
 | skin | 256 | 2.1 MiB | 1.5 MiB | 5.1 MiB |
 | cloth (wetmap, holes) | 128 | 320 KiB | 192 KiB | 704 KiB |
 | floor (wetmap) | **256**, ships | 1.0 MiB | 512 KiB | **2.0 MiB** |
+| wall (wetmap) | 256, ships | 1.0 MiB | 512 KiB | 2.0 MiB |
+| wall (wetmap) | 512 | 4.0 MiB | 2.0 MiB | 8.0 MiB |
 
 So a character of six skin parts at the shipped 128 is **7.7 MiB**, forty of them 308 MiB, and the
 same at 64 is 1.9 MiB and 77 MiB. The cost is the edge squared: it is the dial to turn on a web build
@@ -278,6 +303,14 @@ the player never sees up close, and the wrong one for the one they shoot.
 - **A hole does not fray or tear further, and a slash does not cut cloth.** Only an impact holes a
   cloth, and it holds the shape it was shot with. A broken body's pieces are skin: the shirt goes
   with the body it was on.
+- **An exit is on the part that was entered, and the spray sees through things.** A shot through an
+  arm into the chest exits the arm; the chest takes the forward spatter, not a second wound. Every
+  droplet is cast at every surface on its own, so a wall behind a shirt is spattered as if the shirt
+  were not in the way — true of the entry's spray too, and of every release before this one.
+- **A floor stain far from the body dries as a square.** Seen from behind the body in the default
+  skinned clip, the entry's back spatter on the floor in front of it reads as pale squares with a
+  darker rim and a tab, not drops. Not caused here and not fixed here; the committed clips do not
+  look that way.
 - **A skin's roughness map and a crater's slope give way.** See *What a dressed skin keeps*.
 - **One ageing bruise per mesh entity.** A second blow on the same entity starts a new bruise, and
   the first stops ageing where it was. Wounds have no such limit.

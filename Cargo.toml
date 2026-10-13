@@ -1,5 +1,11 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.30`: a shot that goes through** (`AG-103`). Every impact stopped in the body: no exit wound,
+# and nothing behind a victim was ever touched. `GoreHit::through()` opens an exit where the ray leaves
+# the part, `EXIT_SCALE` wider, bleeding, and throws its forward spatter (`FORWARD_MIST` times its area)
+# along the shot. A new surface, `Gore::wall()`, takes each droplet as its own physical stain, sized,
+# stretched and pointed by how it struck; cloth behind the body is holed too.
+#
 # **`0.5.29`: a shirt** (`AG-102`). A shot at a clothed character wounded the skin under the cloth,
 # unseen, and the cloth took a flat, hard-edged red patch that ran down it in a straight column. An
 # impact now holes every cloth it crosses before the skin (`preset::ClothHoles`, cut from shadows and
@@ -163,7 +169,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.29"
+version = "0.5.30"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

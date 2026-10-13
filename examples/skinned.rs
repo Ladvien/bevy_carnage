@@ -13,6 +13,7 @@
 //! | `3` | a shot to the chest — hold it down at one spot and the crater deepens; the third breaks the body, where its skeleton is |
 //! | `4` | a hot iron on the right forearm |
 //! | `5` | a blow to the left shin |
+//! | `6` | a shot through the chest: an exit wound on the back, and its forward spatter on the wall behind |
 //! | `C` | reset, with a shirt on or off: a shot to the chest holes it and the wound shows through |
 //! | `R` | reset |
 //!
@@ -25,7 +26,7 @@ use bevy_carnage::preset::{GoreHit, GorePlugin, GoreSystems};
 
 mod common;
 use common::mannequin::{self, Bone, Mannequin};
-use common::preset_scene::{self, Sheet, Slab, Sun};
+use common::preset_scene::{self, Backdrop, Sheet, Slab, Sun};
 
 fn main() {
     App::new()
@@ -58,16 +59,17 @@ fn setup(
     let root = mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes, false);
     commands.entity(root).insert(mannequin::breakable());
     preset_scene::spawn_set(&mut commands, &mut meshes, &mut materials);
+    preset_scene::spawn_wall(&mut commands, &mut meshes, &mut materials);
     commands.spawn((
-        Text::new("1 shot to the forearm   2 slash   3 chest (three at one spot break it)   4 iron   5 blow   C shirt   R reset"),
+        Text::new("1 shot to the forearm   2 slash   3 chest (three at one spot break it)   4 iron   5 blow   6 through   C shirt   R reset"),
         TextFont { font_size: bevy::text::FontSize::Px(14.0), ..default() },
         TextColor(Color::srgb(0.92, 0.88, 0.86)),
         Node { position_type: PositionType::Absolute, left: Val::Px(12.0), top: Val::Px(10.0), ..default() },
     ));
 }
 
-/// Everything a reset despawns: the character, the sheet, the slab and the lights.
-type Scene = Or<(With<Mannequin>, With<Sheet>, With<Slab>, With<Sun>)>;
+/// Everything a reset despawns: the character, the sheet, the slab, the wall and the lights.
+type Scene = Or<(With<Mannequin>, With<Sheet>, With<Slab>, With<Backdrop>, With<Sun>)>;
 
 #[allow(clippy::too_many_arguments)]
 fn keys(
@@ -92,6 +94,8 @@ fn keys(
         aim.iron(Bone::ArmLowR, 0.10, 0.035)
     } else if input.just_pressed(KeyCode::Digit5) {
         aim.blow(Bone::LegLowL, 0.12, 0.04)
+    } else if input.just_pressed(KeyCode::Digit6) {
+        aim.shot(Bone::Spine, -0.22, 0.035, 9.0).map(GoreHit::through)
     } else {
         None
     };
@@ -109,5 +113,6 @@ fn keys(
         let root = mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes, *shirt);
         commands.entity(root).insert(mannequin::breakable());
         preset_scene::spawn_set(&mut commands, &mut meshes, &mut materials);
+        preset_scene::spawn_wall(&mut commands, &mut meshes, &mut materials);
     }
 }

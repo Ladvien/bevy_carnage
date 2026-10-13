@@ -220,6 +220,27 @@ pub fn spawn_set(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: 
     ));
 }
 
+/// The wall behind the body: what [`spawn_wall`] puts up.
+#[derive(Component)]
+pub struct Backdrop;
+
+/// **A wall behind the body**, for the shots that go through it: plaster, three metres wide, at the
+/// back of the slab, dressed as [`Gore::wall`] so the exit's forward spatter lands on it and runs.
+/// Its canvas is 512 a side, since a spatter dot at the floor's 12 mm a texel is a smudge.
+pub fn spawn_wall(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
+    commands.spawn((
+        Mesh3d(meshes.add(Plane3d::new(Vec3::Z, Vec2::new(1.5, 1.2)).mesh().build())),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.74, 0.72, 0.68),
+            perceptual_roughness: 0.85,
+            ..default()
+        })),
+        Transform::from_xyz(0.0, 1.2, -1.2),
+        Gore::wall().with_canvas(512),
+        Backdrop,
+    ));
+}
+
 /// The skin's tone, sRGB: the flat colour this scene's body wore before it had a texture.
 const SKIN: [f32; 3] = [0.80, 0.62, 0.53];
 
