@@ -1,5 +1,10 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.46`: the canvases tick in parallel** (`AG-119`). With forty characters dressed, the wetmaps'
+# tick was the dearest system on every tick, hit or not: 2.8 ms on an M4 Pro with 49 bloody canvases.
+# A canvas's tick reads and writes only itself, so `tick_canvases` now runs them across Bevy's compute
+# pool: 0.86 ms, the bytes identical in any order. Single-threaded builds (the web) loop as before.
+#
 # **`0.5.45`: a shotgun in a crowd costs less** (`AG-118`). Twelve hits a tick on one of forty dressed
 # characters spent most of `take_hits` drawing stains and casting droplets at surfaces they could not
 # reach first. The spray now casts in the order its ray enters each surface's box and stops once a
@@ -254,7 +259,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.45"
+version = "0.5.46"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

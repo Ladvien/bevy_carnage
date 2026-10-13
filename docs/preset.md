@@ -318,9 +318,14 @@ each droplet nearest box first and stops once nothing further can be nearer (239
 167 at forty characters), and stops `rasterise` computing what cannot change a byte. Interleaved
 against 0.5.44 on the same host, under another user's load: `take_hits` at forty characters went from
 25.0 and 29.7 ms to 16.1 and 15.3, at ten from 7.9 and 8.9 to 6.3 and 7.3, at one from 4.6 to 4.3,
-while `tick_canvases`, which it does not touch, matched within five per cent. **What is left in a
-crowd is the canvases' tick**, which is the rectangle each canvas's blood spans, dried stains included,
-for as long as any of it is wet; a game that dresses only the characters near the player pays for those.
+while `tick_canvases`, which it does not touch, matched within five per cent. **What was left in a
+crowd was the canvases' tick**, the rectangle each canvas's blood spans, dried stains included, for as
+long as any of it is wet. At forty characters 49 canvases ticked over 186,000 texels holding blood in
+48,000. Since 0.5.46 the canvases tick across Bevy's compute pool — each reads and writes only itself,
+so the bytes are the same in any order — and on the same quiet M4 Pro `tick_canvases` went from 2.8 to
+0.86 ms at forty characters and from 1.04 to 0.45 at ten. Where Bevy's `multi_threaded` feature is
+off, as on the web, it is the loop it was, and a game that dresses only the characters near the
+player pays for those.
 
 ## What it costs in memory
 

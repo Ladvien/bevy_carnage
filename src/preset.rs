@@ -3481,6 +3481,12 @@ fn runoff(mesh: &Mesh, pose: &Pose, wounds: &[WoundSite]) -> Option<Vec2> {
 
 /// Run and dry every wetmap on the fixed tick. A cloth runs only past what its weave holds
 /// ([`GoreDials::cloth_holds`]).
+///
+/// **Every canvas at once.** A canvas's tick reads its own blood, its own mesh, pose and wounds, and
+/// the settings, and writes only itself, so the canvases are ticked across the compute pool and the
+/// bytes are the same in any order. Where Bevy's `multi_threaded` feature is off, as on the web, it is
+/// the loop it was. Before 0.5.46 it was a loop everywhere, and in a crowd it was the most expensive
+/// system on every tick, hit or not.
 fn tick_canvases(
     clock: Res<GoreClock>,
     dials: Res<GoreDials>,
@@ -3497,10 +3503,11 @@ fn tick_canvases(
         spread_rate: settings.spread_rate * 0.25,
         ..settings.clone()
     };
-    for (gore, mut wet, mesh3d, wounds, skin, run) in &mut canvases {
+    let (tick, meshes, rigging, settings) = (clock.0, meshes.as_deref(), &rigging, &*settings);
+    canvases.par_iter_mut().for_each(|(gore, mut wet, mesh3d, wounds, skin, run)| {
         let gravity = match run {
             Some(mut run) => {
-                if let (Some(skin), Some(wounds), Some(mesh)) = (skin, wounds, meshes.as_deref().and_then(|m| m.get(&mesh3d.0)))
+                if let (Some(skin), Some(wounds), Some(mesh)) = (skin, wounds, meshes.and_then(|m| m.get(&mesh3d.0)))
                     && !wounds.0.is_empty()
                     && let Some(pose) = rigging.pose(skin)
                     && let Some(downhill) = runoff(mesh, &pose, &wounds.0)
@@ -3511,8 +3518,8 @@ fn tick_canvases(
             }
             None => gore.gravity_uv,
         };
-        wet.tick(clock.0, gravity, if gore.kind == GoreKind::Cloth { &cloth } else { &settings });
-    }
+        wet.tick(tick, gravity, if gore.kind == GoreKind::Cloth { &cloth } else { settings });
+    });
 }
 
 /// Thrown pieces fall to the floor and stop. **A piece at rest on the floor is not touched**: it
