@@ -1,5 +1,10 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.34`: a slash bleeds along its cut** (`AG-107`). A slash bled as a disc its own half-length in
+# radius, so a cut on a thigh painted one sheet the leg's width from the cut to the foot. Its wound is
+# now the cut it opened (`SLASH_OPEN_M` wide): a smear along it, and pulses that bead over the lower lip
+# at `SLASH_WELLS` fixed places (`WoundSite::cut`, `CutLine`).
+#
 # **`0.5.33`: a laceration is a spindle** (`AG-106`). Every slash opened one width from end to end
 # with square ends, onto a clean dry bed, and on a limb it read as a ribbon laid on the skin. The gape
 # now closes to a point at both ends (`GAPE_TAPER`), the floor shallows with it, and the bed is wet with
@@ -181,7 +186,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.33"
+version = "0.5.34"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

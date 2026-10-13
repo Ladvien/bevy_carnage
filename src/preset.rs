@@ -659,7 +659,7 @@ fn announce(hit: &GoreHit, at: Vec3, normal: Vec3) -> Wounded {
     Wounded {
         at,
         normal,
-        area: core::f32::consts::PI * hit.radius_m * hit.radius_m,
+        area: opened_area(hit),
         severity: 1.0,
         kind: if hit.depth_mm() > 0.0 { WoundKind::Channel } else { WoundKind::Severance },
         class: if hit.so2 >= crate::bloodstain::spectral::SO2_ARTERIAL {
@@ -667,6 +667,17 @@ fn announce(hit: &GoreHit, at: Vec3, normal: Vec3) -> Wounded {
         } else {
             crate::bloodstain::PatternClass::Impact
         },
+    }
+}
+
+/// **How much skin a hit opened**, m²: a disc its radius across, or for a slash a spindle as long as
+/// the blade and [`SLASH_OPEN_M`] wide at the middle, `π/4 · length · width`, the ellipse it is near.
+/// Until 0.5.34 a slash was a disc its own length across, 23 times the open skin of a 14 cm cut, and it
+/// bled and announced that much.
+fn opened_area(hit: &GoreHit) -> f32 {
+    match hit.kind {
+        HitKind::Slash { .. } => core::f32::consts::FRAC_PI_4 * 2.0 * hit.radius_m * SLASH_OPEN_M,
+        _ => core::f32::consts::PI * hit.radius_m * hit.radius_m,
     }
 }
 
@@ -872,6 +883,7 @@ type Bleeders<'w, 's> = Query<
         &'static Mesh3d,
         Option<&'static SkinnedMesh>,
         &'static mut WetCanvas,
+        Option<&'static RunDirection>,
     ),
     Without<FloorTag>,
 >;
@@ -910,6 +922,57 @@ pub struct WoundSite {
     pub wound: BloodWound,
     /// The schedule.
     pub bleed: crate::bloodstain::Bleed,
+    /// **A slash's line on the wetmap**, so each pulse wells over the cut's lips along its length;
+    /// `None` for a wound that is a hole.
+    pub cut: Option<CutLine>,
+}
+
+/// **How wide a slash opens, in metres on the body**: the lips stand this far apart at the middle of
+/// the cut once it has finished opening. 6 mm, which is what `Gape::default()` under
+/// `Tension::default()` opened at metre scale before 0.5.34 and still does; this crate's own number, as
+/// `Gape::default` is. Stated in metres now so the wound's area and its gape agree on any mesh scale.
+pub const SLASH_OPEN_M: f32 = 0.006;
+
+/// **How many places along a cut each pulse wells at.** The pulse's blood is shared between them, so a
+/// cut bleeds as beads over its lips that each run, rather than one stream from its middle. This
+/// crate's own number.
+pub const SLASH_WELLS: u32 = 3;
+
+/// **A slash's line on a wetmap**: where along the cut, and how far out its lips are.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CutLine {
+    /// Half the cut, from its middle to one tip, as a change of `UV_0`.
+    pub half_uv: Vec2,
+    /// Half the open width at the middle, in UV: how far either lip stands from the line there. It
+    /// closes toward both tips as the laceration does, by `laceration::GAPE_TAPER`.
+    pub lip_uv: f32,
+}
+
+impl CutLine {
+    /// **Where well `k` of a cut beads, and which way is out from the cut there**: a place along the
+    /// cut, the wells spread from end to end and each a little off its share by `seed`, on the lip
+    /// `downhill` (UV) points across. A level cut, with no downhill, beads on both lips by turns.
+    ///
+    /// **The wells stay put for the wound's life.** The wetmap leaves its drip threshold behind in
+    /// every texel a run crosses, so a run is only long when it is fed over the track the last pulse
+    /// left wet; a bead somewhere new each pulse spends itself wetting new skin.
+    fn well(&self, seed: u32, k: u32, downhill: Vec2) -> (Vec2, Vec2) {
+        let h = |salt: u32| crate::bloodstain::hash_f32(seed ^ k.wrapping_mul(0x85EB_CA6B) ^ salt);
+        let n = SLASH_WELLS.max(1) as f32;
+        // Stratified over `[-0.75, 0.75]`, kept off the tips, where the cut has closed.
+        let along = ((k as f32 + 0.25 + 0.5 * h(0x51)) / n * 2.0 - 1.0) * 0.75;
+        let across = self.half_uv.normalize_or_zero().perp();
+        let lean = across.dot(downhill);
+        let side = if lean > 0.0 {
+            1.0
+        } else if lean < 0.0 || k % 2 == 1 {
+            -1.0
+        } else {
+            1.0
+        };
+        let open = libm::powf(libm::cosf(core::f32::consts::FRAC_PI_2 * along).max(0.0), crate::laceration::GAPE_TAPER);
+        (self.half_uv * along + across * (self.lip_uv * open * side), across * side)
+    }
 }
 
 /// **A spot on a skinned mesh, kept as a triangle and a place in it** rather than as a point. A point
@@ -2272,22 +2335,67 @@ fn take_hits(
         };
         let normal_world = if normal_world.dot(-hit.dir) < 0.0 { -normal_world } else { normal_world };
 
+        // **A slash is a cut, not a disc.** Where it lies on the mesh asset — for a skinned body the
+        // bind pose, carried back through the pose at the triangle that was hit: the same triangle, the
+        // same stretch — its direction there, and the scale from the asset to the world.
+        let layout = match hit.kind {
+            HitKind::Slash { along, .. } => match (&drawn, &landed) {
+                (Drawn::Posed(_, pose), Some(l)) => bind_landing(&bind, l).and_then(|(p, n)| {
+                    let m = l.matrix(&bind, pose)?;
+                    let along_local = m.inverse().transform_vector3(along).normalize_or_zero();
+                    Some((p, n, along_local, skin::max_scale(&m).max(1.0e-6)))
+                }),
+                _ => at_local.map(|p| {
+                    let along_local = xf.affine().inverse().transform_vector3(along).normalize_or_zero();
+                    (p, normal_local.unwrap_or(Vec3::Y), along_local, xf.scale().max_element().max(1.0e-6))
+                }),
+            },
+            _ => None,
+        };
+        // And its line on this wetmap: the blade's half-length read in `UV_0` at the triangle it
+        // crossed, and how far out its lips stand once it has opened.
+        let cut = match (hit.kind, landed) {
+            (HitKind::Slash { along, .. }, Some(l)) => {
+                let half = xf.affine().inverse().transform_vector3(along.normalize_or_zero() * hit.radius_m);
+                face_uv(mesh, l.tri, half)
+                    .map(|(half_uv, _)| half_uv)
+                    .filter(|h| h.is_finite() && *h != Vec2::ZERO)
+                    .map(|half_uv| CutLine { half_uv, lip_uv: 0.5 * SLASH_OPEN_M * gore.density() })
+            }
+            _ => None,
+        };
+
         // 2. Blood at the wound and on the floors.
         let wound = BloodWound {
             at: [at_world.x, at_world.y, at_world.z],
             normal: [normal_world.x, normal_world.y, normal_world.z],
-            area: core::f32::consts::PI * hit.radius_m * hit.radius_m,
+            area: opened_area(&hit),
             severity: 1.0,
             kind: if hit.depth_mm() > 0.0 { WoundKind::Channel } else { WoundKind::Severance },
         };
         let seed = wound_seed(&wound);
-        let shape = StainShape {
-            major: hit.radius_m * 2.6,
-            minor: hit.radius_m * 2.0,
-            spines: 4,
-            satellites: 2,
-            direction: [0.0, 1.0],
-            seed,
+        let shape = match cut {
+            // A cut leaves its blood along itself: a smear as long as the blade and a little wider than
+            // the mouth, laid along the cut in the atlas. Until 0.5.34 it took a disc 2.6 times the
+            // blade's half-length tall, and on a thigh that read as a sheet with a line drawn in it.
+            Some(c) => StainShape {
+                // The cut's own length on this atlas, in the metres `shape_on` reads, so the smear
+                // ends where the cut does on an atlas stretched more one way than the other.
+                major: 2.0 * c.half_uv.length() / gore.density().max(1.0e-6),
+                minor: SLASH_OPEN_M * 2.0,
+                spines: 0,
+                satellites: 0,
+                direction: c.half_uv.normalize_or_zero().to_array(),
+                seed,
+            },
+            None => StainShape {
+                major: hit.radius_m * 2.6,
+                minor: hit.radius_m * 2.0,
+                spines: 4,
+                satellites: 2,
+                direction: [0.0, 1.0],
+                seed,
+            },
         };
         let mut painted = None;
         if let Some(mut wet) = wet {
@@ -2364,7 +2472,7 @@ fn take_hits(
             _ => (at_local, None),
         };
         if let (Some(uv), Some(at_local)) = (painted, site_at) {
-            let site = WoundSite { uv, at_local, skin: site_skin, wound, bleed: crate::bloodstain::Bleed::new(tick, &wound) };
+            let site = WoundSite { uv, at_local, skin: site_skin, wound, bleed: crate::bloodstain::Bleed::new(tick, &wound), cut };
             open_site(&mut commands, hit.entity, site, hit.radius_m * gore.density(), dials.open_wounds);
         }
         wounded.write(announce(&hit, at_world, normal_world));
@@ -2425,50 +2533,38 @@ fn take_hits(
                 _ => Some((exit.point, None)),
             };
             if let (Some(uv), Some((at_local, skin))) = (exit_uv, exit_at) {
-                let site = WoundSite { uv, at_local, skin, wound: exit_wound, bleed: crate::bloodstain::Bleed::new(tick, &exit_wound) };
+                let site = WoundSite { uv, at_local, skin, wound: exit_wound, bleed: crate::bloodstain::Bleed::new(tick, &exit_wound), cut: None };
                 open_site(&mut commands, hit.entity, site, exit_radius * gore.density(), dials.open_wounds);
             }
             wounded.write(Wounded { area: exit_wound.area, ..announce(&hit, exit_world, exit_normal) });
         }
 
-        // 4. A slash gapes instead of cratering.
-        if let HitKind::Slash { along, depth_mm } = hit.kind {
-            // The cut is laid out on the mesh asset. For a skinned body that is the bind pose, so the
-            // point, the face normal, the direction of travel and the length are carried back to it
-            // through the pose at the triangle that was hit: the same triangle, the same stretch.
-            let layout = match (&drawn, &landed) {
-                (Drawn::Posed(_, pose), Some(l)) => bind_landing(&bind, l).and_then(|(p, n)| {
-                    let m = l.matrix(&bind, pose)?;
-                    let along_local = m.inverse().transform_vector3(along).normalize_or_zero();
-                    Some((p, n, along_local, hit.radius_m / skin::max_scale(&m).max(1.0e-6)))
-                }),
-                _ => at_local.map(|p| {
-                    let inv = xf.affine().inverse();
-                    let along_local = inv.transform_vector3(along).normalize_or_zero();
-                    (p, normal_local.unwrap_or(Vec3::Y), along_local, hit.radius_m / xf.scale().max_element().max(1.0e-6))
-                }),
-            };
-            if let Some((p, n_local, along_local, half)) = layout {
-                let source = meshes.add(bind.clone());
-                // **The wound is torn into a mesh this entity owns.** The laceration rewrites the
-                // entity's drawn mesh in place, and a loaded scene shares one mesh handle between every
-                // instance of a character: torn through the shared handle, one slash opened the same
-                // gape on every enemy wearing that mesh. The copy keeps whatever the mesh had, tangents
-                // and joint weights included.
-                let torn = meshes.add(bind.clone());
-                commands.entity(hit.entity).try_insert(Mesh3d(torn));
-                commands.entity(hit.entity).try_insert(Laceration {
-                    path: vec![p - along_local * half, p, p + along_local * half],
-                    normal: n_local,
-                    gape: Gape::default(),
-                    tension: Tension::default(),
-                    bed_depth_mm: depth_mm.max(1.0),
-                    region,
-                    opened_at: tick,
-                    source,
-                    ..Default::default()
-                });
-            }
+        // 4. A slash gapes instead of cratering, along the layout above.
+        if let HitKind::Slash { depth_mm, .. } = hit.kind
+            && let Some((p, n_local, along_local, scale)) = layout
+        {
+            let half = hit.radius_m / scale;
+            let tension = Tension::default();
+            let source = meshes.add(bind.clone());
+            // **The wound is torn into a mesh this entity owns.** The laceration rewrites the entity's
+            // drawn mesh in place, and a loaded scene shares one mesh handle between every instance of
+            // a character: torn through the shared handle, one slash opened the same gape on every
+            // enemy wearing that mesh. The copy keeps whatever the mesh had, tangents and joint weights
+            // included.
+            let torn = meshes.add(bind.clone());
+            commands.entity(hit.entity).try_insert(Mesh3d(torn));
+            commands.entity(hit.entity).try_insert(Laceration {
+                path: vec![p - along_local * half, p, p + along_local * half],
+                normal: n_local,
+                // `SLASH_OPEN_M` in the world, in the asset's own units, under the tension it opens at.
+                gape: Gape { width_max: SLASH_OPEN_M / (scale * tension.skin.max(1.0e-6)), ..Gape::default() },
+                tension,
+                bed_depth_mm: depth_mm.max(1.0),
+                region,
+                opened_at: tick,
+                source,
+                ..Default::default()
+            });
         }
 
         // 5. Guts, from a torso that has been opened to the muscle.
@@ -2791,7 +2887,9 @@ fn bleed(
     let tick = clock.0;
     let drips = policy.as_deref().is_none_or(|p| p.draws_blood() && p.blood_decals);
     let edges = edge_settings(&dials, wet_settings.as_deref());
-    for (gore, mut wounds, xf, mesh3d, skin, mut wet) in &mut sites {
+    for (gore, mut wounds, xf, mesh3d, skin, mut wet, run) in &mut sites {
+        // Which way blood runs on this atlas now, for the lip a cut beads over.
+        let downhill = run.map_or(gore.gravity_uv, |r| r.0);
         // The pose a skinned body is drawn in now, read once for every wound it is bleeding and only
         // if one of them needs it.
         let mut pose: Option<Option<Pose>> = None;
@@ -2806,16 +2904,44 @@ fn bleed(
                 continue;
             };
             let r = (site.wound.area / core::f32::consts::PI).sqrt().max(0.002) * (0.6 + pulse.severity);
-            let shape = StainShape {
-                major: r * 1.6,
-                minor: r,
-                spines: 0,
-                satellites: 0,
-                direction: [0.0, 1.0],
-                seed: site.bleed.seed ^ tick,
-            };
             let texels = wet.size();
-            wet.paint_uv_with(site.uv, &shape_on(gore, &shape, texels), tick, &edges);
+            match site.cut {
+                // **A cut wells over its lower lip.** The pulse is shared between `SLASH_WELLS` beads,
+                // by area, each at its own place along the cut and drawn out downhill, so a cut bleeds
+                // as a few runs down the skin rather than one stream from its middle.
+                Some(cut) => {
+                    let bead = r / (SLASH_WELLS as f32).sqrt();
+                    let run = if downhill == Vec2::ZERO { [0.0, 1.0] } else { downhill.normalize_or_zero().to_array() };
+                    for k in 0..SLASH_WELLS {
+                        // The bead's area is the share's, but drawn out down the slope and narrow: a run
+                        // goes as far as its blood over its width, and as round beads a bead's worth
+                        // ran about its own length before the wetmap's threshold held it.
+                        let shape = StainShape {
+                            major: bead * 2.6,
+                            minor: bead * 0.6,
+                            spines: 0,
+                            satellites: 0,
+                            direction: run,
+                            seed: site.bleed.seed ^ tick ^ k.wrapping_mul(0x27D4_EB2F),
+                        };
+                        // Centred half a bead out past the lip, so it sits on the skin, not in the gap.
+                        let (lip, out) = cut.well(site.bleed.seed, k, downhill);
+                        let at = site.uv + lip + out * (0.5 * bead * gore.density());
+                        wet.paint_uv_with(at, &shape_on(gore, &shape, texels), tick, &edges);
+                    }
+                }
+                None => {
+                    let shape = StainShape {
+                        major: r * 1.6,
+                        minor: r,
+                        spines: 0,
+                        satellites: 0,
+                        direction: [0.0, 1.0],
+                        seed: site.bleed.seed ^ tick,
+                    };
+                    wet.paint_uv_with(site.uv, &shape_on(gore, &shape, texels), tick, &edges);
+                }
+            }
             // What runs off the body onto the world is the world's share of the blood.
             if !drips {
                 continue;
@@ -3317,6 +3443,43 @@ mod tests {
         // A 0.2 m blade on a 1 m sheet of 128 texels is 25.6 texels end to end; the lens closes before
         // its tips.
         assert!((14..=27).contains(&along), "the slit is {along} texels long for a 25.6-texel blade");
+    }
+
+    /// **A slash leaves its blood along the cut, not as a disc its own length across.** A slash along
+    /// world `X` across the front of a skin box, which on that face is the atlas's `u`. The blood it
+    /// leaves runs at least four times as far along `u` as down `v`; and the wound it announces is the
+    /// cut's, a tenth of a disc the blade's half-length in radius or less.
+    #[test]
+    fn a_slash_bleeds_along_its_cut_not_from_a_disc() {
+        let mut app = headless();
+        let body = {
+            let world = app.world_mut();
+            let mesh = world.resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.6, 0.6, 0.2).mesh().build());
+            world.spawn((Mesh3d(mesh), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Torso))).id()
+        };
+        app.world_mut().run_schedule(FixedUpdate);
+        let radius = 0.1;
+        app.world_mut().write_message(GoreHit::slash(body, Vec3::new(0.0, 0.0, 2.0), Vec3::NEG_Z, Vec3::X, radius, 5.0));
+        app.world_mut().run_schedule(FixedUpdate);
+        let Some(wet) = app.world().get::<WetCanvas>(body) else { panic!("the body was not dressed") };
+        let n = wet.size();
+        let (mut us, mut vs) = (Vec::new(), Vec::new());
+        for y in 0..n {
+            for x in 0..n {
+                if wet.amount_at(x, y) > 0 {
+                    us.push(x as i64);
+                    vs.push(y as i64);
+                }
+            }
+        }
+        let extent = |v: &[i64]| v.iter().max().zip(v.iter().min()).map_or(0, |(a, b)| a - b + 1);
+        let (along, down) = (extent(&us), extent(&vs));
+        assert!(along > 0, "the slash left no blood");
+        assert!(along >= 4 * down, "the slash's blood runs {along} texels along the cut and {down} down it");
+        let (wounded, _) = announced(&app);
+        let Some(cut) = wounded.last() else { panic!("the slash announced nothing") };
+        let disc = core::f32::consts::PI * radius * radius;
+        assert!(cut.area > 0.0 && cut.area <= disc / 10.0, "the slash announced {} m², against {disc} for a disc its half-length across", cut.area);
     }
 
     /// **A droplet stops at the first thing it reaches, unless there is a hole in it.** A shot at a

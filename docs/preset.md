@@ -90,6 +90,18 @@ the triangle it crossed, so it lies along the cut whatever way the garment's atl
 shows through is the laceration as it looks on bare skin: a spindle closed at both ends, its bed the
 fat layer under a film of its own blood (0.5.33, `laceration::GAPE_TAPER` and `BED_BLOOD`).
 
+**A slash bleeds along its cut** (0.5.34). Its wound is the cut it opened: a spindle as long as the blade
+and `SLASH_OPEN_M` (6 mm) wide at the middle, `π/4 · length · width` of skin, which is what it bleeds
+for, sprays for and announces in `Wounded`. Its blood is a smear along the cut, and every pulse beads at
+`SLASH_WELLS` (3) places along it, on the lip downhill, each the same place for the wound's life so it
+feeds its run over the track the last pulse left wet, which the wetmap's drip crosses without loss.
+The laceration opens `SLASH_OPEN_M` wide in the world whatever the mesh's scale. On the mannequin's
+128-texel limbs, 7 mm a texel, what shows is a patch round the cut with short runs below it, most
+likely because the wetmap's spread carries a bead about as far sideways as it runs; a finer canvas
+(`Gore::with_canvas`) is the lever, untried. Before 0.5.34 a slash was a disc its own half-length in
+radius, 23 times the skin a 14 cm cut opens, and on a thigh its blood was one sheet the leg's width
+from the cut to the foot.
+
 **A shot that goes through** (0.5.30). Whether a projectile leaves a body is the game's ballistics —
 calibre, energy, armour — so the game says so: `GoreHit::impact(..).through()`. The preset finds where
 the ray leaves the part it entered and opens an exit there, `EXIT_SCALE` (1.6) times the entry's
