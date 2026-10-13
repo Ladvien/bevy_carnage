@@ -1,5 +1,10 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.26`: the fixed-step trap says so** (`AG-099`). Bevy's default `FixedUpdate` is 64 Hz and
+# `GoreDials::hz` is 60, so a game that missed the first line of the checklist ran every bleed, bruise
+# and drying 6.7 per cent fast and was told nothing. The preset now warns once, on its first tick, naming
+# the rate it found. Nothing else changes.
+#
 # **`0.5.25`: memory is a number and a dial** (`AG-098`). A dressed skin owns three square canvases
 # and costs 1.3 MiB at the shipped 128 (a character of six, 7.7 MiB), by the edge squared.
 # `Gore::with_canvas` gives one surface its own edge, and `WetCanvas`, `FlayCanvas` and `DermisCanvas`
@@ -140,7 +145,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.25"
+version = "0.5.26"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

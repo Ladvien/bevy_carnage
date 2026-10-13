@@ -1332,12 +1332,39 @@ impl Plugin for GorePlugin {
     }
 }
 
-/// One tick per fixed step, mirrored into the laceration clock so both agree.
-fn advance_clock(mut clock: ResMut<GoreClock>, lac: Option<ResMut<LacerationClock>>) {
+/// One tick per fixed step, mirrored into the laceration clock so both agree. On the first tick it
+/// checks the rate the app runs `FixedUpdate` at against [`GoreDials::hz`], since Bevy's own default is
+/// 64 Hz and the dial's is 60, and a game that forgets the one line in `docs/preset.md` otherwise runs
+/// every bleed, bruise and drying six per cent fast with nothing to say so.
+fn advance_clock(
+    mut clock: ResMut<GoreClock>,
+    lac: Option<ResMut<LacerationClock>>,
+    dials: Res<GoreDials>,
+    fixed: Option<Res<Time<Fixed>>>,
+) {
     clock.0 = clock.0.saturating_add(1);
+    if clock.0 == 1
+        && let Some(actual) = fixed.as_deref().and_then(|t| fixed_rate_mismatch(dials.hz, t.timestep()))
+    {
+        bevy::log::warn!(
+            "gore: FixedUpdate runs at {actual} Hz and GoreDials::hz is {}, so every bleed, bruise and drying \
+             runs at {:.0}% of the speed it was authored at; call app.insert_resource(Time::<Fixed>::from_hz({}.0)) \
+             or set GoreDials::hz to {actual}",
+            dials.hz,
+            actual / dials.hz.max(1) as f64 * 100.0,
+            dials.hz
+        );
+    }
     if let Some(mut lac) = lac {
         lac.0 = clock.0;
     }
+}
+
+/// The rate `FixedUpdate` runs at, when it is not the one the dials were authored for: within half a
+/// hertz is the same rate. A zero step has no rate and is not reported.
+fn fixed_rate_mismatch(hz: u32, step: std::time::Duration) -> Option<f64> {
+    let actual = 1.0 / step.as_secs_f64().max(f64::MIN_POSITIVE);
+    (!step.is_zero() && (actual - hz as f64).abs() > 0.5).then_some((actual * 100.0).round() / 100.0)
 }
 
 /// **Dress every new [`Gore`] entity**: canvases, and the flesh material over its own material.
@@ -3316,6 +3343,66 @@ mod tests {
         assert_eq!(cut("XMLFile"), "xml file");
         assert_eq!(cut("Armature"), "armature");
         assert_eq!(cut("__"), "");
+    }
+
+    /// **Bevy's own fixed step is 64 Hz and the dial's is 60**, and a game that missed the checklist
+    /// ran every bleed 6.7 per cent fast without a word. The check names the rate it found, and says
+    /// nothing for the rate the dials were authored for, for a step that rounds to it, or for none.
+    #[test]
+    fn a_fixed_step_that_is_not_the_dials_rate_is_reported() {
+        let step = |hz: f64| std::time::Duration::from_secs_f64(1.0 / hz);
+        assert_eq!(fixed_rate_mismatch(60, step(64.0)), Some(64.0), "Bevy's default step went unreported");
+        assert_eq!(fixed_rate_mismatch(60, step(60.0)), None);
+        assert_eq!(fixed_rate_mismatch(60, step(60.3)), None, "a rounding of the same rate was reported");
+        assert_eq!(fixed_rate_mismatch(144, step(60.0)), Some(60.0));
+        assert_eq!(fixed_rate_mismatch(60, std::time::Duration::ZERO), None);
+    }
+
+    /// The system, not just the arithmetic: an app on Bevy's default 64 Hz step is told so, once, on
+    /// the first tick and not again, and one on the dials' own 60 Hz is told nothing.
+    #[test]
+    fn the_first_tick_names_a_fixed_step_that_is_not_the_dials_rate_once() {
+        use bevy::log::tracing_subscriber::fmt;
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+        #[derive(Clone)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                if let Ok(mut inner) = self.0.lock() {
+                    inner.extend_from_slice(buf);
+                }
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let heard = |hz: Option<f64>| {
+            let sink = Sink(Arc::new(Mutex::new(Vec::new())));
+            let subscriber = fmt().with_writer({
+                let sink = sink.clone();
+                move || sink.clone()
+            }).finish();
+            bevy::log::tracing::subscriber::with_default(subscriber, || {
+                let mut app = headless();
+                if let Some(hz) = hz {
+                    app.insert_resource(Time::<Fixed>::from_hz(hz));
+                }
+                // A scoped subscriber is thread-local, and the multithreaded executor would run the
+                // system on another thread, where it is not installed.
+                app.edit_schedule(FixedUpdate, |schedule| {
+                    schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
+                });
+                for _ in 0..3 {
+                    app.world_mut().run_schedule(FixedUpdate);
+                }
+            });
+            let text = sink.0.lock().map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+            text.matches("FixedUpdate runs at").count()
+        };
+        assert_eq!(heard(None), 1, "the default 64 Hz step was not reported exactly once");
+        assert_eq!(heard(Some(60.0)), 0, "the dials' own rate was reported");
     }
 
     /// **The wound bed a slash opens is not a second skin.** The preset spawns it as a child of the
