@@ -152,7 +152,8 @@ renderer asks for. Nothing is asked of the game. Put `Gore` on the skinned mesh 
 - **Blood runs downhill in the world.** While a skinned part has an open wound, `RunDirection` is
   rewritten each tick: the UV direction whose image on the surface points straight down, averaged
   over the triangles its wounds are on, and none where the surface is within about seven degrees of
-  level. A forearm held up has its blood run toward the elbow however its atlas is laid out.
+  level. A forearm held up has its blood run toward the elbow however its atlas is laid out, and
+  since 0.5.40 a run follows that direction rather than the texture axis nearest it.
 - **A slash is laid out on the bind pose**, which is what the laceration tears: the point, the face
   normal, the direction of travel and the length are carried back through the pose at the triangle
   that was hit.

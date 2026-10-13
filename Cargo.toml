@@ -1,5 +1,12 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.40`: a run of blood leans the way gravity does** (`AG-113`). A drip fell along the dominant
+# axis of gravity alone, so every run on a canvas was a straight, axis-parallel streak however the atlas
+# lay against the ground. A parcel now also steps one across on a share of the lines it falls through,
+# gravity's own `|minor| / |major|`, on the lines Bresenham would pick. Every texel of a line steps
+# alike, so the drip still conserves every byte; gravity along a texture axis keeps the old drip to
+# the byte.
+#
 # **`0.5.39`: a wetmap's stains have smooth edges on a plain `StandardMaterial`** (`AG-112`). A canvas's
 # images were its texels, so close up every stain was a soft staircase. `WetCanvas::new_detailed` keeps
 # the canvas and its digest and draws the two images up to `MAX_DETAIL` (4) times finer, redrawing the
@@ -212,7 +219,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.39"
+version = "0.5.40"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

@@ -25,7 +25,8 @@ const CANVAS: u32 = 128;
 
 /// The four directions gravity can point on a texture, and what to call each one.
 ///
-/// Four rather than a slider, because the drip pass quantises to the dominant axis anyway. Bevy's UV
+/// Four rather than a slider: the texture's own axes are enough to show that down is the caller's to
+/// say, though since 0.5.40 a run leans for any gravity between them as well. Bevy's UV
 /// sphere puts `v = 0` at its `+Z` pole and the subject is rotated so that pole faces world `+Y`, so
 /// `+v` really is down — but which way is down on an atlas is a property of the atlas, which is why
 /// the crate takes it as an argument and this demo lets you turn it.

@@ -649,9 +649,12 @@ impl WetCanvas {
     /// **The state machine, in exactly four passes and exactly this order.**
     ///
     /// 1. **Drip.** A wet texel holding more than `drip_rate` sheds the *excess* one texel along
-    ///    `gravity_uv` and keeps the rest. What leaves one texel arrives in exactly one other, or is
-    ///    lost at the border — nothing else, because the step is a translation, so at most one texel
-    ///    can ever step into another. **Conserved exactly wherever the destination is also wet:** a
+    ///    `gravity_uv` and keeps the rest: one texel down gravity's dominant axis, and on a share of
+    ///    the lines it falls through one across as well, for gravity's lean (`DripStep::across`).
+    ///    What leaves one texel arrives in exactly one other, or is lost at the border — nothing
+    ///    else, because every texel of a line steps alike, so each line moves as a translation and
+    ///    at most one texel can ever step into another. **Conserved exactly wherever the destination
+    ///    is also wet:** a
     ///    wet destination sheds down to the threshold, so its residue is at most `threshold` and the
     ///    parcel is at most `255 − threshold`, which sums to exactly 255. The one lossy case is blood
     ///    running onto a *dry crust that is already saturated*, and there the loss is the model rather
@@ -938,13 +941,14 @@ impl WetCanvas {
 
     /// Pass 1, over `region`. See [`tick`](Self::tick).
     fn drip(&mut self, region: Live, gravity_uv: Vec2, s: &WetSettings) {
-        let Some((sx, sy)) = dominant_step(gravity_uv) else {
+        let Some(step) = drip_step(gravity_uv) else {
             return;
         };
         let thr = s.drip_threshold();
         let span = s.dry_span();
         self.prev.copy_from_slice(&self.wet);
         let n = self.size as i64;
+        let ((sx, sy), (mx, my)) = (step.major, step.minor);
         for y in region.y0..=region.y1 {
             for x in region.x0..=region.x1 {
                 let Some(&(amount, age)) = self.prev.get((y * n + x) as usize) else {
@@ -952,9 +956,12 @@ impl WetCanvas {
                 };
                 let leaves = if is_wet(age, span) { amount.saturating_sub(thr) } else { 0 };
                 let residue = amount - leaves;
-                // Exactly one texel can step into this one, because the step is a translation. So
-                // there is no accumulation here and no order in which two arrivals could race.
-                let (ax, ay) = (x - sx, y - sy);
+                // Exactly one texel can step into this one: every texel of a line across the fall
+                // steps alike, so each line moves as a translation. So there is no accumulation here
+                // and no order in which two arrivals could race.
+                let line = if sx != 0 { x - sx } else { y - sy };
+                let across = step.across(line);
+                let (ax, ay) = (x - sx - across * mx, y - sy - across * my);
                 let arrival_in_bounds = ax >= 0 && ax < n && ay >= 0 && ay < n;
                 let (arriving, arriving_age) = match self.prev.get((ay * n + ax) as usize) {
                     Some(&(aj, agej)) if arrival_in_bounds && is_wet(agej, span) => {
@@ -1197,7 +1204,8 @@ impl Live {
     }
 }
 
-/// **How far one tick can move blood, in texels: two.** Drip translates a parcel one texel; spread,
+/// **How far one tick can move blood, in texels: two.** Drip moves a parcel one texel, or one down and
+/// one across when it leans, which is still one along each axis; spread,
 /// in the same tick and after it, reaches the 4-neighbourhood of where the parcel landed. A margin of
 /// one was tried first and lost the second step's share: `the_live_rectangle_changes_nothing_but_the_cost`
 /// caught it on a spined stain at tick 0.
@@ -1286,22 +1294,54 @@ fn wetness(amount: u8, age: u16, span: u32) -> u8 {
     (((left * 255 + (span as u64) / 2) / span.max(1) as u64).min(255)) as u8
 }
 
-/// The single-texel step gravity implies.
+/// **One drip step**: the texel a parcel falls along gravity's dominant axis (`major`), the texel
+/// across it toward gravity's lean (`minor`), and how far it leans, `|minor| / |major|` of gravity
+/// itself, in `[0, 1]`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DripStep {
+    major: (i64, i64),
+    minor: (i64, i64),
+    slant: f64,
+}
+
+impl DripStep {
+    /// **Whether a parcel leaving `line` steps across as well as down**: `1` or `0`, in units of
+    /// `minor`. `line` is the index of the line across the fall the parcel leaves — its row when it
+    /// falls along `y`, its column when along `x`.
+    ///
+    /// Bresenham's rule: across on exactly the lines where `line · slant` passes a whole number, so
+    /// a lean of a half steps on every other line and a lean of a third on every third, at a steady
+    /// rhythm, and a run's sideways travel over any stretch of lines is the slant times their count
+    /// to within one texel. Integer-exact for the slants a canvas meets: `f64` holds `line · slant`
+    /// to far below a texel for any canvas edge a `u32` can name. A function of the line alone, so
+    /// **every texel of a line steps alike** and the line moves as a translation: no two parcels can
+    /// land on one texel, which is what keeps the drip's conservation argument the one it was.
+    fn across(self, line: i64) -> i64 {
+        if self.slant <= 0.0 {
+            return 0;
+        }
+        let k = line as f64;
+        i64::from(((k + 1.0) * self.slant).floor() > (k * self.slant).floor())
+    }
+}
+
+/// The drip step gravity implies, or `None` for no gravity.
 ///
-/// **Quantised to the dominant axis on purpose.** A fractional step would need interpolation to split a
-/// parcel between two texels, and interpolation is a second movement model with its own conservation
-/// argument to make. One texel per tick along one axis has exactly one, and it is three lines.
-///
-/// A tie in `|x|` against `|y|` goes to the x axis — arbitrary but fixed, so a diagonal gravity is
-/// reproducible rather than dependent on how the caller spelled it.
-fn dominant_step(g: Vec2) -> Option<(i64, i64)> {
+/// **A parcel still moves one texel a tick**, down the dominant axis, and leans by stepping one
+/// across as well on a share of the lines it falls through — see [`DripStep::across`]. A tie in `|x|`
+/// against `|y|` goes to the x axis, with a slant of one, so a diagonal gravity is reproducible rather
+/// than dependent on how the caller spelled it.
+fn drip_step(g: Vec2) -> Option<DripStep> {
     if !g.is_finite() || (g.x == 0.0 && g.y == 0.0) {
         return None;
     }
+    let sign = |v: f32| if v > 0.0 { 1 } else { -1 };
+    let across = |v: f32| if v < 0.0 { -1 } else { 1 };
+    let lean = |minor: f32, major: f32| (f64::from(minor.abs()) / f64::from(major.abs())).clamp(0.0, 1.0);
     if g.x.abs() >= g.y.abs() {
-        Some((if g.x > 0.0 { 1 } else { -1 }, 0))
+        Some(DripStep { major: (sign(g.x), 0), minor: (0, across(g.y)), slant: lean(g.y, g.x) })
     } else {
-        Some((0, if g.y > 0.0 { 1 } else { -1 }))
+        Some(DripStep { major: (0, sign(g.y)), minor: (across(g.x), 0), slant: lean(g.x, g.y) })
     }
 }
 
@@ -1439,6 +1479,82 @@ mod tests {
         assert_eq!(c.amount_at(3, 2), s.drip_threshold(), "the source kept the wrong residue");
         assert_eq!(c.amount_at(3, 3), 255 - s.drip_threshold(), "the parcel did not land next door");
         assert_eq!(c.amount_at(3, 4), 0, "the parcel cascaded — the pass read its own writes");
+    }
+
+    /// A block of blood, four rows by `w` texels from `(x0, y0)`, every texel well over the threshold
+    /// and no two rows alike, so every texel sheds and the parcels differ.
+    fn reservoir(c: &mut WetCanvas, x0: usize, y0: usize, w: usize) {
+        let n = c.size as usize;
+        for y in 0..4 {
+            for x in 0..w {
+                c.wet[(y0 + y) * n + x0 + x] = ([255, 230, 200, 170][y], 0);
+            }
+        }
+    }
+
+    /// **A drip that leans conserves every byte.** A leaning parcel must not land where another
+    /// already lands: every texel of a line stepping alike is what keeps each destination to one
+    /// source, and a collision would drop one of the two parcels. A wide block under four leaning
+    /// gravities, along both axes and both ways, for twelve drips.
+    #[test]
+    fn a_leaning_drip_conserves_every_byte() {
+        let s = WetSettings::default();
+        for gravity in [Vec2::new(0.6, 1.0), Vec2::new(-1.0, 0.3), Vec2::new(1.0, -1.0), Vec2::new(0.25, -1.0)] {
+            let (_images, mut c) = canvas(64);
+            reservoir(&mut c, 24, 28, 14);
+            let total: u32 = c.wet.iter().map(|t| t.0 as u32).sum();
+            // The same block in step, under gravity's dominant axis alone: no lean at all.
+            let axis = if gravity.x.abs() >= gravity.y.abs() { Vec2::new(gravity.x.signum(), 0.0) } else { Vec2::new(0.0, gravity.y.signum()) };
+            let (_images, mut d) = canvas(64);
+            reservoir(&mut d, 24, 28, 14);
+            for i in 0..12 {
+                c.drip(whole(&c), gravity, &s);
+                d.drip(whole(&d), axis, &s);
+                let now: u32 = c.wet.iter().map(|t| t.0 as u32).sum();
+                assert_eq!(now, total, "{gravity}, drip {i}: a leaning parcel was lost or doubled");
+            }
+            assert_ne!(c.wet, d.wet, "{gravity}: nothing leaned, so nothing here was tested");
+        }
+    }
+
+    /// **A run leans the way gravity leans, by as much.** The blood's mean position after thirty
+    /// drips from a block six texels wide: under a gravity leaning one across for two down it has
+    /// moved across half as far as down, toward the lean and away from it when the lean is turned;
+    /// along the other axis the same; and under straight-down gravity it has not moved across and
+    /// has not left its own six columns.
+    #[test]
+    fn a_run_leans_the_way_gravity_leans() {
+        let run = |gravity: Vec2| -> (f32, f32, usize) {
+            let s = WetSettings { dry_ticks: 60_000, ..Default::default() };
+            let (_images, mut c) = canvas(96);
+            reservoir(&mut c, 45, 40, 6);
+            let mean = |c: &WetCanvas| {
+                let (mut sx, mut sy, mut m) = (0.0f64, 0.0f64, 0.0f64);
+                for (i, t) in c.wet.iter().enumerate() {
+                    let a = t.0 as f64;
+                    sx += a * (i % 96) as f64;
+                    sy += a * (i / 96) as f64;
+                    m += a;
+                }
+                (sx / m, sy / m)
+            };
+            let before = mean(&c);
+            for _ in 0..30 {
+                c.drip(whole(&c), gravity, &s);
+            }
+            let after = mean(&c);
+            let columns = (0..96).filter(|x| (0..96).any(|y| c.wet[y * 96 + x].0 > 0)).count();
+            ((after.0 - before.0) as f32, (after.1 - before.1) as f32, columns)
+        };
+        let (dx, dy, _) = run(Vec2::new(0.5, 1.0));
+        assert!(dy > 2.0, "the blood hardly fell ({dy} texels), so the lean was not exercised");
+        assert!((0.4..0.6).contains(&(dx / dy)), "the blood moved {dx} across for {dy} down under a lean of 0.5");
+        let (dx, dy, _) = run(Vec2::new(-0.5, 1.0));
+        assert!((-0.6..-0.4).contains(&(dx / dy)), "the blood moved {dx} across for {dy} down under a lean of -0.5");
+        let (dx, dy, _) = run(Vec2::new(-1.0, -0.25));
+        assert!(dx < -2.0 && (0.15..0.35).contains(&(dy / dx)), "the blood moved {dy} across for {dx} along under a lean of 0.25");
+        let (dx, _, straight) = run(Vec2::new(0.0, 1.0));
+        assert_eq!((dx, straight), (0.0, 6), "with no lean the run left its own six columns");
     }
 
     /// **A wick wets inside its front, never past it, and never takes blood away.** A pooled texel
