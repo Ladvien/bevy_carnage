@@ -308,10 +308,15 @@ the player never sees up close, and the wrong one for the one they shoot.
   was. The break itself is exact to the bone; the shape of each piece is the bind pose's.
 - **A hole or a slit does not fray or tear further.** It holds the shape it was cut with. A broken
   body's pieces are skin: the shirt goes with the body it was on.
-- **An exit is on the part that was entered, and the spray sees through things.** A shot through an
-  arm into the chest exits the arm; the chest takes the forward spatter, not a second wound. Every
-  droplet is cast at every surface on its own, so a wall behind a shirt is spattered as if the shirt
-  were not in the way — true of the entry's spray too, and of every release before this one.
+- **An exit is on the part that was entered.** A shot through an arm into the chest exits the arm;
+  the chest takes the forward spatter, not a second wound.
+- **A droplet flies straight and stops at the first thing it reaches** (0.5.32). A body part, a
+  sheet, a wall or the shirt the wound is under catches it, a hole in a cloth lets it through, and a
+  droplet something caught does not also land on the floor. The cast is a straight line, so a
+  droplet that would arc over a low wall onto the floor behind it is caught by the wall instead, and
+  only the first `SPRAY_CAST` (24) droplets of a wound are cast at all — 128 when a wall is in
+  their path; the rest go to the floors as before. Until 0.5.32 every surface took every droplet
+  aimed at it, so a wall behind a shirt was spattered as if the shirt were not there.
 - **Wet blood on a floor reads pale at a grazing angle under a plain `AmbientLight`.** Seen low and
   from far off, a fresh pool is a pale pink shape with a darker rim, not a red one; from above the
   same pool is dark red. The likely cause, not yet tested: the film is smoother than the floor, and

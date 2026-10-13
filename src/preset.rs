@@ -683,6 +683,7 @@ struct Surface {
 /// **A surface's bounds, for the spray's broad phase**: the axis-aligned box of its vertices in the
 /// mesh's own space, and the map into it from world space. A ray is moved into the box's space, not
 /// the box into the ray's, the way every cast in this crate moves the ray and not the geometry.
+#[derive(Clone, Copy)]
 struct Bounds {
     min: Vec3,
     max: Vec3,
@@ -1888,22 +1889,30 @@ struct HitContext<'w> {
     policy: Option<Res<'w, GorePolicy>>,
 }
 
-/// What [`throw_spray`] needs from the batch it is in: the surfaces, and the poses and boxes cached
-/// across the batch's hits.
-struct Thrown<'a> {
+/// What [`throw_spray`] needs from the batch it is in: the surfaces, the poses and boxes cached across
+/// the batch's hits, and the holes a droplet can fly through — those already in a cloth and those this
+/// batch opened, which are queued and not yet in it.
+struct Thrown<'a, 'w, 's> {
     surfaces: &'a [Surface],
     posed: &'a mut std::collections::HashMap<Entity, Option<Mesh>>,
     bounds: &'a mut std::collections::HashMap<Entity, Option<Bounds>>,
     identity: &'a GlobalTransform,
     edges: &'a WetSettings,
     tick: u32,
+    holes: &'a Query<'w, 's, &'static ClothHoles>,
+    /// `(cloth, UV, radius in UV)` of every hole opened earlier in this batch.
+    opened: &'a [(Entity, Vec2, f32)],
 }
 
-/// **What a wound throws lands on everything else**: the closed-form stains on every floor, and the
-/// spray's own droplets cast straight at every other dressed surface for what a floor's plane cannot
-/// catch — a sheet, a wall, the next body part. Straight rather than ballistic for those: a droplet at
-/// 8–40 m/s falls under a centimetre in the metre it travels. The spray leaves `wound.at` in a cone
-/// about `wound.normal`, and `struck`, the part the wound is on, is not cast at.
+/// **What a wound throws lands on what it reaches first.** Each droplet is cast straight at every
+/// dressed surface that is not a floor — a sheet, a wall, the next body part, the shirt the wound is
+/// under — and stains only the nearest, so a body part, a cloth or a wall in the way catches it and
+/// nothing behind is stained through it. A cloth's hole lets a droplet through. Then the closed-form
+/// stains of a horizontal plane go on every floor, for each droplet nothing caught. Straight rather
+/// than ballistic for the cast: a droplet at 8–40 m/s falls under a centimetre in the metre it
+/// travels. The spray leaves `wound.at` in a cone about `wound.normal`; `struck`, the part the wound
+/// is on, is not cast at. The first [`SPRAY_CAST`] droplets are cast; up to [`WALL_CAST`] when a
+/// wall's box is in a droplet's path.
 #[allow(clippy::too_many_arguments)]
 fn throw_spray(
     wound: &BloodWound,
@@ -1916,90 +1925,134 @@ fn throw_spray(
     dials: &GoreDials,
     commands: &mut Commands,
 ) {
-    let Thrown { surfaces, posed, bounds, identity, edges, tick } = thrown;
-    let (edges, tick) = (&**edges, *tick);
+    let Thrown { surfaces, posed, bounds, identity, edges, tick, holes, opened } = thrown;
+    let (edges, tick, identity) = (&**edges, *tick, &**identity);
     let at_world = Vec3::from_array(wound.at);
     let droplets = crate::bloodstain::patterns::impact_spatter(wound, &dials.blood);
-    for surface in surfaces.iter() {
-        let Surface { entity: other, mesh: other_handle, gore: other_gore, .. } = surface;
-        if *other == struck {
+    // **What a droplet can be cast at**, each posed once and boxed once for the batch.
+    let candidates: Vec<&Surface> = surfaces.iter().filter(|s| s.entity != struck && s.gore.kind != GoreKind::Floor).collect();
+    for s in &candidates {
+        if let Some(asset) = meshes.get(&s.mesh)
+            && let Some((m, xf)) = cast_at(s, asset, rigging, posed, identity)
+        {
+            let _ = bounds.entry(s.entity).or_insert_with(|| Bounds::of(m, xf));
+        }
+    }
+    let posed = &**posed;
+    let drawn: Vec<Option<Candidate>> = candidates
+        .iter()
+        .map(|s| {
+            let asset = meshes.get(&s.mesh)?;
+            let (m, xf) = drawn_now(s, asset, posed, identity)?;
+            Some((*s, m, xf, bounds.get(&s.entity).copied().flatten()))
+        })
+        .collect();
+    let walls = drawn.iter().flatten().any(|(s, ..)| s.gore.kind == GoreKind::Wall);
+    let mut caught = vec![false; droplets.len()];
+    let mut soak: Vec<Vec<(Vec2, StainShape, u32)>> = vec![Vec::new(); drawn.len()];
+    for (i, d) in droplets.iter().enumerate().take(if walls { WALL_CAST } else { SPRAY_CAST }) {
+        let dir = Vec3::from_array(d.dir);
+        // Past the ordinary cap a droplet is cast only toward a wall, which is what the wider cap is for.
+        let toward_wall = || {
+            drawn.iter().flatten().any(|(s, _, _, b)| s.gore.kind == GoreKind::Wall && b.as_ref().is_none_or(|b| b.reached_by(at_world, dir)))
+        };
+        if i >= SPRAY_CAST && !toward_wall() {
             continue;
         }
-        let Ok((_, _, _, _, _, Some(mut other_wet))) = bodies.get_mut(*other) else { continue };
-        let Some(other_asset) = meshes.get(other_handle) else { continue };
-        let Some((other_mesh, other_xf)) = cast_at(surface, other_asset, rigging, posed, identity) else { continue };
-        match other_gore.kind {
-            GoreKind::Floor => {
-                let plane_y = other_xf.translation().y;
-                for stain in crate::bloodstain::stain::stains(wound, &dials.blood, plane_y) {
-                    let at = Vec3::new(stain.at[0], stain.at[1] + 0.5, stain.at[2]);
-                    let shape = StainShape {
-                        major: stain.radius * 2.2,
-                        minor: stain.radius * 2.0,
-                        spines: 3,
-                        satellites: 1,
-                        direction: [0.0, 1.0],
-                        seed: stain.seed,
-                    };
-                    let texels = other_wet.size();
-                    let _ = other_wet.paint_world_with(other_mesh, other_xf, at, Vec3::NEG_Y, &shape_on(other_gore, &shape, texels), tick, edges);
-                }
+        let mut best: Option<(usize, Landing)> = None;
+        for (k, entry) in drawn.iter().enumerate() {
+            let Some((s, m, xf, b)) = entry else { continue };
+            // **Broad phase.** A droplet whose ray misses the surface's box cannot land on it; a
+            // surface with no box is cast at, so its refusal is still heard.
+            if b.as_ref().is_some_and(|b| !b.reached_by(at_world, dir)) {
+                continue;
             }
-            GoreKind::Wall => {
-                // **Each droplet is its own stain**: sized, stretched and pointed by how it struck
-                // (`hard_stain`), not the blob a body part or a sheet takes for it.
-                let bound = bounds.entry(*other).or_insert_with(|| Bounds::of(other_mesh, other_xf));
-                for (i, d) in droplets.iter().enumerate().take(WALL_CAST) {
-                    let dir = Vec3::from_array(d.dir);
-                    if bound.as_ref().is_some_and(|b| !b.reached_by(at_world, dir)) {
-                        continue;
-                    }
-                    let Some(l) = ray_hit(other_mesh, other_xf, at_world, dir) else { continue };
-                    let Some(stain) = hard_stain(other_mesh, other_xf, &l, d, &dials.blood, seed.wrapping_add(i as u32)) else { continue };
-                    let texels = other_wet.size();
-                    other_wet.paint_uv_with(l.uv, &shape_on(other_gore, &stain, texels), tick, edges);
-                }
+            let Some(l) = ray_hit(m, xf, at_world, dir) else { continue };
+            if best.as_ref().is_some_and(|(_, near)| near.t <= l.t) {
+                continue;
             }
-            _ => {
-                let mut landed = Vec::new();
-                // **Broad phase.** A droplet whose ray misses the surface's box cannot land on it,
-                // and the box is one pass over the vertices once per batch where a cast is one
-                // pass over the triangles once per droplet. A surface with no box (a mesh with no
-                // positions) is cast at, so its refusal is still heard.
-                let bound = bounds.entry(*other).or_insert_with(|| Bounds::of(other_mesh, other_xf));
-                for (i, d) in droplets.iter().enumerate().take(SPRAY_CAST) {
-                    let dir = Vec3::new(d.dir[0], d.dir[1], d.dir[2]);
-                    if bound.as_ref().is_some_and(|b| !b.reached_by(at_world, dir)) {
-                        continue;
-                    }
-                    let radius = crate::bloodstain::stain::stain_radius(d, d.speed, &dials.blood);
-                    let shape = StainShape {
-                        major: radius * 2.4,
-                        minor: radius * 1.6,
-                        spines: 2,
-                        satellites: 1,
-                        direction: [0.0, 1.0],
-                        seed: seed.wrapping_add(i as u32),
-                    };
-                    let texels = other_wet.size();
-                    if let Some(uv) =
-                        other_wet.paint_world_with(other_mesh, other_xf, at_world, dir, &shape_on(other_gore, &shape, texels), tick, edges)
-                        && other_gore.kind == GoreKind::Cloth
-                    {
-                        landed.push((uv, shape, tick));
-                    }
-                }
-                if !landed.is_empty()
-                    && let Ok(mut e) = commands.get_entity(*other)
-                {
-                    e.queue(move |mut e: EntityWorldMut| {
-                        if let Some(mut soaking) = e.get_mut::<Soaking>() {
-                            soaking.landings.extend(landed);
-                        }
-                    });
-                }
+            let through_hole = s.gore.kind == GoreKind::Cloth
+                && (holes.get(s.entity).is_ok_and(|h| h.is_open_at(l.uv))
+                    || opened.iter().any(|(e, uv, r)| *e == s.entity && uv.distance(l.uv) < *r));
+            if !through_hole {
+                best = Some((k, l));
             }
         }
+        let Some((k, l)) = best else { continue };
+        if let Some(c) = caught.get_mut(i) {
+            *c = true;
+        }
+        let Some(Some((s, m, xf, _))) = drawn.get(k) else { continue };
+        let Ok((_, _, _, _, _, Some(mut wet))) = bodies.get_mut(s.entity) else { continue };
+        let texels = wet.size();
+        let shape = match s.gore.kind {
+            // **On a wall each droplet is its own stain**: sized, stretched and pointed by how it
+            // struck (`hard_stain`), not the blob a body part or a sheet takes for it.
+            GoreKind::Wall => match hard_stain(m, xf, &l, d, &dials.blood, seed.wrapping_add(i as u32)) {
+                Some(stain) => stain,
+                None => continue,
+            },
+            _ => {
+                let radius = crate::bloodstain::stain::stain_radius(d, d.speed, &dials.blood);
+                StainShape { major: radius * 2.4, minor: radius * 1.6, spines: 2, satellites: 1, direction: [0.0, 1.0], seed: seed.wrapping_add(i as u32) }
+            }
+        };
+        wet.paint_uv_with(l.uv, &shape_on(&s.gore, &shape, texels), tick, edges);
+        if s.gore.kind == GoreKind::Cloth
+            && let Some(landings) = soak.get_mut(k)
+        {
+            landings.push((l.uv, shape, tick));
+        }
+    }
+    for (entry, landed) in drawn.iter().zip(soak) {
+        if let (Some((s, ..)), false) = (entry, landed.is_empty())
+            && let Ok(mut e) = commands.get_entity(s.entity)
+        {
+            e.queue(move |mut e: EntityWorldMut| {
+                if let Some(mut soaking) = e.get_mut::<Soaking>() {
+                    soaking.landings.extend(landed);
+                }
+            });
+        }
+    }
+    // **The floors**, in closed form, for every droplet nothing above caught. A stain's seed is the
+    // spray's own seed mixed with the droplet's ordinal, which is how a stain is matched to its droplet.
+    let spray_seed = wound_seed(wound);
+    for s in surfaces.iter().filter(|s| s.entity != struck && s.gore.kind == GoreKind::Floor) {
+        let Some(asset) = meshes.get(&s.mesh) else { continue };
+        let Some((floor_mesh, floor_xf)) = drawn_now(s, asset, posed, identity) else { continue };
+        let Ok((_, _, _, _, _, Some(mut wet))) = bodies.get_mut(s.entity) else { continue };
+        let plane_y = floor_xf.translation().y;
+        for stain in crate::bloodstain::stain::stains(wound, &dials.blood, plane_y) {
+            if caught.get((stain.seed ^ spray_seed) as usize).copied().unwrap_or(false) {
+                continue;
+            }
+            let at = Vec3::new(stain.at[0], stain.at[1] + 0.5, stain.at[2]);
+            let shape = StainShape {
+                major: stain.radius * 2.2,
+                minor: stain.radius * 2.0,
+                spines: 3,
+                satellites: 1,
+                direction: [0.0, 1.0],
+                seed: stain.seed,
+            };
+            let texels = wet.size();
+            let _ = wet.paint_world_with(floor_mesh, floor_xf, at, Vec3::NEG_Y, &shape_on(&s.gore, &shape, texels), tick, edges);
+        }
+    }
+}
+
+/// **What a surface is drawn as now, without posing it**: its asset placed by its own transform, or
+/// the pose [`cast_at`] already built and kept in `posed`. `None` for a skinned surface not posed yet.
+fn drawn_now<'a>(
+    surface: &'a Surface,
+    asset: &'a Mesh,
+    posed: &'a std::collections::HashMap<Entity, Option<Mesh>>,
+    identity: &'a GlobalTransform,
+) -> Option<(&'a Mesh, &'a GlobalTransform)> {
+    match surface.skin.as_ref().filter(|_| Rig::of(asset).is_some()) {
+        None => Some((asset, &surface.xf)),
+        Some(_) => posed.get(&surface.entity)?.as_ref().map(|m| (m, identity)),
     }
 }
 
@@ -2026,7 +2079,12 @@ struct SubjectLookup<'w, 's> {
     subjects: Query<'w, 's, (&'static FractureSubject, &'static GlobalTransform), Without<Broken>>,
     breakables: Query<'w, 's, &'static GlobalTransform, With<GoreBreakable>>,
     dressed: Query<'w, 's, &'static Dressed>,
+    /// The holes in every cloth, for the spray to fly through.
+    holes: Query<'w, 's, &'static ClothHoles>,
 }
+
+/// One surface a droplet can be cast at: itself, as drawn now, and its box.
+type Candidate<'a> = (&'a Surface, &'a Mesh, &'a GlobalTransform, Option<Bounds>);
 
 /// **Apply every hit.** See the module docs for the order.
 fn take_hits(
@@ -2055,7 +2113,7 @@ fn take_hits(
         fractured,
         policy,
     } = &mut cx;
-    let SubjectLookup { parents, subjects, breakables, dressed } = &lookup;
+    let SubjectLookup { parents, subjects, breakables, dressed, holes: cloth_holes } = &lookup;
     let tick = clock.0;
     // What the player's settings allow, read once per batch. A tier that does not draw blood draws
     // none of the rest; each of the other three is its own switch, so a game can allow blood and
@@ -2082,6 +2140,8 @@ fn take_hits(
     // And each surface's box once per batch, for the same reason.
     let mut bounds: std::collections::HashMap<Entity, Option<Bounds>> = std::collections::HashMap::new();
     let identity = GlobalTransform::IDENTITY;
+    // Every hole this batch opened, for droplets to fly through before the queued cut lands.
+    let mut opened: Vec<(Entity, Vec2, f32)> = Vec::new();
     for hit in hits {
         // **A hit at a character** names the entity the game's physics found, which is rarely the mesh
         // that was struck: the preset casts the ray at every skin under it and hurts the nearest.
@@ -2234,10 +2294,6 @@ fn take_hits(
             let texels = wet.size();
             painted = wet.paint_world_with(mesh, xf, hit.from, hit.dir, &shape_on(gore, &shape, texels), tick, &edges);
         }
-        if spray {
-            let mut thrown = Thrown { surfaces: &surfaces, posed: &mut posed, bounds: &mut bounds, identity: &identity, edges: &edges, tick };
-            throw_spray(&wound, seed, hit.entity, &mut thrown, &mut bodies, meshes, &rigging, dials, &mut commands);
-        }
         // **A hole in what it went through.** An impact crosses every cloth between where it came from
         // and the skin it wounds — a shirt over the wound, a curtain in front of the body — and opens
         // a hole in each where it crossed, so the wound under clothing is seen. A cloth behind the
@@ -2270,6 +2326,9 @@ fn take_hits(
                         let behind = if hit.through { ray_exit(cloth_mesh, cloth_xf, hit.from, hit.dir).filter(|c| c.t > skin_landing.t) } else { None };
                         let radius_uv = hit.radius_m * surface.gore.density() / crate::flaymap::UV_SPAN_M;
                         holes.extend([front.map(|c| (c.uv, radius_uv)), behind.map(|c| (c.uv, radius_uv * EXIT_SCALE))].into_iter().flatten());
+                        // What a droplet can fly through this batch, before the queued hole is cut: the
+                        // hole's open core, inside the narrowest its ragged edge comes.
+                        opened.extend(holes.iter().map(|(uv, r)| (surface.entity, *uv, r * HOLE_OPEN * 0.75)));
                     }
                 }
                 if !(holes.is_empty() && slits.is_empty())
@@ -2287,6 +2346,10 @@ fn take_hits(
                     });
                 }
             }
+        }
+        if spray {
+            let mut thrown = Thrown { surfaces: &surfaces, posed: &mut posed, bounds: &mut bounds, identity: &identity, edges: &edges, tick, holes: cloth_holes, opened: &opened };
+            throw_spray(&wound, seed, hit.entity, &mut thrown, &mut bodies, meshes, &rigging, dials, &mut commands);
         }
         // The wound bleeds from where it opened on the skin: beside the ones it already has, or in
         // place of one it landed inside. Silenced, as `try_insert` is: an earlier hit this tick may
@@ -2354,7 +2417,7 @@ fn take_hits(
                 // Forward spatter leaves along the shot, not off the skin's face: the cone's axis is
                 // the projectile's own direction.
                 let forward = BloodWound { normal: out.to_array(), area: exit_wound.area * FORWARD_MIST, ..exit_wound };
-                let mut thrown = Thrown { surfaces: &surfaces, posed: &mut posed, bounds: &mut bounds, identity: &identity, edges: &edges, tick };
+                let mut thrown = Thrown { surfaces: &surfaces, posed: &mut posed, bounds: &mut bounds, identity: &identity, edges: &edges, tick, holes: cloth_holes, opened: &opened };
                 throw_spray(&forward, exit_seed, hit.entity, &mut thrown, &mut bodies, meshes, &rigging, dials, &mut commands);
             }
             let exit_at = match &drawn {
@@ -3254,6 +3317,60 @@ mod tests {
         // A 0.2 m blade on a 1 m sheet of 128 texels is 25.6 texels end to end; the lens closes before
         // its tips.
         assert!((14..=27).contains(&along), "the slit is {along} texels long for a 25.6-texel blade");
+    }
+
+    /// **A droplet stops at the first thing it reaches, unless there is a hole in it.** A shot at a
+    /// skin box throws its back spatter toward the muzzle, where a wall stands. With nothing between,
+    /// the wall is wetted. With a second wall in front of it, the first catches the spray and the wall
+    /// behind stays dry. With a cloth curtain in front instead, the shot holes the curtain on its way
+    /// in and the spray reaches the wall behind only through that hole: some, and less than with
+    /// nothing between. And a droplet a wall caught does not also land on the floor: with no wall at
+    /// all, the floor far out takes more.
+    #[test]
+    fn a_droplet_stops_at_the_first_surface_it_reaches_unless_it_finds_a_hole() {
+        // `between`: 0 nothing, 1 a wall, 2 a cloth curtain; `back`: whether the far wall stands.
+        let run = |between: u8, back: bool| {
+            let mut app = headless();
+            let world = app.world_mut();
+            let (body, panel, ground) = {
+                let mut meshes = world.resource_mut::<Assets<Mesh>>();
+                (
+                    meshes.add(Cuboid::new(0.6, 0.6, 0.2).mesh().build()),
+                    meshes.add(Plane3d::new(Vec3::Z, Vec2::splat(1.5)).mesh().build()),
+                    // Wide enough for a droplet at 40 m/s to come down on it.
+                    meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(30.0)).mesh().build()),
+                )
+            };
+            let body = world.spawn((Mesh3d(body), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Torso))).id();
+            let (near, far, low) = (Transform::from_xyz(0.0, 0.0, 0.5), Transform::from_xyz(0.0, 0.0, 1.2), Transform::from_xyz(0.0, -0.6, 0.0));
+            let back = back.then(|| world.spawn((Mesh3d(panel.clone()), far, GlobalTransform::from(far), Gore::wall())).id());
+            let floor = world.spawn((Mesh3d(ground), low, GlobalTransform::from(low), Gore::floor())).id();
+            match between {
+                1 => {
+                    world.spawn((Mesh3d(panel), near, GlobalTransform::from(near), Gore::wall()));
+                }
+                2 => {
+                    let close = Transform::from_xyz(0.0, 0.0, 0.2);
+                    world.spawn((Mesh3d(panel), close, GlobalTransform::from(close), Gore::cloth()));
+                }
+                _ => {}
+            }
+            app.world_mut().run_schedule(FixedUpdate);
+            app.world_mut().write_message(GoreHit::impact(body, Vec3::new(0.0, 0.05, 2.0), Vec3::NEG_Z, 0.04, 5.0));
+            app.world_mut().run_schedule(FixedUpdate);
+            let area = |e: Entity| app.world().get::<WetCanvas>(e).map(|c| c.wetted_area()).unwrap_or(0.0);
+            (back.map(area).unwrap_or(0.0), area(floor))
+        };
+        let (open_back, walled_floor) = run(0, true);
+        let (walled_back, _) = run(1, true);
+        let (curtained_back, _) = run(2, true);
+        let (_, bare_floor) = run(0, false);
+        assert!(open_back > 0.0, "with nothing between, the wall took no spray");
+        assert_eq!(walled_back, 0.0, "a wall behind a wall was spattered through it");
+        assert!(curtained_back > 0.0, "no droplet went through the hole the shot made in the curtain");
+        assert!(curtained_back < open_back, "the curtain caught nothing: {curtained_back} against {open_back}");
+        assert!(bare_floor > 0.0, "with no wall the spray never came down on the floor");
+        assert!(walled_floor < bare_floor, "droplets a wall caught landed on the floor as well: {walled_floor} against {bare_floor}");
     }
 
     /// **An atlas density nobody stated is measured from the mesh, at its world scale.** A 3 m
