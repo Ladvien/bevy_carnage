@@ -17,7 +17,7 @@ a plausible-looking result that is quietly wrong.
 | 4 | **Let the preset measure how big the atlas is, or say so: `Gore::with_uv_per_metre`.** Unstated, it is measured when the mesh is dressed: the square root of the mesh's UV area over its world area, at its world scale, stored back in `Gore::uv_per_metre`. State it when that average is wrong where the wounds land, as on an atlas that packs the face far denser than the body. | Hit radii are in metres and canvases are in UV, so the density converts one to the other. Before 0.5.18 an unstated density was `1.0`, and on a densely packed atlas a 3 cm wound was a dot. |
 | 5 | **Say which way blood runs: `Gore::with_gravity_uv`.** `(0, 1)`, the default, is down on a glTF atlas whose islands stand upright. | A wrong sign is invisible in a still and obvious in motion: the drips climb. Bevy's own primitives disagree: a `Cuboid`'s front face wants `(0, -1)`, and a `Sphere::mesh().uv(..)` must be turned pole-up first. |
 | 6 | **State the scale once: `GoreDials::mm_per_unit`.** `1000` for a game in metres. A game in centimetres also sets `CrossSectionSettings::scale` and `FlaySettings::scale` to match, before adding the plugin. | Tissue depths are millimetres, and the cut faces, the flaymap's grain and the preset each convert from mesh units. |
-| 7 | **Aim `GoreHit` with a ray, and address it to the character.** `from` is the ray's origin in world space and `dir` its direction. The preset re-casts it against what is drawn: the mesh, or, on a skinned mesh, the pose on screen. Since 0.5.22 `GoreHit::entity` may be **any ancestor of the dressed meshes**, so send the hit at whatever your physics found (the character, or the capsule's owner), and the preset hurts the nearest `Gore::skin` under it along the ray. A mesh with its own `Gore` is still hurt directly. | A physics hit point is not enough on its own. Send the ray your weapon fired, or one from just outside the surface along the hit normal reversed. Bevy's `MeshRayCast` tests a skinned mesh's bind pose, so it can miss a posed limb or find the wrong part: do not use it to pick the mesh. Clothing is never the nearest, because a wound opens on skin and the spray soaks the cloth. |
+| 7 | **Aim `GoreHit` with a ray, and address it to the character.** `from` is the ray's origin in world space and `dir` its direction. If your physics reports a **contact point and its normal** instead, `GoreHit::impact_at(entity, point, normal, ..)` (or `.at_surface(point, normal)` on any hit) starts the ray `SURFACE_STAND_OFF` outside the point and sends it in. The preset re-casts it against what is drawn: the mesh, or, on a skinned mesh, the pose on screen. Since 0.5.22 `GoreHit::entity` may be **any ancestor of the dressed meshes**, so send the hit at whatever your physics found (the character, or the capsule's owner), and the preset hurts the nearest `Gore::skin` under it along the ray. A mesh with its own `Gore` is still hurt directly. | A physics hit point is not enough on its own. Send the ray your weapon fired, or one from just outside the surface along the hit normal reversed. Bevy's `MeshRayCast` tests a skinned mesh's bind pose, so it can miss a posed limb or find the wrong one. |
 | 8 | **Choose who owns the pieces: `GoreDials::spawn_fragments`.** `true` throws them ballistically to `GoreDials::floor_y`. A game with physics sets `false`, reads `GoreFractured`, gives each of its `pieces` a rigid body, and despawns or hides the body itself. | The preset's pieces are kinematic and fall to one plane. They will fight a physics engine. |
 | 9 | **Gate the bake on your own state.** The plugin adds its systems with no run condition. | The caller owns the schedule, everywhere in this crate. |
 
@@ -116,9 +116,25 @@ renderer asks for. Nothing is asked of the game. Put `Gore` on the skinned mesh 
   the inverse bind poses have not loaded, a hit on it is dropped with one warning, and a part whose
   density is unstated waits to be dressed.
 
+- **A body that breaks breaks where its skeleton is** (0.5.28). The fracture is baked from a mesh
+  asset, which is the bind pose, and before 0.5.28 its pieces appeared there: a character caught
+  mid-stride burst with its arms at its sides. Now each piece is carried rigidly by the bone of the
+  skinned vertex nearest its centre, to where that bone is on the tick the body breaks, turned as that
+  bone is turned, and the blow's place is read off the bind pose, where the fracture was cut.
+  **The contract: bake the fracture in the skinned mesh's own space**, `Mat4::IDENTITY` in
+  `fracture_mesh`'s parts, since a skinned mesh is drawn from its joints and its entity's transform
+  plays no part. Put the `GoreBreakable` on the root or on the part; every skinned mesh under the
+  root that shares the hit part's joints is searched for the nearest vertex. The proxy is the game's
+  own, as ever: a cut face is a proxy cell's cross-section, so one box to a tapering limb grows a flap
+  beyond it, and the mannequin's eleven boxes that hug the figure (`mannequin::breakable`) are the
+  example to follow.
+
 `examples/skinned.rs` is that, on a character made in code: eleven joints, six skinned meshes sharing
 them, a walk, and a wave that holds the left forearm above the head. Every key aims at where that
-part of the body is drawn that frame.
+part of the body is drawn that frame, and the third chest shot breaks it. `capture_skinned --break`
+records it.
+
+![The mannequin walks with its left arm raised; a heavy shot to the chest breaks it mid-stride into pieces that keep the pose, the raised arm up and the legs mid-step, before they fall and settle among its guts](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_break.gif)
 
 ## Units, in one place
 
@@ -245,9 +261,9 @@ the player never sees up close, and the wrong one for the one they shoot.
 
 ## Known limits
 
-- **A skinned body that breaks throws its pieces in the bind pose.** The fracture is baked from the
-  mesh asset, so a `GoreBreakable` or a baked `FractureSubject` on an animated character is cut
-  from the pose it was authored in, and its pieces appear there. A rigid body is unaffected.
+- **A piece of a skinned body is rigid.** It is carried by one bone, to where that bone is, and does
+  not bend with the pose: a thigh cut across a bent knee is a straight piece standing where the thigh
+  was. The break itself is exact to the bone; the shape of each piece is the bind pose's.
 - **A skin's roughness map and a crater's slope give way.** See *What a dressed skin keeps*.
 - **One ageing bruise per mesh entity.** A second blow on the same entity starts a new bruise, and
   the first stops ageing where it was. Wounds have no such limit.

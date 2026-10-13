@@ -10,7 +10,7 @@
 //! |---|---|
 //! | `1` | a shot to the raised left forearm |
 //! | `2` | a slash across the right thigh |
-//! | `3` | a shot to the chest — hold it down at one spot and the crater deepens |
+//! | `3` | a shot to the chest — hold it down at one spot and the crater deepens; the third breaks the body, where its skeleton is |
 //! | `4` | a hot iron on the right forearm |
 //! | `5` | a blow to the left shin |
 //! | `R` | reset |
@@ -54,10 +54,11 @@ fn setup(
         AmbientLight { brightness: preset_scene::AMBIENT, ..default() },
         preset_scene::EXPOSURE,
     ));
-    mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes);
+    let root = mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes);
+    commands.entity(root).insert(mannequin::breakable());
     preset_scene::spawn_set(&mut commands, &mut meshes, &mut materials);
     commands.spawn((
-        Text::new("1 shot to the forearm   2 slash   3 chest   4 iron   5 blow   R reset"),
+        Text::new("1 shot to the forearm   2 slash   3 chest (three at one spot break it)   4 iron   5 blow   R reset"),
         TextFont { font_size: bevy::text::FontSize::Px(14.0), ..default() },
         TextColor(Color::srgb(0.92, 0.88, 0.86)),
         Node { position_type: PositionType::Absolute, left: Val::Px(12.0), top: Val::Px(10.0), ..default() },
@@ -99,7 +100,8 @@ fn keys(
         for entity in &scene {
             commands.entity(entity).despawn();
         }
-        mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes);
+        let root = mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes);
+        commands.entity(root).insert(mannequin::breakable());
         preset_scene::spawn_set(&mut commands, &mut meshes, &mut materials);
     }
 }

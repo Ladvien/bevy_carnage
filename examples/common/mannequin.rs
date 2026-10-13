@@ -22,8 +22,9 @@ use bevy::camera::visibility::NoFrustumCulling;
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
-use bevy_carnage::cross_section::Region;
-use bevy_carnage::preset::{Gore, GoreHit, GoreScene};
+use bevy_carnage::cross_section::{Region, Scale};
+use bevy_carnage::preset::{Gore, GoreBreakable, GoreHit, GoreScene};
+use bevy_carnage::{CutSettings, ProxyCell, fracture_mesh};
 
 use super::preset_scene;
 
@@ -562,6 +563,30 @@ pub fn spawn(
         ));
     }
     root
+}
+
+/// **The mannequin as something that breaks.** Its six meshes are cut in their own bind space, which
+/// is `Mat4::IDENTITY` for a skinned mesh, since it is drawn from its joints and its entity's transform
+/// plays no part. **The proxy is eleven boxes that hug the figure**, face to face so the bond graph joins
+/// the arms and legs to the torso and the head to its neck. It is what a game's own convex
+/// decomposition would be: a cut face is the proxy cell's cross-section, so a box wider than the limb
+/// it holds grows a flap beyond it, and one box to a whole tapering leg did exactly that. Insert it on
+/// the root, and a body that takes a hit to bone breaks where its skeleton is that frame, not in the T of
+/// its bind pose.
+pub fn breakable() -> GoreBreakable {
+    let meshes: Vec<Mesh> = LIMBS.iter().map(|limb| build(&pieces(*limb))).collect();
+    let parts: Vec<(&Mesh, Mat4)> = meshes.iter().map(|m| (m, Mat4::IDENTITY)).collect();
+    let cell = |centre: [f32; 3], half: [f32; 3]| ProxyCell::from_box(Vec3::from_array(centre), Vec3::from_array(half));
+    let mut proxy = vec![cell([0.0, 1.225, 0.0], [0.18, 0.255, 0.11]), cell([0.0, 1.635, 0.0], [0.092, 0.155, 0.105])];
+    for side in [1.0f32, -1.0] {
+        proxy.push(cell([0.238 * side, 1.3165, 0.0], [0.058, 0.1865, 0.058]));
+        proxy.push(cell([0.235 * side, 0.95, 0.0], [0.048, 0.18, 0.048]));
+        proxy.push(cell([0.092 * side, 0.735, 0.0], [0.092, 0.235, 0.097]));
+        proxy.push(cell([0.095 * side, 0.2975, 0.0], [0.065, 0.2025, 0.07]));
+        proxy.push(cell([0.095 * side, 0.0465, 0.052], [0.048, 0.0485, 0.148]));
+    }
+    let cut = CutSettings { soften: 0.0, ..CutSettings::new(16, 0.08, 7) };
+    GoreBreakable::from_fracture(fracture_mesh(&parts, &proxy, &cut), Region::Torso, &Scale::default())
 }
 
 // ---- Aiming ----------------------------------------------------------------------------------

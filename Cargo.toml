@@ -1,5 +1,11 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.28`: a body breaks where its skeleton is** (`AG-101`). A fracture is baked from a mesh asset,
+# which is the bind pose, so a character caught mid-stride burst with its arms at its sides. Each piece
+# is now carried by the bone of the vertex nearest it, to where that bone is when the body breaks, and
+# the blow's place is read off the bind pose. A skinned body's fracture must be baked in the mesh's own
+# space. Also `GoreHit::impact_at` and `at_surface`: a hit from a contact point and its normal.
+#
 # **`0.5.27`: `GoreScene::humanoid()` meets a real character** (`AG-100`). Run on a glTF character from
 # the game this crate is developed in, it dressed 19 of 22 meshes as torso skin, belt, backpack and
 # chest rig among them, and a shot at the chest wounded the rig. It now sorts a body, a wardrobe and
@@ -150,7 +156,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.27"
+version = "0.5.28"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

@@ -521,6 +521,12 @@ Run it and you aim it yourself: `1` a shot to the raised forearm, `2` a slash ac
 
 `--eye x,y,z` renders the clip from another camera position, aimed at the same point, and changes no digest. It is how a render is checked from an angle the committed clip does not use: from `-0.9,1.3,3.0` the floor's pools once clipped to white (`AG-096`).
 
+### `capture_skinned --break` — a body that breaks where its skeleton is
+
+![The mannequin walks with its left arm raised; a heavy shot to the chest breaks it mid-stride into pieces that keep the pose, the raised arm up and the legs mid-step, before they fall and settle among its guts](skinned_break.gif)
+
+The same mannequin, with `mannequin::breakable()` on its root and a 60 mm shot at the chest on frame 200, while it walks with the arm up. The pieces are the body as it was that frame: the raised forearm goes up, the legs are mid-stride, the right arm hangs, and then they fall. Before 0.5.28 the same shot threw them in the bind pose, arms at the sides and feet together. `mannequin::breakable()` is the bake a game would do: the six skinned meshes cut in their own space, with eleven boxes that hug the figure as the proxy. The clip is cut from frames 180–267 of `--break`, which prints its own digest line, `e20faff546f443fe`, and the default clip is unchanged by the flag.
+
 ## `tiers` — the player's violence setting
 
 ![The same scripted scene three times side by side: at the stylised tier a yellow spark marks each shot and nothing bleeds; at the blood tier the wounds bleed and pool on the floor and the body stays standing; at blood and gore the body comes apart and the guts spill](tiers.gif)
@@ -568,6 +574,12 @@ WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-carnage docs/carnage.g
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-flesh   docs/flesh.gif ""
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-preset  docs/preset.gif ""
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-skinned docs/skinned.gif ""
+
+# `skinned_break.gif` is `capture_skinned --break`, frames 180-267 renumbered from frame0000.
+cargo run --release --example capture_skinned -- --break --out frames-skinned-break
+mkdir -p frames-sb && for n in $(seq 180 267); do
+  cp "frames-skinned-break/frame$(printf %04d "$n").png" "frames-sb/frame$(printf %04d $((n - 180))).png"; done
+WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-sb docs/skinned_break.gif ""
 
 # `tiers.gif` is `capture_preset` three times, once per tier, cropped to the middle, labelled and set
 # side by side, one frame in two. `--tier` is `stylised`, `blood` or `gore` (or `0`, `1`, `2`).

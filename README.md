@@ -197,6 +197,10 @@ assert!(pieces.iter().all(|p| p.outer.is_some() || p.cap.is_some()));
 
 That is `examples/skinned.rs` — **the preset on a skinned, animated body**, made in code with no asset. A game's character is a mesh whose asset is its bind pose, arms at its sides, and a skeleton that carries it somewhere else each frame; before 0.5.19 the preset cast every hit at the asset, and a shot at the raised forearm above did nothing. Now the hit lands where the arm is *drawn*, the wound rides the limb it opened on, and its blood runs downhill in the world rather than along the atlas. Every key aims at where that part of the body is this frame; `capture_skinned` records it.
 
+![A mannequin walks in place with its left arm raised; a heavy shot to the chest breaks it mid-stride into pieces that keep the pose, the raised arm up and the legs mid-step, before they fall and settle among its guts](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_break.gif)
+
+That is `capture_skinned --break`, and **a body that breaks breaks where its skeleton is.** The fracture is baked from a mesh asset, which is the bind pose; before 0.5.28 the pieces of a character caught mid-stride appeared with its arms at its sides. Each piece is now carried by the bone of the vertex nearest it, to where that bone is on the tick the body breaks and turned as it is. The one thing asked of the game is that a skinned body's fracture is baked in the mesh's own space.
+
 The seven kernels have a clip each, on their own pages under `docs/`, and every one was cut from a headless recorder in this crate's `examples/` — `capture_gore` for the four cut-face kernels, `capture_family` for the blood pair, `capture_entrails` for the strands — so the clip you see is a script two runs must reproduce digest-for-digest:
 
 | | | |
@@ -385,11 +389,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.27` in the repository; the latest on crates.io is `0.5.18`. Pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.28` in the repository; the latest on crates.io is `0.5.18`. Pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
 
-### What `0.5.19` to `0.5.27` changed: the preset meets a real character
+### What `0.5.19` to `0.5.28` changed: the preset meets a real character
 
-Nine releases with one theme, the things a game finds out the first time it puts the preset on an animated glTF character. None is on crates.io yet; each has a ticket in `BACKLOG.md` (`AG-092` to `AG-100`) with what it was measured against, and the checklist is [`docs/preset.md`](docs/preset.md).
+Ten releases with one theme, the things a game finds out the first time it puts the preset on an animated glTF character. None is on crates.io yet; each has a ticket in `BACKLOG.md` (`AG-092` to `AG-101`) with what it was measured against, and the checklist is [`docs/preset.md`](docs/preset.md).
 
 - **`0.5.19`, skinned characters.** A hit lands on a body as it is drawn, not as its asset was authored. `bevy_carnage::skin` poses a skinned mesh the way `bevy_pbr`'s vertex shader does, a wound is a triangle and a place in it so it rides the limb, and blood runs downhill in the world however the atlas is laid out. `docs/skinned.gif`.
 - **`0.5.20`, a cheaper spray.** A droplet is tested against a surface's bounding box before the mesh. In a scene of forty characters, 240 surfaces, one hit went from 9.9 to 1.4 ms and twelve from 129 to 27 ms.
@@ -400,8 +404,9 @@ Nine releases with one theme, the things a game finds out the first time it puts
 - **`0.5.25`, memory is a number and a dial.** A dressed skin costs 1.3 MiB at the shipped 128 and a character of six, 7.7 MiB; `Gore::with_canvas` gives one surface its own edge, and the canvases report their bytes.
 - **`0.5.26`, the one-line trap says so.** Bevy's fixed step is 64 Hz and the preset's is 60, so a game that missed the line in the checklist ran every bleed 6.7 per cent fast and was told nothing. The preset now logs the rate it found, once, on its first tick.
 - **`0.5.27`, `humanoid()` meets a real character.** On a character from the game this crate is developed in it dressed 19 of 22 meshes as skin, a belt and a chest rig among them, so a shot at the chest wounded the rig. It now sorts the body, the wardrobe and the gear by the words a character kit uses, and leaves what it does not know alone.
+- **`0.5.28`, a body breaks where its skeleton is.** A fracture is baked from a mesh asset, which is the bind pose, so a character caught mid-stride burst with its arms at its sides. Each piece is now carried by the bone of the vertex nearest it, to where that bone is when the body breaks. A contact point and a normal, which is what physics reports, make a hit too: `GoreHit::impact_at`.
 
-**API:** new, `skin` (`Pose`, `Rig`, `posed_mesh`), `preset::GoreScene`, `Gore::canvas` and `Gore::with_canvas`, `heap_bytes` and `image_bytes` on `WetCanvas`, `FlayCanvas` and `DermisCanvas`. Changed, `Gore` has a field more, so build it with `Gore::skin`, `cloth` or `floor` rather than as a struct literal, and `GoreScene::humanoid()` leaves a mesh it does not recognise alone where `0.5.24` dressed it as torso skin. Nothing was removed.
+**API:** new, `skin` (`Pose`, `Rig`, `posed_mesh`), `preset::GoreScene`, `Gore::canvas` and `Gore::with_canvas`, `GoreHit::impact_at` and `at_surface`, `heap_bytes` and `image_bytes` on `WetCanvas`, `FlayCanvas` and `DermisCanvas`. Changed, `Gore` has a field more, so build it with `Gore::skin`, `cloth` or `floor` rather than as a struct literal; `GoreScene::humanoid()` leaves a mesh it does not recognise alone where `0.5.24` dressed it as torso skin; and a skinned body's fracture must be baked in the mesh's own space (`Mat4::IDENTITY`), which is what lets it break where its skeleton is. Nothing was removed.
 
 ### What `0.5.18` changed: the preset measures the atlas
 

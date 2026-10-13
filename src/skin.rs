@@ -120,6 +120,21 @@ impl<'a> Rig<'a> {
     pub fn matrix(&self, pose: &Pose, vertex: usize) -> Option<Mat4> {
         pose.blend(*self.joints.get(vertex)?, *self.weights.get(vertex)?)
     }
+
+    /// **The joint that carries `vertex`**: the one with the most weight, ties to the earlier slot.
+    /// `None` for a vertex past the end or one with no positive finite weight. A body that breaks
+    /// carries each piece with the bone of the vertex nearest it, as a rigid piece must be carried by
+    /// one bone and not a blend of several.
+    pub fn dominant_joint(&self, vertex: usize) -> Option<u16> {
+        let (joints, weights) = (self.joints.get(vertex)?, self.weights.get(vertex)?);
+        let mut best: Option<(f32, u16)> = None;
+        for (joint, weight) in joints.iter().zip(weights) {
+            if weight.is_finite() && *weight > 0.0 && best.is_none_or(|(w, _)| *weight > w) {
+                best = Some((*weight, *joint));
+            }
+        }
+        best.map(|(_, joint)| joint)
+    }
 }
 
 /// **Where one vertex of `mesh` is under `pose`**, world space. `None` for a mesh with no rig, a vertex

@@ -1203,6 +1203,10 @@ pub enum HitKind {
     Burn { temp_c: f32, seconds: f32 },
 }
 
+/// How far outside a contact point [`GoreHit::at_surface`] starts its ray, metres: clear of a small
+/// gap between a physics shape and the mesh, near enough that nothing else is likely to be between.
+pub const SURFACE_STAND_OFF: f32 = 0.05;
+
 /// **A hit, addressed to a dressed entity or to a character.**
 ///
 /// **Address it to whatever your physics found.** A game's raycast finds a collider, a capsule on the
@@ -1243,6 +1247,22 @@ impl GoreHit {
     /// A contact burn `radius_m` across: `temp_c` for `seconds`.
     pub fn burn(entity: Entity, from: Vec3, dir: Vec3, radius_m: f32, temp_c: f32, seconds: f32) -> Self {
         Self { entity, from, dir, radius_m, kind: HitKind::Burn { temp_c, seconds }, so2: crate::bloodstain::spectral::SO2_VENOUS }
+    }
+    /// **An impact at a contact point**, for a game whose physics reports where something touched and
+    /// the surface's normal there rather than a ray: the ray starts [`SURFACE_STAND_OFF`] outside `point`
+    /// along `normal` and travels into it, so the preset's own cast lands on that spot. A zero or
+    /// non-finite `normal` leaves the hit with no direction, which the preset drops.
+    pub fn impact_at(entity: Entity, point: Vec3, normal: Vec3, radius_m: f32, depth_mm: f32) -> Self {
+        Self::impact(entity, Vec3::ZERO, Vec3::ZERO, radius_m, depth_mm).at_surface(point, normal)
+    }
+    /// The same hit, moved to a contact point and the surface's normal there, as [`GoreHit::impact_at`]
+    /// does: it keeps its kind, radius and depth, and takes its ray from the surface. A slash keeps
+    /// its own `along`.
+    pub fn at_surface(mut self, point: Vec3, normal: Vec3) -> Self {
+        let outward = normal.normalize_or_zero();
+        self.from = point + outward * SURFACE_STAND_OFF;
+        self.dir = -outward;
+        self
     }
     /// The same hit, bleeding arterial blood.
     pub fn arterial(mut self) -> Self {
@@ -1965,6 +1985,20 @@ fn take_hits(
                 subject = subjects.get(root).ok();
                 breakable = breakables.get(root).ok();
             }
+            // **A skinned body breaks where its skeleton is**, not where its asset was authored: the
+            // pose it was drawn in, and the skinned meshes under the root that share this one's joints,
+            // are what each piece is carried by. A rigid body has none of it.
+            let posing = match (&drawn, &skin) {
+                (Drawn::Posed(_, pose), Some(rig)) => Some(Posing {
+                    pose: pose.clone(),
+                    parts: surfaces
+                        .iter()
+                        .filter(|s| s.skin.as_ref().is_some_and(|k| k.joints == rig.joints) && is_under(root, s.entity, parents))
+                        .map(|s| s.mesh.clone())
+                        .collect(),
+                }),
+                _ => None,
+            };
             // **The pieces wear the material of the part that was hit**, as it was before the
             // preset dressed it. That part is under the root by construction, at whatever depth: a
             // glTF scene puts its meshes under node entities, so searching the root's own children
@@ -1987,7 +2021,7 @@ fn take_hits(
                     })
                     .collect();
                 let cap = cap_material(region, atlas.as_deref(), standard, tables, flesh, dials);
-                let pieces = place(leaves, root_xf, at_world);
+                let pieces = place(leaves, root_xf, at_world, posing.as_ref().map(|p| (p, &**meshes)));
                 if dials.spawn_fragments {
                     spawn_pieces(&mut commands, &pieces, &skin, &cap);
                     commands.entity(root).despawn();
@@ -1999,11 +2033,16 @@ fn take_hits(
                 // The message goes out from `throw_bodies`, next in the chain this tick, once the
                 // leaves are meshes.
                 let cap = cap_material(region, atlas.as_deref(), standard, tables, flesh, dials);
-                let at_local = root_xf.affine().inverse().transform_point3(at_world);
+                // The blow in the subject's own space: for a skinned body that is where it landed on
+                // the bind pose, since the fracture was baked there, not where the body is drawn.
+                let at_local = match (&posing, site_at) {
+                    (Some(_), Some(bind)) => bind,
+                    _ => root_xf.affine().inverse().transform_point3(at_world),
+                };
                 let spawn = dials.spawn_fragments;
                 commands.entity(root).queue_silenced(move |mut e: EntityWorldMut| {
                     if let Some(body) = e.take::<GoreBreakable>() {
-                        e.insert(ThrowNow { body, at: at_world, at_local, skin, cap, spawn });
+                        e.insert(ThrowNow { body, at: at_world, at_local, skin, cap, spawn, posing });
                     }
                 });
             }
@@ -2035,6 +2074,8 @@ struct ThrowNow {
     cap: Handle<FleshMaterial>,
     /// Whether the preset spawns the pieces ([`GoreDials::spawn_fragments`]).
     spawn: bool,
+    /// The skeleton's pose, when the body that broke was skinned.
+    posing: Option<Posing>,
 }
 
 /// The cap material for a region: the cross-section strip the atlas baked, worn by the flesh
@@ -2061,14 +2102,25 @@ fn cap_material(
 /// lost its footing was not hit, so nothing throws it: it slumps outward from the fallen pieces'
 /// centre, slowly and horizontally, so the heap spreads instead of stacking in one column, and
 /// gravity in [`fly`] brings it down. A piece that stood has no velocity.
-fn place(leaves: Vec<Piece>, root_xf: &GlobalTransform, at: Vec3) -> Vec<GorePiece> {
-    let centre_of = |p: &Piece| root_xf.transform_point(p.center_local);
-    let fell: Vec<Vec3> = leaves.iter().filter(|p| p.fate == PieceFate::Fell).map(centre_of).collect();
+fn place(leaves: Vec<Piece>, root_xf: &GlobalTransform, at: Vec3, posing: Option<(&Posing, &Assets<Mesh>)>) -> Vec<GorePiece> {
+    // Where each piece is, and how it is turned: carried by the bone of the skeleton nearest it, for a
+    // body that was posed when it broke, and placed by the root otherwise.
+    let frames: Vec<(Vec3, Quat, Vec3)> = leaves
+        .iter()
+        .map(|p| match posing.and_then(|(posing, meshes)| posing.carry(meshes, p.center_local)) {
+            Some(bone) => {
+                let (scale, rotation, _) = bone.to_scale_rotation_translation();
+                (bone.transform_point3(p.center_local), rotation, scale)
+            }
+            None => (root_xf.transform_point(p.center_local), root_xf.rotation(), root_xf.scale()),
+        })
+        .collect();
+    let fell: Vec<Vec3> = leaves.iter().zip(&frames).filter(|(p, _)| p.fate == PieceFate::Fell).map(|(_, f)| f.0).collect();
     let middle = if fell.is_empty() { Vec3::ZERO } else { fell.iter().sum::<Vec3>() / fell.len() as f32 };
     leaves
         .into_iter()
-        .map(|p| {
-            let centre = centre_of(&p);
+        .zip(frames)
+        .map(|(p, (centre, rotation, scale))| {
             let size = p.half_extents.length();
             let velocity = match p.fate {
                 PieceFate::Thrown => ((centre - at).normalize_or_zero() + Vec3::new(0.0, 0.6, 0.0)) * (1.5 / (1.0 + size)),
@@ -2078,13 +2130,50 @@ fn place(leaves: Vec<Piece>, root_xf: &GlobalTransform, at: Vec3) -> Vec<GorePie
             GorePiece {
                 outer: p.outer,
                 cap: p.cap,
-                transform: Transform::from_translation(centre).with_rotation(root_xf.rotation()).with_scale(root_xf.scale()),
+                transform: Transform::from_translation(centre).with_rotation(rotation).with_scale(scale),
                 half_extents: p.half_extents,
                 velocity,
                 fate: p.fate,
             }
         })
         .collect()
+}
+
+/// **A skinned body as it stood when it broke**: its skeleton's pose and the meshes whose vertices say
+/// which bone carries a place on it. A fracture is baked from a mesh asset, which is the bind pose, so
+/// without this its pieces appear there: a T-pose burst from a body that was running. With it each
+/// piece is carried rigidly by the bone of the vertex nearest its centre, to where that bone is, turned
+/// as that bone is turned.
+///
+/// **The contract on the game: bake the fracture in the skinned mesh's own space**, `Mat4::IDENTITY`
+/// in `fracture_mesh`'s parts, since a skinned mesh is drawn from its joints and its entity's transform
+/// plays no part. Every skinned mesh under the root that shares the hit part's joints is searched.
+struct Posing {
+    pose: Pose,
+    parts: Vec<Handle<Mesh>>,
+}
+
+impl Posing {
+    /// The matrix, bind space to world, of the bone that carries `place`: the dominant joint of the
+    /// vertex nearest it over every part. Ties in distance go to the lower joint, so the answer does
+    /// not depend on the order the parts were found in. `None` when no part has a rig or a vertex.
+    fn carry(&self, meshes: &Assets<Mesh>, place: Vec3) -> Option<Mat4> {
+        let mut best: Option<(f32, u16)> = None;
+        for handle in &self.parts {
+            let Some(mesh) = meshes.get(handle) else { continue };
+            let Some(rig) = Rig::of(mesh) else { continue };
+            let Ok(Some(VertexAttributeValues::Float32x3(positions))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_POSITION) else { continue };
+            for (vertex, position) in positions.iter().enumerate() {
+                let distance = Vec3::from_array(*position).distance_squared(place);
+                let Some(joint) = rig.dominant_joint(vertex) else { continue };
+                if best.is_none_or(|(d, j)| distance < d || (distance == d && joint < j)) {
+                    best = Some((distance, joint));
+                }
+            }
+        }
+        let (_, joint) = best?;
+        self.pose.blend([joint, 0, 0, 0], [1.0, 0.0, 0.0, 0.0])
+    }
 }
 
 /// Spawn placed pieces: skin outside, a banded cap inside. The ones that stood stay [`Standing`];
@@ -2137,7 +2226,7 @@ fn throw_bodies(
                 half_extents: leaf.half_extents,
             })
             .collect();
-        let pieces = place(leaves, xf, throw.at);
+        let pieces = place(leaves, xf, throw.at, throw.posing.as_ref().map(|p| (p, &*meshes)));
         if throw.spawn {
             spawn_pieces(&mut commands, &pieces, &throw.skin, &throw.cap);
             commands.entity(entity).despawn();
@@ -3475,6 +3564,65 @@ mod tests {
         };
         assert_eq!(heard(None), 1, "the default 64 Hz step was not reported exactly once");
         assert_eq!(heard(Some(60.0)), 0, "the dials' own rate was reported");
+    }
+
+    /// **A hit from a contact point and its normal lands on that point.** A game's physics reports where
+    /// something touched and the surface's normal, not a ray. The wound's own mesh-local point is
+    /// compared with the point given, on a face that is not the one a ray from the origin would find.
+    #[test]
+    fn a_hit_at_a_contact_point_lands_on_that_point() {
+        let mut app = headless();
+        let cube = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.4, 0.4, 0.4).mesh().build());
+        let body = app.world_mut().spawn((Mesh3d(cube), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Limb))).id();
+        app.world_mut().run_schedule(FixedUpdate);
+        let (point, normal) = (Vec3::new(0.2, 0.05, -0.11), Vec3::X);
+        app.world_mut().write_message(GoreHit::impact_at(body, point, normal, 0.03, 4.0));
+        app.world_mut().run_schedule(FixedUpdate);
+        let site = app.world().get::<Wounds>(body).and_then(|w| w.0.first().copied()).expect("no wound opened");
+        assert!(site.at_local.distance(point) < 1.0e-3, "the wound is at {:?}, not {point:?}", site.at_local);
+        let slash = GoreHit::slash(body, Vec3::ZERO, Vec3::ZERO, Vec3::Y, 0.05, 3.0).at_surface(point, normal);
+        assert!(slash.dir.dot(-normal) > 0.999 && slash.from.distance(point + normal * SURFACE_STAND_OFF) < 1.0e-6, "at_surface did not place the ray");
+        assert!(matches!(slash.kind, HitKind::Slash { along, .. } if along == Vec3::Y), "at_surface changed the kind");
+        assert_eq!(GoreHit::impact_at(body, point, Vec3::ZERO, 0.03, 4.0).dir, Vec3::ZERO, "a zero normal gave a direction");
+    }
+
+    /// **A skinned body breaks where its skeleton is.** The fracture is baked from the mesh asset,
+    /// which is the bind pose, and until this the pieces appeared there: here, at the entity's own
+    /// transform, 5 m off, with the arm straight. With the elbow bent a quarter turn, the forearm's
+    /// pieces must be carried up with the forearm and turned with it, and the upper arm's must stay.
+    /// The breakable sits on the skinned part itself, baked in the mesh's own space.
+    #[test]
+    fn a_skinned_body_breaks_where_its_skeleton_is() {
+        let pieces_at = |bend: f32| -> Vec<GorePiece> {
+            let (mut app, body, _, _) = rigged_arm(bend);
+            app.world_mut().resource_mut::<GoreDials>().spawn_fragments = false;
+            let mesh = arm();
+            let proxy = [
+                crate::ProxyCell::from_box(Vec3::new(0.5, 0.0, 0.0), Vec3::new(0.5, 0.2, 0.2)),
+                crate::ProxyCell::from_box(Vec3::new(1.5, 0.0, 0.0), Vec3::new(0.5, 0.2, 0.2)),
+            ];
+            let fracture = crate::fracture_mesh(&[(&mesh, Mat4::IDENTITY)], &proxy, &crate::CutSettings::new(4, 0.05, 3));
+            let breakable = GoreBreakable::from_fracture(fracture, Region::Limb, &crate::cross_section::Scale::default());
+            app.world_mut().entity_mut(body).insert(breakable);
+            // Aimed at the forearm as it is drawn: half a metre along it from the elbow.
+            let forearm = elbow(bend).transform_point(Vec3::new(0.5, 0.0, 0.0));
+            app.world_mut().write_message(GoreHit::impact(body, Vec3::new(forearm.x, forearm.y, 3.0), Vec3::NEG_Z, 0.03, 60.0));
+            app.world_mut().run_schedule(FixedUpdate);
+            let messages = app.world().resource::<Messages<GoreFractured>>();
+            let broke: Vec<GoreFractured> = messages.get_cursor().read(messages).cloned().collect();
+            assert_eq!(broke.len(), 1, "the arm broke {} times at {bend}", broke.len());
+            broke[0].pieces.clone()
+        };
+        let straight = pieces_at(0.0);
+        assert!(!straight.is_empty(), "a straight arm broke into nothing");
+        assert!(straight.iter().all(|p| p.transform.translation.y.abs() < 0.3 && (-0.3..2.3).contains(&p.transform.translation.x)), "a straight arm's pieces are not along it");
+        let bend = core::f32::consts::FRAC_PI_2;
+        let bent = pieces_at(bend);
+        let highest = bent.iter().max_by(|a, b| a.transform.translation.y.total_cmp(&b.transform.translation.y)).expect("no pieces");
+        assert!(highest.transform.translation.y > 0.4, "no piece was carried up with the forearm: highest at {:?}", highest.transform.translation);
+        assert!(highest.transform.rotation.angle_between(Quat::from_rotation_z(bend)) < 0.05, "the forearm's piece is not turned with it: {:?}", highest.transform.rotation);
+        assert!(bent.iter().any(|p| p.transform.translation.y.abs() < 0.3 && p.transform.translation.x < 1.0), "the upper arm's pieces moved with the forearm");
+        assert!(bent.iter().all(|p| p.transform.translation.x < 3.0 && p.transform.translation.y < 3.0), "a piece is at the entity's own transform, 5 m off");
     }
 
     /// **The wound bed a slash opens is not a second skin.** The preset spawns it as a child of the

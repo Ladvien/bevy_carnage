@@ -5,6 +5,8 @@
 //! ```
 //!
 //! `--eye x,y,z` renders from another camera position, aimed at the same point. It changes no digest.
+//! `--break` makes the body breakable and takes a heavy shot to the chest at frame 200: it breaks where
+//! its skeleton is, mid-walk with the arm raised, and its pieces fall to the floor.
 //!
 //! Writes `frame0000.png …` and prints one digest line; two runs must print the same line.
 //!
@@ -66,6 +68,7 @@ fn main() {
         }
     }
     rec.warm_up(6);
+    let breaking = breaking();
     let mut aim = bevy::ecs::system::SystemState::<mannequin::Aim>::new(rec.world());
     for frame in 0..FRAMES {
         {
@@ -76,6 +79,7 @@ fn main() {
                 100 => aim.iron(Bone::ArmLowR, 0.10, 0.035),
                 120 | 150 => aim.shot(Bone::Spine, -0.22, 0.035, 9.0),
                 190 => aim.blow(Bone::LegLowL, 0.12, 0.04),
+                200 if breaking => aim.shot(Bone::Spine, -0.22, 0.035, 60.0),
                 _ => None,
             });
             if let Some(hit) = hit {
@@ -98,6 +102,10 @@ fn main() {
     let frames = rec.finish();
     println!("skinned: frames={frames} ticks={tick} digest={digest:016x}");
 }
+/// Whether `--break` was given: the mannequin is made breakable and takes a hit to bone at frame 200.
+fn breaking() -> bool {
+    std::env::args().any(|a| a == "--break")
+}
 
 fn setup(
     mut commands: Commands,
@@ -106,6 +114,9 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
 ) {
-    mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes);
+    let root = mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes);
+    if breaking() {
+        commands.entity(root).insert(mannequin::breakable());
+    }
     preset_scene::spawn_set(&mut commands, &mut meshes, &mut materials);
 }
