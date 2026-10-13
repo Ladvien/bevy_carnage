@@ -1,5 +1,10 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.27`: `GoreScene::humanoid()` meets a real character** (`AG-100`). Run on a glTF character from
+# the game this crate is developed in, it dressed 19 of 22 meshes as torso skin, belt, backpack and
+# chest rig among them, and a shot at the chest wounded the rig. It now sorts a body, a wardrobe and
+# gear by the words a character kit uses, and leaves what it does not know alone.
+#
 # **`0.5.26`: the fixed-step trap says so** (`AG-099`). Bevy's default `FixedUpdate` is 64 Hz and
 # `GoreDials::hz` is 60, so a game that missed the first line of the checklist ran every bleed, bruise
 # and drying 6.7 per cent fast and was told nothing. The preset now warns once, on its first tick, naming
@@ -145,7 +150,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.26"
+version = "0.5.27"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

@@ -385,11 +385,11 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.26` in the repository; the latest on crates.io is `0.5.18`. Pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.27` in the repository; the latest on crates.io is `0.5.18`. Pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
 
-### What `0.5.19` to `0.5.26` changed: the preset meets a real character
+### What `0.5.19` to `0.5.27` changed: the preset meets a real character
 
-Eight releases with one theme, the things a game finds out the first time it puts the preset on an animated glTF character. None is on crates.io yet; each has a ticket in `BACKLOG.md` (`AG-092` to `AG-099`) with what it was measured against, and the checklist is [`docs/preset.md`](docs/preset.md).
+Nine releases with one theme, the things a game finds out the first time it puts the preset on an animated glTF character. None is on crates.io yet; each has a ticket in `BACKLOG.md` (`AG-092` to `AG-100`) with what it was measured against, and the checklist is [`docs/preset.md`](docs/preset.md).
 
 - **`0.5.19`, skinned characters.** A hit lands on a body as it is drawn, not as its asset was authored. `bevy_carnage::skin` poses a skinned mesh the way `bevy_pbr`'s vertex shader does, a wound is a triangle and a place in it so it rides the limb, and blood runs downhill in the world however the atlas is laid out. `docs/skinned.gif`.
 - **`0.5.20`, a cheaper spray.** A droplet is tested against a surface's bounding box before the mesh. In a scene of forty characters, 240 surfaces, one hit went from 9.9 to 1.4 ms and twelve from 129 to 27 ms.
@@ -399,8 +399,9 @@ Eight releases with one theme, the things a game finds out the first time it put
 - **`0.5.24`, one component dresses a character.** `GoreScene` on the entity a glTF scene is spawned under dresses every mesh that appears below it, by the words in its node's name; `GoreScene::humanoid()` knows the common ones.
 - **`0.5.25`, memory is a number and a dial.** A dressed skin costs 1.3 MiB at the shipped 128 and a character of six, 7.7 MiB; `Gore::with_canvas` gives one surface its own edge, and the canvases report their bytes.
 - **`0.5.26`, the one-line trap says so.** Bevy's fixed step is 64 Hz and the preset's is 60, so a game that missed the line in the checklist ran every bleed 6.7 per cent fast and was told nothing. The preset now logs the rate it found, once, on its first tick.
+- **`0.5.27`, `humanoid()` meets a real character.** On a character from the game this crate is developed in it dressed 19 of 22 meshes as skin, a belt and a chest rig among them, so a shot at the chest wounded the rig. It now sorts the body, the wardrobe and the gear by the words a character kit uses, and leaves what it does not know alone.
 
-**API:** new, `skin` (`Pose`, `Rig`, `posed_mesh`), `preset::GoreScene`, `Gore::canvas` and `Gore::with_canvas`, `heap_bytes` and `image_bytes` on `WetCanvas`, `FlayCanvas` and `DermisCanvas`. Changed, `Gore` has a field more, so build it with `Gore::skin`, `cloth` or `floor` rather than as a struct literal. Nothing was removed.
+**API:** new, `skin` (`Pose`, `Rig`, `posed_mesh`), `preset::GoreScene`, `Gore::canvas` and `Gore::with_canvas`, `heap_bytes` and `image_bytes` on `WetCanvas`, `FlayCanvas` and `DermisCanvas`. Changed, `Gore` has a field more, so build it with `Gore::skin`, `cloth` or `floor` rather than as a struct literal, and `GoreScene::humanoid()` leaves a mesh it does not recognise alone where `0.5.24` dressed it as torso skin. Nothing was removed.
 
 ### What `0.5.18` changed: the preset measures the atlas
 

@@ -253,16 +253,45 @@ impl GoreScene {
         self
     }
 
-    /// **A starting point for a humanoid**, from the words character artists use: a head is a head,
-    /// an arm, a leg, a hand or a foot is a limb, clothing is cloth, and a weapon is left alone.
-    /// Anything else, `Body` or `Torso` or a mesh named for nothing, is torso skin. A name heuristic,
-    /// which is all a glTF offers: rules you add after it win, so name what your rig calls things.
+    /// **A starting point for a humanoid**, from the names a character kit carries, checked against
+    /// the names in six characters and a creature from the game this crate is developed in. A real
+    /// character is a body and, over it, a wardrobe and some gear, and which is which is the whole job:
+    ///
+    /// - **skin**: `body`, `skin` (the material a kit names its body's after), `torso`, `chest`; a
+    ///   `head` or `face`; an `arm`, `leg`, `hand`, `foot`, `thigh`, `shin` and the like. These are
+    ///   what a hit hurts.
+    /// - **cloth**: `bodysuit`, `jumpsuit`, `labcoat`, `vest`, `shirt`, `boots`, `gloves`, `base` and
+    ///   the like. These soak the blood and are never the thing a hit peels.
+    /// - **left alone**: `belt`, `holster`, `pouch`, `backpack`, `chestrig`, `kneepads`, `eyewear`,
+    ///   `facewear`, `laces`, `buttons`, `hair`, and every weapon. A rule for these wins over the others,
+    ///   so `thigh_holster` is a holster and `body.hair_cap` is hair.
+    ///
+    /// **Anything it does not recognise is left alone.** On a real character that is nearly always gear,
+    /// and the first version of this dressed it as torso skin, which put a belt, a backpack and a chest
+    /// rig in line to be flayed and wounded in front of the body they hang on. The cost is that a
+    /// character whose only mesh has a name it does not know is not dressed at all: name it with
+    /// [`with`](Self::with). Rules you add after it win, so name what your rig calls things.
     pub fn humanoid() -> Self {
-        let limbs = ["arm", "forearm", "upperarm", "lowerarm", "hand", "leg", "upperleg", "lowerleg", "foot", "feet", "thigh", "calf", "shin", "finger", "toe"];
+        let body = ["body", "skin", "torso", "chest", "abdomen", "pelvis", "neck"];
+        let limbs = [
+            "arm", "arms", "forearm", "forearms", "upperarm", "lowerarm", "hand", "hands", "leg", "legs", "upperleg", "lowerleg", "foot", "feet", "thigh", "thighs",
+            "calf", "calves", "shin", "finger", "fingers", "toe", "toes",
+        ];
         let heads = ["head", "skull", "face"];
-        let cloth = ["shirt", "jacket", "coat", "pants", "trousers", "dress", "skirt", "vest", "cloak", "cape", "cloth", "clothes", "scarf", "hat"];
-        let weapons = ["weapon", "gun", "rifle", "pistol", "sword", "knife", "axe", "bow"];
-        let mut scene = Self::skin(Region::Torso);
+        let cloth = [
+            "base", "bodysuit", "jumpsuit", "hazmatsuit", "suit", "labcoat", "coat", "jacket", "vest", "shirt", "tshirt", "sweater", "hoodie", "pants", "trousers", "jeans",
+            "shorts", "dress", "skirt", "cloak", "cape", "scarf", "hat", "cloth", "clothes", "fabric", "uniform", "sleeve", "sleeves", "boots", "boot", "shoes", "shoe",
+            "gloves", "glove", "socks",
+        ];
+        let gear = [
+            "hair", "belt", "strap", "straps", "buckle", "hook", "holster", "pouch", "backpack", "pack", "rig", "chestrig", "kneepads", "pads", "pad", "plates", "plate",
+            "armor", "armour", "helmet", "mask", "facewear", "eyewear", "glasses", "goggles", "visor", "laces", "lace", "buttons", "button", "trim", "radio", "keycard",
+            "clipboard", "flashlight", "weapon", "muzzle", "pivot", "gun", "rifle", "pistol", "sword", "knife", "axe", "bow",
+        ];
+        let mut scene = Self::skin(Region::Torso).otherwise_nothing();
+        for word in body {
+            scene = scene.with(word, Gore::skin(Region::Torso));
+        }
         for word in limbs {
             scene = scene.with(word, Gore::skin(Region::Limb));
         }
@@ -272,7 +301,7 @@ impl GoreScene {
         for word in cloth {
             scene = scene.with(word, Gore::cloth());
         }
-        for word in weapons {
+        for word in gear {
             scene = scene.without(word);
         }
         scene
@@ -3315,7 +3344,7 @@ mod tests {
         let armature = world.spawn((Name::new("Armature"), ChildOf(root))).id();
         let mut mesh = |name: &str, parent: Entity| world.spawn((Name::new(name.to_string()), Mesh3d(cube.clone()), ChildOf(parent))).id();
         let (skull, thigh, jacket, gun) = (mesh("Skull", root), mesh("Thigh_R", root), mesh("Jacket", root), mesh("Rifle_Gun", root));
-        let (body, elbow, hat, fore) = (mesh("Body", armature), mesh("Elbow_Pad", root), mesh("Hat", root), mesh("ForeArm.L", root));
+        let (body, elbow, hat, fore) = (mesh("Body", armature), mesh("Elbow_Arm", root), mesh("Hat", root), mesh("ForeArm.L", root));
         let all = [skull, thigh, jacket, gun, body, elbow, hat, fore];
         app.world_mut().run_schedule(FixedUpdate);
         assert!(all.iter().all(|e| dressed_as(&app, *e).is_none()), "dressed with no scene");
@@ -3326,9 +3355,52 @@ mod tests {
         assert_eq!(dressed_as(&app, jacket), Some(GoreKind::Cloth));
         assert_eq!(dressed_as(&app, gun), None, "a gun was dressed");
         assert_eq!(dressed_as(&app, body), Some(GoreKind::Skin(Region::Torso)), "a body under Armature, in a scene named for a hand and a gun");
-        assert_eq!(dressed_as(&app, elbow), Some(GoreKind::Skin(Region::Torso)), "an elbow pad was taken for a bow");
+        assert_eq!(dressed_as(&app, elbow), Some(GoreKind::Skin(Region::Limb)), "an elbow was taken for a bow, which is a weapon");
         assert_eq!(dressed_as(&app, hat), Some(GoreKind::Skin(Region::Head)), "the added rule lost to the preset's");
         assert_eq!(dressed_as(&app, fore), Some(GoreKind::Skin(Region::Limb)), "ForeArm.L has the word arm");
+    }
+
+    /// **`humanoid` against the names real characters carry**, taken from the glTF files of the game
+    /// this crate is developed in: six characters from one kit and a creature. Each row is a primitive
+    /// as Bevy's loader names it, `{mesh}.{material}`, under its node. The body is skin, and the
+    /// wardrobe over it is cloth, and the gear on it is left alone: a belt, a backpack and a chest rig
+    /// were dressed as torso skin by the first version, and a shot to the chest wounded the rig in
+    /// front of the body instead of the body. A holster on a thigh is a holster, and hair on a body
+    /// mesh is hair.
+    #[test]
+    fn humanoid_sorts_the_body_the_wardrobe_and_the_gear_of_a_real_character_kit() {
+        use GoreKind::{Cloth, Skin};
+        let scene = GoreScene::humanoid();
+        let kind = |primitive: &str, node: &str| scene.gore_for(&[words(primitive), words(node)]).map(|g| g.kind);
+        let rows: [(&str, &str, Option<GoreKind>); 24] = [
+            ("valkyrie_body.valkyrie_skin", "valkyrie_body", Some(Skin(Region::Torso))),
+            ("fieldop_body.fieldop_skin", "fieldop_body", Some(Skin(Region::Torso))),
+            ("scientist_base.scientist_base_mat", "scientist_base", Some(Cloth)),
+            ("valkyrie_bodysuit.valkyrie_bodysuit_mat", "valkyrie_bodysuit", Some(Cloth)),
+            ("fieldop_jumpsuit.fieldop_jumpsuit_mat", "fieldop_jumpsuit", Some(Cloth)),
+            ("scientist_labcoat.scientist_labcoat_fabric", "scientist_labcoat", Some(Cloth)),
+            ("makarov_vest.makarov_vest_mat", "makarov_vest", Some(Cloth)),
+            ("cipher_hazmatsuit.003.cipher_hazmatsuit_mat", "cipher_hazmatsuit", Some(Cloth)),
+            ("fieldop_boots.fieldop_boots_leather", "fieldop_boots", Some(Cloth)),
+            ("valkyrie_gloves.valkyrie_gloves_mat", "valkyrie_gloves", Some(Cloth)),
+            ("valkyrie_boots_laces.valkyrie_boots_laces_mat", "valkyrie_boots_laces", None),
+            ("valkyrie_gloves_plates.valkyrie_gloves_plates_mat", "valkyrie_gloves_plates", None),
+            ("valkyrie_belt_hook_back.valkyrie_belt_hook_back_mat", "valkyrie_belt_hook_back", None),
+            ("valkyrie_backpack.valkyrie_backpack_mat", "valkyrie_backpack", None),
+            ("valkyrie_chestrig.valkyrie_chestrig_mat", "valkyrie_chestrig", None),
+            ("valkyrie_kneepads.valkyrie_kneepads_mat", "valkyrie_kneepads", None),
+            ("valkyrie_eyewear.valkyrie_eyewear_mat", "valkyrie_eyewear", None),
+            ("valkyrie_facewear.valkyrie_facewear_mat", "valkyrie_facewear", None),
+            ("thigh_holster.thigh_holster_mat", "thigh_holster", None),
+            ("ammo_pouch.ammo_pouch_mat", "ammo_pouch", None),
+            ("rifle.rifle_mat", "rifle", None),
+            ("fieldop_body.001.hair_cap_fieldop", "fieldop_hair", None),
+            ("SCP150_Legs.SCP150_Chitin", "SCP150_Legs", Some(Skin(Region::Limb))),
+            ("cipher_hazmattrim.003.cipher_hazmattrim_mat", "cipher_hazmattrim", None),
+        ];
+        for (primitive, node, want) in rows {
+            assert_eq!(kind(primitive, node), want, "{primitive} under {node}");
+        }
     }
 
     /// How a name is cut into words, which is what a rule matches against.

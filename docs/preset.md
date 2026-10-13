@@ -45,16 +45,37 @@ commands.spawn((
   under a node called `Head` is the head. That is what Bevy's glTF loader gives you: a node entity is
   named for its node, and each primitive is a child of it named `{mesh}.{material}`, so **a material
   called `shirt` dresses its primitive as cloth wherever the node sits**. The last rule that matches
-  wins. A mesh nothing matches gets the scene's default (torso skin for `humanoid`), or is left alone
-  after `otherwise_nothing()`.
+  wins. A mesh nothing matches gets the scene's default: left alone for `humanoid`, whatever you
+  gave `skin` or `new` otherwise.
 - **A mesh with its own `Gore` is never touched**, so one surface can be dressed by hand with a stated
   density or gravity and the rest by name. The wound bed a slash opens under a dressed skin
   (`LacerationBed`) is the preset's own and is never dressed.
 - `GoreScene::skin(region)` and `GoreScene::new(gore)` start from one default for every mesh, and
-  `.without(name)` leaves a prop or a held weapon alone. `humanoid()` is a name heuristic, which is all a
-  glTF offers; rename what it gets wrong rather than trusting it blind.
+  `.without(name)` leaves a prop or a held weapon alone.
 
-The skinned demo dresses its mannequin this way: its six meshes carry only a `Name`.
+**`humanoid()` sorts a real character into a body, a wardrobe and gear.** A glTF character is not one
+skin: it is a body mesh with clothing over it and gear on it. `humanoid()` knows the words a character
+kit uses. They were read from the node and material names in the glTF files of six characters and a
+creature from the game this crate is developed in (`valkyrie`, `fieldop`, `makarov`, `scientist`,
+`researcher`, `cipher`, `scp-150`), and run in the engine on one of them, `valkyrie`:
+
+| class | words it reads | what the preset does |
+|---|---|---|
+| skin | `body`, `skin` (a kit's body material), `torso`, `chest`; `head`, `face`; `arm`, `leg`, `hand`, `foot`, `thigh`, `shin`... | wounded, flayed, bleeds: what a hit hurts |
+| cloth | `bodysuit`, `jumpsuit`, `labcoat`, `vest`, `shirt`, `boots`, `gloves`, `base`... | soaks the blood; never the thing a hit peels |
+| gear | `belt`, `holster`, `pouch`, `backpack`, `chestrig`, `kneepads`, `eyewear`, `facewear`, `laces`, `buttons`, `hair`, every weapon | left alone; a rule here beats the others, so `thigh_holster` is a holster |
+| anything else | | **left alone**: on a real character it is almost always gear |
+
+The first version dressed the unknown as torso skin. On `valkyrie.glb` that dressed 19 of 22 meshes as
+skin, a chest rig and a belt among them, and a shot at the chest wounded the rig in front of the body
+it hangs on. Now one is skin, three are cloth and 18 are left alone, and the same shot soaks the
+bodysuit. The cost is that a character whose body mesh has a name it does not know is not dressed at
+all: name it, `.with("thatname", Gore::skin(Region::Torso))`. `humanoid()` is a name heuristic, which is
+all a glTF offers; rename what it gets wrong rather than trusting it blind.
+
+**What it does not do yet: a hole in the cloth.** Clothing is not something a hit stops at, so the
+body under a suit is wounded and the suit is stained by the blood that comes through it. On a
+character in a full bodysuit the wound itself is never seen, only its soak.
 
 ## What a dressed skin keeps
 
