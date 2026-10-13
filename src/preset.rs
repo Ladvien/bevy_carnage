@@ -1981,7 +1981,7 @@ fn dress(
                 // tangents the crater's normal map needs were generated above if the mesh had none.
                 let flay = FlayCanvas::new(&mut images, gore.canvas_texels(&dials), region, layers, base_srgb, rough);
                 let wet = WetCanvas::new(&mut images, gore.canvas_texels(&dials), base_srgb, rough);
-                let mut params = FleshParams::for_layers(&layers, FleshMode::Canvas, scale.mm_per_unit);
+                let mut params = FleshParams::for_layers(&layers, FleshMode::Canvas, scale.mm_per_unit).with_cut_film(CUT_FACE_FILM_MM);
                 params.wet.z = wet_settings.as_ref().map(|w| w.film_depth_mm).unwrap_or(2.0);
                 let dermis = DermisCanvas::new(&mut images, gore.canvas_texels(&dials));
                 let mut material = tables.material(base, params, Some(wet.roughness()), Some(&flay));
@@ -2843,10 +2843,12 @@ fn cap_material(
     flesh.add(tables.material(base, params, None, None))
 }
 
-/// **The thickest film of blood a broken body's cut face wears**, mm: `1.0`, the blood table's last
-/// column, where whole blood is opaque and the tissue under it no longer shows. A quarter of it lies
-/// over the fat at the rim. At `0.6` the faces read as candy red over the fat. Before 0.5.38 a cut
-/// face was drawn bare, and a fat band read as cheese. This crate's own number.
+/// **The thickest film of blood exposed tissue wears**, mm, on a broken body's cut face and, since
+/// 0.5.42, on a crater's walls where a skin is peeled: `1.0`, the blood table's last column, where
+/// whole blood is opaque and the tissue under it no longer shows. A quarter of it lies over the fat at
+/// the rim. At `0.6` the faces read as candy red over the fat. Before 0.5.38 a cut face was drawn
+/// bare, and a fat band read as cheese; before 0.5.42 a crater was ringed by bare yellow fat. This
+/// crate's own number.
 pub const CUT_FACE_FILM_MM: f32 = 1.0;
 
 /// **Place a broken body's pieces in the world**, each with the velocity the preset launches it at.

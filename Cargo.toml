@@ -1,5 +1,11 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.42`: a crater is a wound, not a ring of fat** (`AG-115`). A flaymap crater showed the tissue it
+# bared dry: a pink graze, a wide ring of yellow fat and a red centre, read as a fried egg. The flesh
+# material's film of blood (`FleshParams::with_cut_film`) now lies over a canvas's peeled tissue as it
+# does over a cut face, by depth, from nothing on the graze to its full `1 mm` in the muscle; the
+# preset's skins wear it at `CUT_FACE_FILM_MM`. Shader only; every digest holds.
+#
 # **`0.5.41`: spilled guts look like bowel, not red tubing** (`AG-114`). Every strand was drawn in the
 # red of the blood it lay in, so a heap of guts read as red plastic tubing in a red pool.
 # `viscera::gut_image` is a texture for the tube's own `UV_0` — a salmon-pink serosa, the mesentery's
@@ -226,7 +232,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.41"
+version = "0.5.42"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

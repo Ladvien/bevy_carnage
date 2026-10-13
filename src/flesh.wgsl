@@ -202,21 +202,37 @@ fn fragment(
         depth_frac = in.uv_b.x;
     }
 #endif
-    // ---- A fresh cut face, wet with its own blood (`FleshParams::cut`). ----------------------
-    // Thickest where the vessels are, in the muscle, and a quarter of it over the fat at the rim, by
-    // the face's own depth below the skin (`UV_1.x`), so a piece reads as meat with a paler edge and
-    // the bands still show through at the rim. Its liquid shines. A value noise over `UV_1` was tried
-    // first, for patches, and on the preset's pieces it drew stripes across each face, not patches.
+    // ---- Exposed tissue, wet with its own blood (`FleshParams::cut`). ------------------------
+    // A cut face, and a crater's walls where the skin is peeled. Thickest where the vessels are, in
+    // the muscle, by the tissue's own depth below the skin (`UV_1.x` on a cap, the flaymap's depth on
+    // a canvas). A cap keeps a quarter of it over the fat at its rim, so a piece reads as meat with a
+    // paler edge and the bands still show; a crater's rim keeps none, because there the skin is only
+    // grazed: the abrasion stays the dermis's pink, the fat under it reddens, and the deep wound is
+    // dark with blood, where bare it was a ring of yellow fat. Its liquid shines. A value noise over
+    // `UV_1` was tried first, for patches, and on the preset's pieces it drew stripes across each
+    // face, not patches.
     var cut_coat = 0.0;
+    var exposed = 0.0;
+    var rim = 0.0;
 #ifdef VERTEX_UVS_B
-    if mode == MODE_CAP && flesh.cut.x > 0.0 {
-        let thick = smoothstep(0.08, 0.5, in.uv_b.x);
-        let film_mm = flesh.cut.x * mix(0.25, 1.0, thick);
-        pbr_input.material.base_color = vec4<f32>(blood_over(pbr_input.material.base_color.rgb, film_mm), pbr_input.material.base_color.a);
-        pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, 0.45, 0.5 + 0.5 * thick);
-        cut_coat = flesh.wet.x * (0.5 + 0.5 * thick);
+    if mode == MODE_CAP {
+        exposed = 1.0;
+        rim = 0.25;
     }
 #endif
+    if mode == MODE_CANVAS {
+        exposed = peeled;
+    }
+    if flesh.cut.x > 0.0 && exposed > 0.0 {
+        let thick = smoothstep(0.08, 0.5, depth_frac);
+        let film_mm = flesh.cut.x * mix(rim, 1.0, thick);
+        // How wet it shines: a half where a cap's rim film lies, none on a graze, all of it deep.
+        let shine = mix(2.0 * rim, 1.0, thick) * exposed;
+        let tissue = pbr_input.material.base_color.rgb;
+        pbr_input.material.base_color = vec4<f32>(mix(tissue, blood_over(tissue, film_mm), exposed), pbr_input.material.base_color.a);
+        pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, 0.45, shine);
+        cut_coat = flesh.wet.x * shine;
+    }
     let layer = layer_of(depth_frac);
 
     // ---- Blood: composite the film over whatever is under it, on the GPU. -------------------

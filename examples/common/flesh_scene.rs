@@ -95,7 +95,8 @@ pub fn setup(
     // The canvas is filled with the skin's colour, and the material says the same colour: the flesh
     // material swaps one for the other wherever the skin is intact, so they must agree.
     let skin_base = StandardMaterial { base_color: Color::srgb(SKIN[0], SKIN[1], SKIN[2]), ..default() };
-    let skin_params = FleshParams::for_layers(&layers, FleshMode::Canvas, scale.mm_per_unit);
+    // Its crater's walls wear the preset's film of blood where the skin is peeled.
+    let skin_params = FleshParams::for_layers(&layers, FleshMode::Canvas, scale.mm_per_unit).with_cut_film(bevy_carnage::preset::CUT_FACE_FILM_MM);
     let skin_mat = flesh.add(tables.material(skin_base, skin_params, Some(wet.roughness()), Some(&flay)));
     // **Turned pole-up.** Bevy's UV sphere has its poles on the mesh's Z axis, so unturned its pole
     // faced the camera: every hit landed on the UV pole, where `u` collapses, and the crater drew as

@@ -333,7 +333,9 @@ fn spawn_intact(world: &mut World) {
             // The material's colour is the one the canvas was filled with; the flesh material
             // swaps that for the material's own skin wherever the skin is intact.
             let base = StandardMaterial { base_color: Color::srgb(SKIN[0], SKIN[1], SKIN[2]), ..default() };
-            let params = FleshParams::for_layers(&layers, FleshMode::Canvas, Scale::default().mm_per_unit);
+            // Its crater wears the preset's film of blood over the walls it peels.
+            let params = FleshParams::for_layers(&layers, FleshMode::Canvas, Scale::default().mm_per_unit)
+                .with_cut_film(bevy_carnage::preset::CUT_FACE_FILM_MM);
             let material = world.resource::<FleshTables>().material(base, params, Some(wet.roughness()), Some(&flay));
             let material = world.resource_mut::<Assets<FleshMaterial>>().add(material);
             // Tangents, or Bevy draws the normal map flat.

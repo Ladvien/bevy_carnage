@@ -6,7 +6,7 @@ Texture-space flaying for Bevy: hit the same place twice and the skin comes off,
 
 ![A torso hit again and again: the crater opens through pink dermis and cream fat to red muscle, and blood fills its floor and runs down the chest](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/flaymap.gif)
 
-The clip above is `capture_gore`'s third, and its torso is dressed as a game would dress skin: this flaymap for what is peeled, `wetmap` for the blood over it, and `flesh::FleshMaterial` to composite the two. The flaymap alone draws the tissue dry.
+The clip above is `capture_gore`'s third, and its torso is dressed as a game would dress skin: this flaymap for what is peeled, `wetmap` for the blood over it, and `flesh::FleshMaterial` to composite the two. The flaymap alone draws the tissue dry. Since 0.5.42 the material also lays a film of blood over the tissue the flaymap bares (`FleshParams::with_cut_film`), none on the graze at the rim, partial over the fat, full in the muscle, so the crater reads as a wound; drawn dry, its wide ring of cream fat read as a fried egg.
 
 ## The family
 
