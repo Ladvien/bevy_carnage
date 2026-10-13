@@ -259,6 +259,9 @@ under a tier; it draws the spark at `Stylised` from the `Wounded` message, the w
   by as far as the face reaches, so a heap of pieces lies in a pool of its own blood until the
   perfusion runs out; before 0.5.37 a burst body left its floor clean. A game that spawns the pieces
   itself keeps the pours by inserting `CutFaceBleed::of(cap_mesh, &transform, tick)` on its cut face.
+  The face itself wears a film of blood in `GoreFractured::cap` (0.5.38): `CUT_FACE_FILM_MM` (1 mm)
+  over the muscle and a quarter of it over the fat at the rim, with its clear coat
+  (`FleshParams::with_cut_film`); bare, the fat band read as cheese.
 - `Wounds`, a component on each hurt part: every wound it is bleeding, each a UV on its wetmap and
   a point on its mesh. A hit away from the open wounds opens another, up to
   `GoreDials::open_wounds` (16), and a hit inside one reopens it. A wound leaves the list once its

@@ -32,6 +32,7 @@ struct FleshParams {
     bands: vec4<f32>,
     wet: vec4<f32>,
     sss: vec4<f32>,
+    cut: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> flesh: FleshParams;

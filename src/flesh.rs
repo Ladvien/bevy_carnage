@@ -48,6 +48,12 @@
 //! the texels' staircase, soft and fringed; the spline's level set is a curve, so a run ends in a
 //! round drop and a pool in a smooth line however far the canvas is magnified. Since 0.5.36.
 //!
+//! **A fresh cut face is wet with its own blood** ([`FleshParams::with_cut_film`]). In
+//! [`FleshMode::Cap`] the tissue the strip draws gets a film of blood over it, its full depth where the
+//! vessels are, in the muscle, and a quarter of it over the fat at the rim, graded by the face's own
+//! depth below the skin, with the film's clear coat. Off by default; the preset's broken pieces wear
+//! it since 0.5.38, where a bare fat band read as cheese.
+//!
 //! # Determinism
 //!
 //! Both lookup tables are pure functions of their inputs, computed with `libm` so two machines bake
@@ -158,6 +164,11 @@ pub struct FleshParams {
     /// [`FleshTables::material`] and [`FleshExtension::set_dermis`]**; an unbound texture samples
     /// Bevy's fallback image, which would otherwise read as a fully wet, fully peeled surface.
     pub sss: Vec4,
+    /// `x` the thickest film of blood a cut face wears, mm, in [`FleshMode::Cap`]; `0` (as
+    /// [`FleshParams::for_layers`] ships) draws the tissue bands bare. `y`, `z` and `w` are unused.
+    /// The film is `x` from half the layer span below the skin down, and a quarter of it at the skin,
+    /// so the rim's fat shows through. See [`FleshParams::with_cut_film`].
+    pub cut: Vec4,
 }
 
 /// The `sss.w` bit that says the wetmap image is bound.
@@ -182,7 +193,15 @@ impl FleshParams {
             bands: Vec4::new(s[1] / span, s[2] / span, s[3] / span, s[4] / span),
             wet: Vec4::new(0.3, 0.3, 2.0, SO2_VENOUS),
             sss: Vec4::new(1.0, mm_per_unit, mode.code(), 0.0),
+            cut: Vec4::ZERO,
         }
+    }
+
+    /// **The same dials, with a fresh cut's blood on the face**, `film_mm` where it lies thickest.
+    /// A cut through living tissue is wet with its own blood: drawn bare, a fat band reads as cheese.
+    pub fn with_cut_film(mut self, film_mm: f32) -> Self {
+        self.cut.x = if film_mm.is_finite() { film_mm.max(0.0) } else { 0.0 };
+        self
     }
 
     fn set_flag(&mut self, flag: u32, on: bool) {

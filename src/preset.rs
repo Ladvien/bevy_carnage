@@ -2820,8 +2820,15 @@ fn cap_material(
         .and_then(|a| a.material(region))
         .and_then(|h| standard.get(&h).cloned())
         .unwrap_or_else(|| StandardMaterial { base_color: Color::srgb(0.55, 0.12, 0.12), perceptual_roughness: 0.4, ..default() });
-    flesh.add(tables.material(base, FleshParams::for_layers(&layers, FleshMode::Cap, dials.mm_per_unit), None, None))
+    let params = FleshParams::for_layers(&layers, FleshMode::Cap, dials.mm_per_unit).with_cut_film(CUT_FACE_FILM_MM);
+    flesh.add(tables.material(base, params, None, None))
 }
+
+/// **The thickest film of blood a broken body's cut face wears**, mm: `1.0`, the blood table's last
+/// column, where whole blood is opaque and the tissue under it no longer shows. A quarter of it lies
+/// over the fat at the rim. At `0.6` the faces read as candy red over the fat. Before 0.5.38 a cut
+/// face was drawn bare, and a fat band read as cheese. This crate's own number.
+pub const CUT_FACE_FILM_MM: f32 = 1.0;
 
 /// **Place a broken body's pieces in the world**, each with the velocity the preset launches it at.
 ///

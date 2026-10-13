@@ -30,6 +30,7 @@ struct FleshParams {
     bands: vec4<f32>,
     wet: vec4<f32>,
     sss: vec4<f32>,
+    cut: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> flesh: FleshParams;
@@ -201,6 +202,21 @@ fn fragment(
         depth_frac = in.uv_b.x;
     }
 #endif
+    // ---- A fresh cut face, wet with its own blood (`FleshParams::cut`). ----------------------
+    // Thickest where the vessels are, in the muscle, and a quarter of it over the fat at the rim, by
+    // the face's own depth below the skin (`UV_1.x`), so a piece reads as meat with a paler edge and
+    // the bands still show through at the rim. Its liquid shines. A value noise over `UV_1` was tried
+    // first, for patches, and on the preset's pieces it drew stripes across each face, not patches.
+    var cut_coat = 0.0;
+#ifdef VERTEX_UVS_B
+    if mode == MODE_CAP && flesh.cut.x > 0.0 {
+        let thick = smoothstep(0.08, 0.5, in.uv_b.x);
+        let film_mm = flesh.cut.x * mix(0.25, 1.0, thick);
+        pbr_input.material.base_color = vec4<f32>(blood_over(pbr_input.material.base_color.rgb, film_mm), pbr_input.material.base_color.a);
+        pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, 0.45, 0.5 + 0.5 * thick);
+        cut_coat = flesh.wet.x * (0.5 + 0.5 * thick);
+    }
+#endif
     let layer = layer_of(depth_frac);
 
     // ---- Blood: composite the film over whatever is under it, on the GPU. -------------------
@@ -226,7 +242,7 @@ fn fragment(
     }
 
     // ---- The wet clear coat: a specular layer of liquid above the diffuse colour. --------------
-    let coat = wetness * flesh.wet.x * pool * select(1.0, 1.0 / 3.0, weave);
+    let coat = max(wetness * flesh.wet.x * pool * select(1.0, 1.0 / 3.0, weave), cut_coat);
     pbr_input.material.clearcoat = coat;
     pbr_input.material.clearcoat_perceptual_roughness = flesh.wet.y;
 
