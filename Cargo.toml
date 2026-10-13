@@ -1,5 +1,12 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.29`: a shirt** (`AG-102`). A shot at a clothed character wounded the skin under the cloth,
+# unseen, and the cloth took a flat, hard-edged red patch that ran down it in a straight column. An
+# impact now holes every cloth it crosses before the skin (`preset::ClothHoles`, cut from shadows and
+# the depth prepass by a flesh prepass shader), and blood wicks into a weave along a frayed front
+# (`WetCanvas::wick_uv`), thinner and matte, running only past `GoreDials::cloth_holds`. A floor is
+# `FleshMode::Floor` now; `FleshMode::Cloth` keeps wet blood matte.
+#
 # **`0.5.28`: a body breaks where its skeleton is** (`AG-101`). A fracture is baked from a mesh asset,
 # which is the bind pose, so a character caught mid-stride burst with its arms at its sides. Each piece
 # is now carried by the bone of the vertex nearest it, to where that bone is when the body breaks, and
@@ -156,7 +163,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.28"
+version = "0.5.29"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

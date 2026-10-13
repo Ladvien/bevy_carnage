@@ -6,7 +6,9 @@
 //!
 //! `--eye x,y,z` renders from another camera position, aimed at the same point. It changes no digest.
 //! `--break` makes the body breakable and takes a heavy shot to the chest at frame 200: it breaks where
-//! its skeleton is, mid-walk with the arm raised, and its pieces fall to the floor.
+//! its skeleton is, mid-walk with the arm raised, and its pieces fall to the floor. `--shirt` dresses
+//! the body in a sleeveless shirt: the two chest shots hole it and the wound is seen through the hole,
+//! with the blood the shirt soaks up around it. The holes are folded into the digest.
 //!
 //! Writes `frame0000.png …` and prints one digest line; two runs must print the same line.
 //!
@@ -30,7 +32,7 @@ use std::time::Duration;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use bevy_carnage::preset::{GoreClock, GorePlugin};
+use bevy_carnage::preset::{ClothHoles, GoreClock, GorePlugin};
 use bevy_carnage::wetmap::WetCanvas;
 
 mod common;
@@ -93,6 +95,9 @@ fn main() {
     // Sorted before folding, for the reason `capture_preset` gives.
     let mut wets = world.query::<&WetCanvas>();
     let mut values: Vec<u64> = wets.iter(world).map(|w| w.digest()).collect();
+    // Only a cloth that was holed, so a clip in which nothing was holed keeps the digest it had.
+    let mut holes = world.query::<&ClothHoles>();
+    values.extend(holes.iter(world).filter(|h| h.is_holed()).map(ClothHoles::digest));
     values.sort_unstable();
     for value in values {
         digest ^= value;
@@ -107,6 +112,11 @@ fn breaking() -> bool {
     std::env::args().any(|a| a == "--break")
 }
 
+/// Whether `--shirt` was given: the mannequin wears a shirt.
+fn shirted() -> bool {
+    std::env::args().any(|a| a == "--shirt")
+}
+
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -114,7 +124,7 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
 ) {
-    let root = mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes);
+    let root = mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes, shirted());
     if breaking() {
         commands.entity(root).insert(mannequin::breakable());
     }

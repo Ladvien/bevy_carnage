@@ -109,8 +109,13 @@ pub enum FleshMode {
     Cap,
     /// A body canvas: tissue from the flaymap's depth byte, wetness from the wetmap's.
     Canvas,
-    /// A fabric canvas: no subsurface; the wetmap's amount byte composites blood over the base.
+    /// A fabric canvas: no subsurface; the wetmap's amount byte composites blood over the base. Blood
+    /// in a weave is held between the yarns, so a wet patch stays matte where a film on a floor
+    /// shines: its roughness goes to `0.7` rather than `0.45`, and its clear coat is a third.
     Cloth,
+    /// A floor, a wall or a slab: as [`Cloth`](Self::Cloth), but blood stands on it as a film and
+    /// pools shine.
+    Floor,
 }
 
 impl FleshMode {
@@ -119,6 +124,7 @@ impl FleshMode {
             FleshMode::Cap => 0.0,
             FleshMode::Canvas => 1.0,
             FleshMode::Cloth => 2.0,
+            FleshMode::Floor => 3.0,
         }
     }
 }
@@ -201,7 +207,10 @@ pub struct FleshExtension {
     #[texture(105)]
     pub flay: Option<Handle<Image>>,
     /// The preset's dermis image: `rgb` the ratio the skin is multiplied by, `a` how much. Unbound
-    /// means nothing under the skin.
+    /// means nothing under the skin. **On a [`FleshMode::Cloth`] material the same slot holds the
+    /// holes shot through the cloth** (`ClothHoles` in the preset): `rgb` the ratio of the ring around
+    /// a hole, shown by twice `a`, and the cloth cut away wherever `a` is over one half. The cut is an
+    /// alpha, so it takes effect when the base's `alpha_mode` is a mask.
     #[texture(106)]
     pub dermis: Option<Handle<Image>>,
 }
@@ -231,6 +240,12 @@ impl FleshExtension {
 impl MaterialExtension for FleshExtension {
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Path(AssetPath::parse("embedded://bevy_carnage/flesh.wgsl"))
+    }
+
+    /// Bevy's own prepass plus a cloth's holes, so a hole is cut from the depth prepass and the
+    /// shadow maps as well as from the colour.
+    fn prepass_fragment_shader() -> ShaderRef {
+        ShaderRef::Path(AssetPath::parse("embedded://bevy_carnage/flesh_prepass.wgsl"))
     }
 }
 
@@ -301,6 +316,7 @@ pub struct FleshSystems;
 impl Plugin for FleshPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "flesh.wgsl");
+        embedded_asset!(app, "flesh_prepass.wgsl");
         app.init_resource::<FleshTables>()
             .add_plugins(MaterialPlugin::<FleshMaterial>::default())
             .add_systems(Startup, bake_tables.in_set(FleshSystems));

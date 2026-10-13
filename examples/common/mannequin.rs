@@ -506,6 +506,21 @@ fn pieces(limb: Limb) -> Vec<Piece> {
     }
 }
 
+/// **A sleeveless shirt**: the torso's tube a centimetre out all round, weighted as the torso is so it
+/// moves with it, closed at the neck and flat across the waist where the legs leave it. A centimetre
+/// is what keeps the skin from showing through it as the spine bends; it is also the gap a shot
+/// crosses before it reaches the skin, so the hole it opens is in front of the wound.
+fn shirt_pieces() -> Vec<Piece> {
+    let mut pieces = pieces(Limb::Torso);
+    for piece in &mut pieces {
+        for knot in piece.tube.rx.iter_mut().chain(piece.tube.rz.iter_mut()) {
+            knot.1 += 0.010;
+        }
+        piece.tube.caps = [0.0, piece.tube.caps[1] + 0.010];
+    }
+    pieces
+}
+
 /// **Which way blood runs on this part's atlas.** Every limb is built from the shoulder or the hip
 /// down, so `v` grows downward and the default `(0, 1)` is right; the torso and the head are built
 /// from the bottom up, so theirs is `(0, -1)`.
@@ -522,12 +537,14 @@ pub const LIMBS: [Limb; 6] = [Limb::Torso, Limb::Head, Limb::ArmL, Limb::ArmR, L
 /// **Spawn the character**: a root, eleven joints under it, and six skinned meshes sharing them. The
 /// meshes carry no `Gore` of their own: the root carries a [`GoreScene`] that dresses each by its name,
 /// as a game would a loaded glTF. Its atlas density is not stated: the preset measures it from the pose.
+/// With `shirt`, a seventh skinned mesh named `Shirt` is worn over the torso and dressed as cloth.
 pub fn spawn(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     images: &mut Assets<Image>,
     bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+    shirt: bool,
 ) -> Entity {
     // Textured under a white factor, as a glTF exporter writes it.
     let skin = materials.add(StandardMaterial {
@@ -541,6 +558,7 @@ pub fn spawn(
     let scene = LIMBS.iter().fold(GoreScene::new(Gore::floor()).otherwise_nothing(), |scene, limb| {
         scene.with(&format!("{limb:?}"), Gore::skin(limb.region()).with_gravity_uv(gravity_uv(*limb)))
     });
+    let scene = scene.with("Shirt", Gore::cloth().with_gravity_uv(gravity_uv(Limb::Torso)));
     let root = commands.spawn((Transform::IDENTITY, Visibility::default(), Mannequin, scene)).id();
     let mut entities: Vec<Entity> = Vec::new();
     for bone in Bone::ALL {
@@ -559,6 +577,19 @@ pub fn spawn(
             Transform::IDENTITY,
             Name::new(format!("{limb:?}")),
             Part(limb),
+            ChildOf(root),
+        ));
+    }
+    if shirt {
+        // A pale cotton, so blood on it reads; matte, as a weave is.
+        let cotton = materials.add(StandardMaterial { base_color: Color::srgb(0.62, 0.66, 0.70), perceptual_roughness: 0.92, ..default() });
+        commands.spawn((
+            Mesh3d(meshes.add(build(&shirt_pieces()))),
+            MeshMaterial3d(cotton),
+            SkinnedMesh { inverse_bindposes: inverse_bindposes.clone(), joints: entities.clone() },
+            NoFrustumCulling,
+            Transform::IDENTITY,
+            Name::new("Shirt"),
             ChildOf(root),
         ));
     }

@@ -325,6 +325,76 @@ impl WetCanvas {
         self.stamp(uv, shape, tick, s.edge_span());
     }
 
+    /// **Blood wicking through a weave**: wet every texel inside `shape`'s silhouette, frayed by the
+    /// threads, to a share of full coverage that falls from the centre to the front — and never dry a
+    /// texel, since a front that has passed leaves the blood behind it.
+    ///
+    /// A stamp ([`paint_uv`](Self::paint_uv)) is a droplet's silhouette and adds its coverage; repeated
+    /// to grow a soak, it adds up to a flat, full patch with an edge as clean as a cut-out, which is not
+    /// what blood in cloth looks like. Blood in cloth travels along the yarns, so its front is ragged at
+    /// the scale of the weave and reaches further along the threads than across them. Here the front
+    /// is the ellipse `shape` describes, measured with a `p = 1.85` norm on the canvas's axes, which
+    /// stretches it along `u` and `v` — **the warp and the weft, on a garment whose UVs follow the
+    /// grain** — and moved in and out by a two-octave value noise over the texel lattice keyed by
+    /// `shape.seed`. Coverage is [`WICK_CORE`] at the centre and a little over half that toward the
+    /// front, feathered to nothing over its outer third, and mottled ±28 % per texel by a hash of the
+    /// texel alone — the yarn it falls on, which every landing agrees about. A texel takes the larger
+    /// of what it held and what the front brings, so the call can be repeated as the front grows; a
+    /// texel it raises is fresh blood again, age 0. The norm, the noise and the coverages are this
+    /// crate's own.
+    pub fn wick_uv(&mut self, uv: Vec2, shape: &StainShape, tick: u32) {
+        if !uv.is_finite() || !shape.major.is_finite() || !shape.minor.is_finite() || shape.major <= 0.0 || shape.minor <= 0.0 {
+            return;
+        }
+        let size = self.size as f32;
+        let n = self.size as i64;
+        // Semi-axes in texels, and the reach the noise can push the front out to.
+        let (a, b) = (0.5 * shape.major / UV_SPAN_M * size, 0.5 * shape.minor / UV_SPAN_M * size);
+        let reach = (a.max(b) * 1.4).ceil() as i64 + 1;
+        let dir = Vec2::new(shape.direction[0], shape.direction[1]).normalize_or(Vec2::Y);
+        let (cx, cy) = (uv.x.clamp(0.0, 1.0) * size, uv.y.clamp(0.0, 1.0) * size);
+        let (ix, iy) = (cx as i64, cy as i64);
+        let seed = shape.seed;
+        let mut touched = false;
+        for y in (iy - reach).max(0)..(iy + reach + 1).min(n) {
+            for x in (ix - reach).max(0)..(ix + reach + 1).min(n) {
+                let d = Vec2::new(x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+                // Into the silhouette's frame: `along` the major axis, `across` it, both over their axis.
+                let along = d.dot(dir) / a.max(1.0e-3);
+                let across = d.perp_dot(dir) / b.max(1.0e-3);
+                let p = 1.85;
+                let r = libm::powf(libm::powf(along.abs(), p) + libm::powf(across.abs(), p), 1.0 / p);
+                let front = 0.66 + 0.68 * weave(x, y, seed);
+                let s = r / front;
+                if s >= 1.0 {
+                    continue;
+                }
+                // Feathered over the front's outer third, and mottled by the yarn a texel falls on —
+                // a fixed property of the cloth, keyed by the texel alone, so every landing on it
+                // agrees which yarns take more.
+                let feather = 1.0 - smoothstep01((s - 0.66) / 0.34);
+                let yarn = 0.72 + 0.56 * crate::bloodstain::hash_f32((x as u32).wrapping_mul(0x27D4_EB2F) ^ (y as u32).wrapping_mul(0x1656_67B1));
+                let target = (WICK_CORE * (1.0 - 0.45 * s * s) * feather * yarn).clamp(0.0, 1.0);
+                let target = (target * 255.0).round() as u8;
+                let Some(cell) = self.wet.get_mut((y * n + x) as usize) else {
+                    continue;
+                };
+                if target <= cell.0 {
+                    continue;
+                }
+                *cell = (target, 0);
+                touched = true;
+                self.live = Some(self.live.map_or(Live::texel(x, y), |l| l.with(x, y)));
+            }
+        }
+        if touched {
+            self.quiet = None;
+            if self.dirty_since.is_none() {
+                self.dirty_since = Some(tick);
+            }
+        }
+    }
+
     /// The one stamp. `span` subsamples per texel axis; `1` is the shipped rasterisation to the byte.
     ///
     /// The mask is rasterised at `span` times the canvas resolution and box-filtered down, so a texel
@@ -875,6 +945,36 @@ impl Live {
 /// caught it on a spined stain at tick 0.
 const TICK_REACH: i64 = 2;
 
+/// **The share of full coverage blood wicked into a weave holds at the centre of its front**: `0.7`.
+/// Cloth holds blood in its yarns rather than as a film on top, so a soak is never a pool. This
+/// crate's own number, read off how dark a soaked patch should be against a stamped drop.
+pub const WICK_CORE: f32 = 0.7;
+
+/// **The weave's irregularity at a texel**, in `[0, 1]`: value noise at six texels and at two,
+/// weighted two to one, each lattice corner from [`crate::bloodstain::hash_f32`] of its coordinates
+/// and `seed`. Smoothstepped between corners, so the front frays into lobes rather than speckle.
+fn weave(x: i64, y: i64, seed: u32) -> f32 {
+    let octave = |cell: i64, salt: u32| -> f32 {
+        let (gx, gy) = (x.div_euclid(cell), y.div_euclid(cell));
+        let (fx, fy) = ((x.rem_euclid(cell) as f32 + 0.5) / cell as f32, (y.rem_euclid(cell) as f32 + 0.5) / cell as f32);
+        let corner = |i: i64, j: i64| {
+            let key = (i as u32).wrapping_mul(0x9E37_79B9) ^ (j as u32).wrapping_mul(0x85EB_CA6B) ^ seed.wrapping_add(salt);
+            crate::bloodstain::hash_f32(key)
+        };
+        let (sx, sy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
+        let top = corner(gx, gy) + (corner(gx + 1, gy) - corner(gx, gy)) * sx;
+        let bottom = corner(gx, gy + 1) + (corner(gx + 1, gy + 1) - corner(gx, gy + 1)) * sx;
+        top + (bottom - top) * sy
+    };
+    (2.0 * octave(6, 0) + octave(2, 0x68E3_1DA4)) / 3.0
+}
+
+/// The cubic smoothstep over `[0, 1]`, clamped.
+fn smoothstep01(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// A texel is wet until its age reaches the drying span. A texel with no blood in it has age 0 and is
 /// trivially wet, which costs nothing: it has nothing to shed.
 #[inline]
@@ -1050,6 +1150,41 @@ mod tests {
         assert_eq!(c.amount_at(3, 2), s.drip_threshold(), "the source kept the wrong residue");
         assert_eq!(c.amount_at(3, 3), 255 - s.drip_threshold(), "the parcel did not land next door");
         assert_eq!(c.amount_at(3, 4), 0, "the parcel cascaded — the pass read its own writes");
+    }
+
+    /// **A wick wets inside its front, never past it, and never takes blood away.** A pooled texel
+    /// inside the front keeps its pool; the wetted texels lie within the reach the noise allows; the
+    /// front is ragged, so the wetted set is not the plain ellipse the shape describes; and a second
+    /// call with the same shape is a no-op, so growing a soak by calling it again is safe.
+    #[test]
+    fn a_wick_wets_inside_a_ragged_front_and_never_dries_a_texel() {
+        let (_images, mut c) = canvas(64);
+        let pooled = 32 * 64 + 34;
+        c.wet[pooled] = (255, 0);
+        let shape = StainShape { major: 0.5, minor: 0.5, spines: 0, satellites: 0, direction: [0.0, 1.0], seed: 7 };
+        c.wick_uv(Vec2::splat(0.5), &shape, 3);
+        assert_eq!(c.wet[pooled].0, 255, "the wick lowered a pooled texel");
+        let radius_px = 0.25 * 64.0;
+        let (mut wet, mut ellipse_misses) = (0, 0);
+        for y in 0..64usize {
+            for x in 0..64usize {
+                let d = Vec2::new(x as f32 + 0.5 - 32.0, y as f32 + 0.5 - 32.0).length() / radius_px;
+                let amount = c.wet[y * 64 + x].0;
+                if amount > 0 {
+                    wet += 1;
+                    assert!(d < 1.4, "a texel at {d:.2} radii was wetted past the reach");
+                }
+                // Inside the ellipse but dry, or outside it but wet: where the front frays.
+                if (d < 0.95) != (amount > 0) {
+                    ellipse_misses += 1;
+                }
+            }
+        }
+        assert!(wet > 300, "the wick wetted only {wet} texels");
+        assert!(ellipse_misses > 40, "the front is the plain ellipse ({ellipse_misses} texels off it): no weave");
+        let before = c.wet.clone();
+        c.wick_uv(Vec2::splat(0.5), &shape, 4);
+        assert_eq!(c.wet, before, "a second wick of the same front changed the canvas");
     }
 
     #[test]

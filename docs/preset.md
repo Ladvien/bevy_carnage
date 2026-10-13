@@ -73,9 +73,15 @@ bodysuit. The cost is that a character whose body mesh has a name it does not kn
 all: name it, `.with("thatname", Gore::skin(Region::Torso))`. `humanoid()` is a name heuristic, which is
 all a glTF offers; rename what it gets wrong rather than trusting it blind.
 
-**What it does not do yet: a hole in the cloth.** Clothing is not something a hit stops at, so the
-body under a suit is wounded and the suit is stained by the blood that comes through it. On a
-character in a full bodysuit the wound itself is never seen, only its soak.
+**A shot through clothing holes it** (0.5.29). Clothing is not something a hit stops at: the skin under
+a suit is wounded as before, and every cloth the shot's ray crosses on the way — the suit, a curtain in
+front of the body — gets a hole where it crossed, a little smaller than the blow, ragged and ringed
+grey as a bullet wipe, so the wound shows through it. A cloth behind the skin is not reached. The
+hole is an alpha cut: the cloth's material turns into an `AlphaMode::Mask` at its first hole, and the
+flesh material's prepass shader cuts it from the shadows and the depth prepass too. The blood that
+comes through soaks into the weave along a frayed front, pinker at its edge and matte where it is
+wet, and runs down the cloth only once it is saturated (`GoreDials::cloth_holds`). Before 0.5.29 the
+wound under a suit was never seen and the suit took a flat, glossy patch that ran in a straight column.
 
 ## What a dressed skin keeps
 
@@ -133,6 +139,11 @@ renderer asks for. Nothing is asked of the game. Put `Gore` on the skinned mesh 
 them, a walk, and a wave that holds the left forearm above the head. Every key aims at where that
 part of the body is drawn that frame, and the third chest shot breaks it. `capture_skinned --break`
 records it.
+
+`capture_skinned --shirt` dresses the same body in a sleeveless shirt, a seventh skinned mesh named
+`Shirt`, and the two chest shots hole it; `C` in the windowed demo puts it on or takes it off.
+
+![The mannequin walks in a pale sleeveless shirt; two shots to the chest punch a ragged hole in it, the wound shows through, and the blood soaks out through the cotton along a frayed, pinkish front](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_shirt.gif)
 
 ![The mannequin walks with its left arm raised; a heavy shot to the chest breaks it mid-stride into pieces that keep the pose, the raised arm up and the legs mid-step, before they fall and settle among its guts](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_break.gif)
 
@@ -243,7 +254,7 @@ scratch a first wound allocates is on top.
 | skin (flaymap, wetmap, dermis map) | 64 | 136 KiB | 96 KiB | 328 KiB |
 | skin | **128**, ships | 544 KiB | 384 KiB | **1.3 MiB** |
 | skin | 256 | 2.1 MiB | 1.5 MiB | 5.1 MiB |
-| cloth (wetmap) | 128 | 256 KiB | 128 KiB | 512 KiB |
+| cloth (wetmap, holes) | 128 | 320 KiB | 192 KiB | 704 KiB |
 | floor (wetmap) | **256**, ships | 1.0 MiB | 512 KiB | **2.0 MiB** |
 
 So a character of six skin parts at the shipped 128 is **7.7 MiB**, forty of them 308 MiB, and the
@@ -264,6 +275,9 @@ the player never sees up close, and the wrong one for the one they shoot.
 - **A piece of a skinned body is rigid.** It is carried by one bone, to where that bone is, and does
   not bend with the pose: a thigh cut across a bent knee is a straight piece standing where the thigh
   was. The break itself is exact to the bone; the shape of each piece is the bind pose's.
+- **A hole does not fray or tear further, and a slash does not cut cloth.** Only an impact holes a
+  cloth, and it holds the shape it was shot with. A broken body's pieces are skin: the shirt goes
+  with the body it was on.
 - **A skin's roughness map and a crater's slope give way.** See *What a dressed skin keeps*.
 - **One ageing bruise per mesh entity.** A second blow on the same entity starts a new bruise, and
   the first stops ageing where it was. Wounds have no such limit.

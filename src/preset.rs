@@ -1105,6 +1105,128 @@ pub struct Soaking {
     pub landings: Vec<(Vec2, StainShape, u32)>,
 }
 
+/// **The share of a film's depth that blood soaked into cloth stands for**: `0.1`. A weave holds blood
+/// inside it, so full coverage on a shirt is a far thinner layer over the fabric than on skin or a
+/// floor. Whole blood is opaque by about 0.6 mm (`crate::flesh::BLOOD_LUT_MAX_MM`'s note), so at the
+/// shared 2 mm a soak was near-black to its edge; at a tenth it is red where it is heavy and pink at
+/// its front. This crate's own number.
+pub const CLOTH_FILM_SHARE: f32 = 0.1;
+
+/// **The holes shot through this cloth**, so the wound under a shirt can be seen through it. An
+/// impact whose ray crosses a cloth before it reaches the skin it wounds opens a hole where it
+/// crossed: the cloth is cut away out to about [`HOLE_OPEN`] of the blow's radius, along a ragged,
+/// seeded outline, and darkened in a ring around that out to [`HOLE_RIM`] of it — what forensic
+/// pathology calls the *bullet wipe*, the grey ring a projectile leaves on the fabric it pierces. The
+/// ring's colour and both reaches are this crate's own.
+///
+/// The pixels are a [`DermisCanvas`] in the flesh material's dermis slot, read the other way round on
+/// cloth: `rgb` the ratio the fabric is multiplied by, `a` above one half where the cloth is gone.
+/// The material is switched to [`AlphaMode::Mask`] by the first hole and not before, so an unholed
+/// cloth keeps an opaque pipeline's early depth test; an authored `Blend` cloth is left as it was.
+/// A hole is never closed.
+#[derive(Component, Debug)]
+pub struct ClothHoles {
+    canvas: DermisCanvas,
+    /// Whether the material has been switched to a mask yet.
+    masked: bool,
+}
+
+/// How far a hole is open, as a share of the blow's radius: enough to see the crater, not the whole
+/// of its falloff. This crate's own number.
+pub const HOLE_OPEN: f32 = 0.85;
+/// How far the darkened ring around a hole reaches, as a share of the blow's radius. Own number.
+pub const HOLE_RIM: f32 = 1.5;
+/// The ratio the fabric is multiplied by at the hole's edge. Own number.
+const HOLE_WIPE: [f32; 3] = [0.32, 0.29, 0.27];
+
+impl ClothHoles {
+    fn new(images: &mut Assets<Image>, size: u32) -> Self {
+        Self { canvas: DermisCanvas::new(images, size), masked: false }
+    }
+
+    /// The canvas the holes are drawn in.
+    pub fn canvas(&self) -> &DermisCanvas {
+        &self.canvas
+    }
+
+    /// FNV-1a over the canvas's bytes: two runs that opened the same holes print the same number.
+    pub fn digest(&self) -> u64 {
+        self.canvas.px.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3))
+    }
+
+    /// Whether any texel is open.
+    pub fn is_holed(&self) -> bool {
+        self.canvas.px.iter().skip(3).step_by(4).any(|&a| a > 127)
+    }
+
+    /// Whether the texel under `uv` is open.
+    pub fn is_open_at(&self, uv: Vec2) -> bool {
+        let n = self.canvas.size as f32;
+        if !uv.is_finite() || uv.x < 0.0 || uv.y < 0.0 || uv.x >= 1.0 || uv.y >= 1.0 {
+            return false;
+        }
+        let (x, y) = ((uv.x * n) as usize, (uv.y * n) as usize);
+        let i = (y * self.canvas.size as usize + x) * 4 + 3;
+        self.canvas.px.get(i).is_some_and(|&a| a > 127)
+    }
+
+    /// **Open a hole** of `radius_uv` (the blow's radius, in this canvas's UV) at `uv`. `seed` turns
+    /// the outline: three and seven lobes at seeded phases, and a seeded jitter per texel, so no two
+    /// holes are the same circle and the edge reads as torn fibre rather than a punched disc.
+    pub fn open(&mut self, uv: Vec2, radius_uv: f32, seed: u32) {
+        if !uv.is_finite() || !radius_uv.is_finite() || radius_uv <= 0.0 {
+            return;
+        }
+        let canvas = &mut self.canvas;
+        let size = canvas.size;
+        let n = size as i64;
+        let reach = radius_uv * HOLE_RIM;
+        let r_px = ((reach * size as f32).ceil() as i64).clamp(0, n);
+        let cx = ((uv.x * size as f32) as i64).clamp(-n, 2 * n);
+        let cy = ((uv.y * size as f32) as i64).clamp(-n, 2 * n);
+        let tau = core::f32::consts::TAU;
+        let p3 = crate::bloodstain::hash_f32(seed) * tau;
+        let p7 = crate::bloodstain::hash_f32(seed ^ 0x51ED_270B) * tau;
+        for y in (cy - r_px).max(0)..(cy + r_px + 1).min(n) {
+            for x in (cx - r_px).max(0)..(cx + r_px + 1).min(n) {
+                let du = (x as f32 + 0.5) / size as f32 - uv.x;
+                let dv = (y as f32 + 0.5) / size as f32 - uv.y;
+                let r = libm::sqrtf(du * du + dv * dv);
+                if r > reach {
+                    continue;
+                }
+                let theta = libm::atan2f(dv, du);
+                let jitter = crate::bloodstain::hash_f32(seed ^ ((y as u32).wrapping_mul(0x9E37_79B9) ^ (x as u32).wrapping_mul(0x85EB_CA6B)));
+                let lobes = 1.0 + 0.16 * libm::sinf(3.0 * theta + p3) + 0.09 * libm::sinf(7.0 * theta + p7);
+                let edge = radius_uv * HOLE_OPEN * lobes * (0.9 + 0.2 * jitter);
+                // Open inside the edge; outside it a ring that fades to nothing at the reach, at
+                // most a little under one half so the cut is decided by the edge alone.
+                let a = if r <= edge {
+                    1.0
+                } else {
+                    let s = ((r - edge) / (reach - edge).max(1.0e-6)).clamp(0.0, 1.0);
+                    0.45 * (1.0 - s) * (1.0 - s)
+                };
+                if a <= 0.0 {
+                    continue;
+                }
+                let i = ((y * n + x) * 4) as usize;
+                if let Some(px) = canvas.px.get_mut(i..i + 4) {
+                    let old_a = px[3] as f32 / 255.0;
+                    if a <= old_a {
+                        continue;
+                    }
+                    for (ch, wipe) in HOLE_WIPE.iter().enumerate() {
+                        px[ch] = px[ch].min((wipe * 255.0).round() as u8);
+                    }
+                    px[3] = (a * 255.0).round() as u8;
+                    canvas.dirty = true;
+                }
+            }
+        }
+    }
+}
+
 /// A thrown fragment the preset integrates.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Flying(pub Vec3);
@@ -1157,6 +1279,12 @@ pub struct GoreDials {
     /// bleeding; a wound also stops once its bleed has clotted. Each pulse costs one stamp on the
     /// surface and one drip on each floor, so this bounds what a burst of fire into one part costs.
     pub open_wounds: usize,
+    /// **How much blood a weave holds before it runs**, as a share of full coverage: the drip
+    /// threshold a [`Gore::cloth`] canvas ticks with, in place of `WetSettings::drip_rate`
+    /// when that is lower. Cloth soaks blood into its yarns; it runs down a shirt only once the
+    /// fabric is saturated, where skin sheds it as a film. At the shared `0.35` a soaked shirt grew
+    /// a straight, hard-edged column under every wound. `0.92`, this crate's own number.
+    pub cloth_holds: f32,
 }
 
 impl Default for GoreDials {
@@ -1176,6 +1304,7 @@ impl Default for GoreDials {
             bruise_hours_per_tick: 0.02,
             burn_cooling_s: 5.0,
             open_wounds: 16,
+            cloth_holds: 0.92,
         }
     }
 }
@@ -1536,14 +1665,18 @@ fn dress(
                 let wet = WetCanvas::new(&mut images, gore.canvas_texels(&dials), base_srgb, rough);
                 let layers = Layers::for_region(Region::Torso);
                 let mut params = FleshParams::for_layers(&layers, FleshMode::Cloth, scale.mm_per_unit);
-                params.wet.z = wet_settings.as_ref().map(|w| w.film_depth_mm).unwrap_or(2.0);
-                let material = tables.material(base, params, Some(wet.roughness()), None);
-                entity_commands.insert((MeshMaterial3d(flesh.add(material)), wet, Soaking::default()));
+                // Blood in a weave is held between the yarns, not stood on them as a film: see
+                // `CLOTH_FILM_SHARE`. The shader keeps the wet weave matte (`FleshMode::Cloth`).
+                params.wet.z = wet_settings.as_ref().map(|w| w.film_depth_mm).unwrap_or(2.0) * CLOTH_FILM_SHARE;
+                let holes = ClothHoles::new(&mut images, gore.canvas_texels(&dials));
+                let mut material = tables.material(base, params, Some(wet.roughness()), None);
+                material.extension.set_dermis(Some(holes.canvas.image()));
+                entity_commands.insert((MeshMaterial3d(flesh.add(material)), wet, Soaking::default(), holes));
             }
             GoreKind::Floor => {
                 let wet = WetCanvas::new(&mut images, gore.canvas_texels(&dials), base_srgb, rough);
                 let layers = Layers::for_region(Region::Torso);
-                let mut params = FleshParams::for_layers(&layers, FleshMode::Cloth, scale.mm_per_unit);
+                let mut params = FleshParams::for_layers(&layers, FleshMode::Floor, scale.mm_per_unit);
                 params.wet.z = wet_settings.as_ref().map(|w| w.film_depth_mm).unwrap_or(2.0);
                 params.sss.x = 0.0;
                 let material = tables.material(base, params, Some(wet.roughness()), None);
@@ -1861,6 +1994,32 @@ fn take_hits(
                             }
                         });
                     }
+                }
+            }
+        }
+        // **A hole in what it went through.** An impact crosses every cloth between where it came from
+        // and the skin it wounds — a shirt over the wound, a curtain in front of the body — and opens
+        // a hole in each where it crossed, so the wound under clothing is seen. A cloth behind the
+        // skin is not reached; the shot stopped in the body.
+        if let (HitKind::Impact { .. }, Some(skin_landing)) = (hit.kind, landed) {
+            for surface in surfaces.iter().filter(|s| s.gore.kind == GoreKind::Cloth) {
+                let Some(asset) = meshes.get(&surface.mesh) else { continue };
+                let Some((cloth_mesh, cloth_xf)) = cast_at(surface, asset, &rigging, &mut posed, &identity) else { continue };
+                let bound = bounds.entry(surface.entity).or_insert_with(|| Bounds::of(cloth_mesh, cloth_xf));
+                if bound.as_ref().is_some_and(|b| !b.reached_by(hit.from, hit.dir)) {
+                    continue;
+                }
+                let Some(crossing) = ray_hit(cloth_mesh, cloth_xf, hit.from, hit.dir) else { continue };
+                if crossing.t > skin_landing.t {
+                    continue;
+                }
+                let (uv, radius_uv) = (crossing.uv, hit.radius_m * surface.gore.density() / crate::flaymap::UV_SPAN_M);
+                if let Ok(mut e) = commands.get_entity(surface.entity) {
+                    e.queue(move |mut e: EntityWorldMut| {
+                        if let Some(mut holes) = e.get_mut::<ClothHoles>() {
+                            holes.open(uv, radius_uv, seed);
+                        }
+                    });
                 }
             }
         }
@@ -2368,16 +2527,12 @@ fn linear(c: [f32; 3]) -> [f32; 3] {
 }
 
 /// **Widen every landing on cloth** along the Lucas–Washburn front until it stops moving, at the UV
-/// it landed on, so a sheet that moves keeps soaking where the blood is.
-fn soak_cloth(
-    clock: Res<GoreClock>,
-    dials: Res<GoreDials>,
-    wet_settings: Option<Res<WetSettings>>,
-    mut cloth: Query<(&Gore, &mut Soaking, &mut WetCanvas)>,
-) {
+/// it landed on, so a sheet that moves keeps soaking where the blood is. The front is wicked
+/// ([`WetCanvas::wick_uv`]): ragged at the weave and paler at its edge, where a stamp grown in place
+/// left a flat patch with a cut-out's rim.
+fn soak_cloth(clock: Res<GoreClock>, dials: Res<GoreDials>, mut cloth: Query<(&Gore, &mut Soaking, &mut WetCanvas)>) {
     let tick = clock.0;
     let sheet = crate::bloodstain::wick::Sheet::default();
-    let edges = edge_settings(&dials, wet_settings.as_deref());
     for (gore, mut soaking, mut wet) in &mut cloth {
         if soaking.landings.is_empty() {
             continue;
@@ -2399,7 +2554,7 @@ fn soak_cloth(
                 let texels = wet.size();
                 // Stamped with the current tick: the tick is the upload budget's sort key, and a
                 // landing-tick stamp would let a sheet jump the queue by up to `SOAK_SECONDS`.
-                wet.paint_uv_with(uv, &shape_on(gore, &grown, texels), tick, &edges);
+                wet.wick_uv(uv, &shape_on(gore, &grown, texels), tick);
             }
             if t_s < SOAK_SECONDS {
                 keep.push((uv, shape, landed));
@@ -2412,9 +2567,30 @@ fn soak_cloth(
 /// How long a landing keeps soaking, seconds: past this the √t front is inside a texel per tick.
 const SOAK_SECONDS: f32 = 6.0;
 
-/// Upload every dermis canvas that changed.
-fn flush_dermis(images: Option<ResMut<Assets<Image>>>, mut canvases: Query<&mut DermisCanvas>) {
+/// Upload every dermis canvas and every cloth's holes that changed. A cloth's first hole switches its
+/// material from opaque to a mask, which is what makes Bevy run the flesh prepass shader that cuts the
+/// hole out of the depth prepass and the shadow maps too.
+fn flush_dermis(
+    images: Option<ResMut<Assets<Image>>>,
+    flesh: Option<ResMut<Assets<FleshMaterial>>>,
+    mut canvases: Query<&mut DermisCanvas>,
+    mut cloths: Query<(&mut ClothHoles, &MeshMaterial3d<FleshMaterial>)>,
+) {
     let Some(mut images) = images else { return };
+    let mut flesh = flesh;
+    for (mut holes, material) in &mut cloths {
+        if holes.canvas.dirty
+            && !holes.masked
+            && let Some(flesh) = flesh.as_mut()
+            && let Some(mut material) = flesh.get_mut(&material.0)
+        {
+            if matches!(material.base.alpha_mode, AlphaMode::Opaque) {
+                material.base.alpha_mode = AlphaMode::Mask(0.5);
+            }
+            holes.masked = true;
+        }
+        holes.canvas.flush(&mut images);
+    }
     for mut c in &mut canvases {
         c.flush(&mut images);
     }
@@ -2480,15 +2656,24 @@ fn runoff(mesh: &Mesh, pose: &Pose, wounds: &[WoundSite]) -> Option<Vec2> {
     (counted > 0).then(|| sum.normalize_or_zero())
 }
 
-/// Run and dry every wetmap on the fixed tick.
+/// Run and dry every wetmap on the fixed tick. A cloth runs only past what its weave holds
+/// ([`GoreDials::cloth_holds`]).
 fn tick_canvases(
     clock: Res<GoreClock>,
+    dials: Res<GoreDials>,
     settings: Option<Res<WetSettings>>,
     meshes: Option<Res<Assets<Mesh>>>,
     rigging: Rigging,
     mut canvases: Canvases,
 ) {
     let Some(settings) = settings else { return };
+    // A weave moves blood by wicking (`soak_cloth`), not as a film creeping over it, so its creep is a
+    // quarter of a film's: at the full rate the spread blurred every front the wick frayed.
+    let cloth = WetSettings {
+        drip_rate: settings.drip_rate.max(dials.cloth_holds),
+        spread_rate: settings.spread_rate * 0.25,
+        ..settings.clone()
+    };
     for (gore, mut wet, mesh3d, wounds, skin, run) in &mut canvases {
         let gravity = match run {
             Some(mut run) => {
@@ -2503,7 +2688,7 @@ fn tick_canvases(
             }
             None => gore.gravity_uv,
         };
-        wet.tick(clock.0, gravity, &settings);
+        wet.tick(clock.0, gravity, if gore.kind == GoreKind::Cloth { &cloth } else { &settings });
     }
 }
 
@@ -2627,6 +2812,48 @@ mod tests {
         let open: Vec<WoundSite> = app.world().get::<Wounds>(body).map(|w| w.0.clone()).unwrap_or_default();
         assert_eq!(open.len(), 2, "a hit inside an open wound stacked a second schedule on it");
         assert!(open[1].at_local.x < -0.1 && open[1].bleed.opened_at > open[0].bleed.opened_at, "the left wound was not the one reopened");
+    }
+
+    /// **A shot through a shirt holes the shirt where it crossed it, and nothing behind the body.** A
+    /// skin box inside a slightly larger cloth box, a cloth sheet behind both, one impact from the front:
+    /// the shirt is open where the ray crossed it and nowhere a blow's reach away, its material is
+    /// switched to a mask so the hole is cut, and the sheet the shot never reached is whole and opaque.
+    /// Two runs open the same texels.
+    #[test]
+    fn a_shot_through_a_shirt_holes_the_shirt_and_not_what_is_behind() {
+        let run = || {
+            let mut app = headless();
+            let world = app.world_mut();
+            let (body, shirt, sheet) = {
+                let mut meshes = world.resource_mut::<Assets<Mesh>>();
+                (
+                    meshes.add(Cuboid::new(0.6, 0.6, 0.2).mesh().build()),
+                    meshes.add(Cuboid::new(0.62, 0.62, 0.22).mesh().build()),
+                    meshes.add(Plane3d::new(Vec3::Z, Vec2::splat(0.5)).mesh().build()),
+                )
+            };
+            let body = world.spawn((Mesh3d(body), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Torso))).id();
+            let shirt = world.spawn((Mesh3d(shirt), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::cloth())).id();
+            let behind = Transform::from_xyz(0.0, 0.0, -0.5);
+            let sheet = world.spawn((Mesh3d(sheet), behind, GlobalTransform::from(behind), Gore::cloth())).id();
+            app.world_mut().run_schedule(FixedUpdate);
+            app.world_mut().write_message(GoreHit::impact(body, Vec3::new(0.0, 0.0, 2.0), Vec3::NEG_Z, 0.03, 5.0));
+            app.world_mut().run_schedule(FixedUpdate);
+            let holes = |e: Entity| app.world().get::<ClothHoles>(e).map(|h| (h.is_holed(), h.is_open_at(Vec2::splat(0.5)), h.is_open_at(Vec2::new(0.5, 0.75)), h.canvas.px.clone()));
+            let mask = |e: Entity| {
+                let handle = app.world().get::<MeshMaterial3d<FleshMaterial>>(e).map(|m| m.0.clone());
+                handle.and_then(|h| app.world().resource::<Assets<FleshMaterial>>().get(&h).map(|m| m.base.alpha_mode))
+            };
+            (holes(shirt), holes(sheet), mask(shirt), mask(sheet))
+        };
+        let (shirt, sheet, shirt_mode, sheet_mode) = run();
+        let Some((holed, centre, aside, px)) = shirt else { panic!("the shirt was not dressed with holes") };
+        assert!(holed && centre, "the shirt is not open where the shot crossed it");
+        assert!(!aside, "the shirt is open a quarter of its face from where the shot crossed it");
+        assert!(matches!(shirt_mode, Some(AlphaMode::Mask(_))), "a holed shirt still draws opaque: {shirt_mode:?}");
+        assert!(sheet.is_some_and(|s| !s.0), "a sheet behind the body was holed by a shot the body stopped");
+        assert!(matches!(sheet_mode, Some(AlphaMode::Opaque)), "an unholed cloth was switched off the opaque pipeline: {sheet_mode:?}");
+        assert_eq!(run().0.map(|s| s.3), Some(px), "two runs opened different texels");
     }
 
     /// **An atlas density nobody stated is measured from the mesh, at its world scale.** A 3 m
@@ -3524,43 +3751,44 @@ mod tests {
     #[test]
     fn the_first_tick_names_a_fixed_step_that_is_not_the_dials_rate_once() {
         use bevy::log::tracing_subscriber::fmt;
+        use std::cell::RefCell;
         use std::io::Write;
-        use std::sync::{Arc, Mutex};
-        #[derive(Clone)]
-        struct Sink(Arc<Mutex<Vec<u8>>>);
+        thread_local! {
+            static HEARD: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        }
+        struct Sink;
         impl Write for Sink {
             fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                if let Ok(mut inner) = self.0.lock() {
-                    inner.extend_from_slice(buf);
-                }
+                HEARD.with(|h| h.borrow_mut().extend_from_slice(buf));
                 Ok(buf.len())
             }
             fn flush(&mut self) -> std::io::Result<()> {
                 Ok(())
             }
         }
+        // **A global subscriber writing to a per-thread buffer.** A scoped one is not enough: a
+        // callsite's interest is cached process-wide, so a test on another thread that reached this
+        // warning first, with no subscriber, silenced it for this one — it failed one run in three on a
+        // 24-thread machine. Global, every callsite is interesting from the start; per thread, every
+        // other test's warnings land in its own buffer, not this one's.
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            let _ = bevy::log::tracing::subscriber::set_global_default(fmt().with_writer(|| Sink).finish());
+        });
         let heard = |hz: Option<f64>| {
-            let sink = Sink(Arc::new(Mutex::new(Vec::new())));
-            let subscriber = fmt().with_writer({
-                let sink = sink.clone();
-                move || sink.clone()
-            }).finish();
-            bevy::log::tracing::subscriber::with_default(subscriber, || {
-                let mut app = headless();
-                if let Some(hz) = hz {
-                    app.insert_resource(Time::<Fixed>::from_hz(hz));
-                }
-                // A scoped subscriber is thread-local, and the multithreaded executor would run the
-                // system on another thread, where it is not installed.
-                app.edit_schedule(FixedUpdate, |schedule| {
-                    schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
-                });
-                for _ in 0..3 {
-                    app.world_mut().run_schedule(FixedUpdate);
-                }
+            HEARD.with(|h| h.borrow_mut().clear());
+            let mut app = headless();
+            if let Some(hz) = hz {
+                app.insert_resource(Time::<Fixed>::from_hz(hz));
+            }
+            // On this thread, so its buffer is the one that hears it.
+            app.edit_schedule(FixedUpdate, |schedule| {
+                schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
             });
-            let text = sink.0.lock().map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-            text.matches("FixedUpdate runs at").count()
+            for _ in 0..3 {
+                app.world_mut().run_schedule(FixedUpdate);
+            }
+            HEARD.with(|h| String::from_utf8_lossy(&h.borrow()).matches("FixedUpdate runs at").count())
         };
         assert_eq!(heard(None), 1, "the default 64 Hz step was not reported exactly once");
         assert_eq!(heard(Some(60.0)), 0, "the dials' own rate was reported");
@@ -3696,7 +3924,8 @@ mod tests {
                 let e = app.world_mut().spawn((Mesh3d(mesh), Transform::IDENTITY, GlobalTransform::IDENTITY, gore.with_canvas(edge))).id();
                 app.world_mut().run_schedule(FixedUpdate);
                 let w = app.world();
-                let (wet, flay, dermis) = (w.get::<WetCanvas>(e), w.get::<FlayCanvas>(e), w.get::<DermisCanvas>(e));
+                let dermis = w.get::<DermisCanvas>(e).or(w.get::<ClothHoles>(e).map(ClothHoles::canvas));
+                let (wet, flay) = (w.get::<WetCanvas>(e), w.get::<FlayCanvas>(e));
                 let heap = wet.map_or(0, WetCanvas::heap_bytes) + flay.map_or(0, FlayCanvas::heap_bytes) + dermis.map_or(0, DermisCanvas::heap_bytes);
                 let image = wet.map_or(0, WetCanvas::image_bytes) + flay.map_or(0, FlayCanvas::image_bytes) + dermis.map_or(0, DermisCanvas::image_bytes);
                 println!("{name:<12}{edge:>6}  {}  {}  {}", kib(heap), kib(image), kib(heap + 2 * image));

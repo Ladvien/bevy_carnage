@@ -13,6 +13,7 @@
 //! | `3` | a shot to the chest — hold it down at one spot and the crater deepens; the third breaks the body, where its skeleton is |
 //! | `4` | a hot iron on the right forearm |
 //! | `5` | a blow to the left shin |
+//! | `C` | reset, with a shirt on or off: a shot to the chest holes it and the wound shows through |
 //! | `R` | reset |
 //!
 //! The wounds are the preset's and ride the limb they are on: the arm that took the shot keeps waving
@@ -54,11 +55,11 @@ fn setup(
         AmbientLight { brightness: preset_scene::AMBIENT, ..default() },
         preset_scene::EXPOSURE,
     ));
-    let root = mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes);
+    let root = mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes, false);
     commands.entity(root).insert(mannequin::breakable());
     preset_scene::spawn_set(&mut commands, &mut meshes, &mut materials);
     commands.spawn((
-        Text::new("1 shot to the forearm   2 slash   3 chest (three at one spot break it)   4 iron   5 blow   R reset"),
+        Text::new("1 shot to the forearm   2 slash   3 chest (three at one spot break it)   4 iron   5 blow   C shirt   R reset"),
         TextFont { font_size: bevy::text::FontSize::Px(14.0), ..default() },
         TextColor(Color::srgb(0.92, 0.88, 0.86)),
         Node { position_type: PositionType::Absolute, left: Val::Px(12.0), top: Val::Px(10.0), ..default() },
@@ -79,6 +80,7 @@ fn keys(
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
     scene: Query<Entity, Scene>,
+    mut shirt: Local<bool>,
 ) {
     let hit = if input.just_pressed(KeyCode::Digit1) {
         aim.shot(Bone::ArmLowL, 0.13, 0.03, 7.0)
@@ -96,11 +98,15 @@ fn keys(
     if let Some(hit) = hit {
         hits.write(hit);
     }
-    if input.just_pressed(KeyCode::KeyR) {
+    let clothes = input.just_pressed(KeyCode::KeyC);
+    if clothes {
+        *shirt = !*shirt;
+    }
+    if clothes || input.just_pressed(KeyCode::KeyR) {
         for entity in &scene {
             commands.entity(entity).despawn();
         }
-        let root = mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes);
+        let root = mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes, *shirt);
         commands.entity(root).insert(mannequin::breakable());
         preset_scene::spawn_set(&mut commands, &mut meshes, &mut materials);
     }

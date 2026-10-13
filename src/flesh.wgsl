@@ -44,6 +44,7 @@ struct FleshParams {
 const MODE_CAP: f32 = 0.0;
 const MODE_CANVAS: f32 = 1.0;
 const MODE_CLOTH: f32 = 2.0;
+const MODE_FLOOR: f32 = 3.0;
 const FLAG_WET: u32 = 1u;
 const FLAG_FLAY: u32 = 2u;
 const FLAG_DERMIS: u32 = 4u;
@@ -136,12 +137,20 @@ fn fragment(
         pbr_input.material.base_color = vec4<f32>(canvas + (1.0 - peeled) * (authored - flat), pbr_input.material.base_color.a);
     }
     // What lies under intact skin: a bruise's chromophores or a burn's eschar modulate the skin's
-    // own colour (the map is a ratio, linear), and go with the skin when it is peeled.
+    // own colour (the map is a ratio, linear), and go with the skin when it is peeled. On cloth the
+    // same slot holds the holes shot through it: `rgb` the ratio of the ring around each, shown by
+    // twice `a`, and the cloth gone wherever `a` is over one half — the alpha the mask cuts on.
     if (flags & FLAG_DERMIS) != 0u {
         let d = textureSample(dermis_map, flesh_sampler, in.uv);
-        let show = d.a * (1.0 - peeled);
-        let ratio = mix(vec3<f32>(1.0), d.rgb, show);
-        pbr_input.material.base_color = vec4<f32>(pbr_input.material.base_color.rgb * ratio, pbr_input.material.base_color.a);
+        if mode == MODE_CLOTH {
+            let ratio = mix(vec3<f32>(1.0), d.rgb, clamp(d.a * 2.0, 0.0, 1.0));
+            let kept = 1.0 - step(0.5, d.a);
+            pbr_input.material.base_color = vec4<f32>(pbr_input.material.base_color.rgb * ratio, pbr_input.material.base_color.a * kept);
+        } else {
+            let show = d.a * (1.0 - peeled);
+            let ratio = mix(vec3<f32>(1.0), d.rgb, show);
+            pbr_input.material.base_color = vec4<f32>(pbr_input.material.base_color.rgb * ratio, pbr_input.material.base_color.a);
+        }
     }
 #endif
 #ifdef VERTEX_UVS_B
@@ -161,16 +170,20 @@ fn fragment(
     // flat pool in a light's mirror angle clips to white, because a directional light has no size and a
     // flat pool has no ripples; 0.45 keeps the sheen as a pale gloss.
     let pool = smoothstep(0.02, 0.25, amount);
+    // Blood in a weave is held between the yarns rather than stood on them, so a soaked shirt is
+    // darker and a little smoother, never a mirror: 0.7 and a third of the coat, where a film is 0.45.
+    let weave = mode == MODE_CLOTH;
+    let wet_rough = select(0.45, 0.7, weave);
     if amount > 0.0 {
         let depth_mm = amount * flesh.wet.z;
         let base = pbr_input.material.base_color.rgb;
         pbr_input.material.base_color = vec4<f32>(blood_over(base, depth_mm), pbr_input.material.base_color.a);
         // A wet film smooths whatever it lies on; a dried one is matte again.
-        pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, 0.45, wetness * pool);
+        pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, wet_rough, wetness * pool);
     }
 
     // ---- The wet clear coat: a specular layer of liquid above the diffuse colour. --------------
-    let coat = wetness * flesh.wet.x * pool;
+    let coat = wetness * flesh.wet.x * pool * select(1.0, 1.0 / 3.0, weave);
     pbr_input.material.clearcoat = coat;
     pbr_input.material.clearcoat_perceptual_roughness = flesh.wet.y;
 
@@ -184,7 +197,7 @@ fn fragment(
 
     // ---- Subsurface: the wrap the diffusion profile adds past the terminator. -----------------
     let strength = flesh.sss.x;
-    if strength > 0.0 && mode != MODE_CLOTH {
+    if strength > 0.0 && mode < MODE_CLOTH {
         let N = pbr_input.N;
         let P = pbr_input.world_position.xyz;
         // Curvature from screen-space derivatives (Penner 2011): |dN| / |dP| is 1/r in mesh units.
