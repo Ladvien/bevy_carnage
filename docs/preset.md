@@ -306,6 +306,22 @@ dresses only the characters near the player pays for those. The measurement is t
 `hit_cost_by_scene_size`: `cargo test -p bevy_carnage --lib --release -- hit_cost_by_scene_size
 --ignored --nocapture`.
 
+**Where a tick goes, by system (0.5.45).** Measured on an M4 Pro by timing each of the preset's
+systems in its own chain, with twelve hits a tick at one character and three quiet ticks after each,
+parts of 2,208 triangles. On a quiet host before this release, a twelve-hit tick spent 1.3 ms in
+`take_hits` with one character dressed and 12.9 ms with forty; `tick_canvases` was 0.36 ms and
+2.7 ms of *every* tick, hit or not; the other nine systems were under 0.1 ms together. Sampled at
+forty characters, about half of the busy main thread was the canvases' own passes (`WetCanvas::shade`,
+`spread`, `drip`, `advance`) and about a third was drawing stains (`bloodstain::stain::rasterise` and
+the `exp`, `atan2` and trigonometry it called); casting was about one sample in twenty. 0.5.45 casts
+each droplet nearest box first and stops once nothing further can be nearer (239 casts a shot become
+167 at forty characters), and stops `rasterise` computing what cannot change a byte. Interleaved
+against 0.5.44 on the same host, under another user's load: `take_hits` at forty characters went from
+25.0 and 29.7 ms to 16.1 and 15.3, at ten from 7.9 and 8.9 to 6.3 and 7.3, at one from 4.6 to 4.3,
+while `tick_canvases`, which it does not touch, matched within five per cent. **What is left in a
+crowd is the canvases' tick**, which is the rectangle each canvas's blood spans, dried stains included,
+for as long as any of it is wet; a game that dresses only the characters near the player pays for those.
+
 ## What it costs in memory
 
 Every dressed surface owns canvases, and a canvas is a few bytes a texel: the table is what one costs,

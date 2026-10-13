@@ -293,6 +293,27 @@ pub fn rasterise(shape: &StainShape, px: u32, out: &mut [u8]) -> bool {
     let a = 0.5f32 / extent;
     let b = a * aspect;
 
+    // **Three ways to skip work that cannot change a byte**, each exact rather than approximate:
+    //
+    // - A satellite is a pure function of the seed and its spine, so it is placed once per mask;
+    //   per texel it repeated the same two hashes, a cosine and a sine.
+    // - `rim` is `1 + Σ reach·falloff` with every falloff at most one, summed in this order, and
+    //   floating-point addition is monotone, so it never exceeds `reach_bound`. Where `r` is at least
+    //   that, the body covers nothing, whatever the angle: no `atan2`, no `exp`.
+    // - A spine whose falloff argument is below `-17` adds under `0.6 · e⁻¹⁷ ≈ 2.5e-8` to a `rim`
+    //   that is never below one, less than half its ulp, so the sum rounds back to `rim` exactly.
+    let spines = spines.min(SPINE_MAX as usize);
+    let sats = (shape.satellites as usize).min(spines);
+    let mut satellite = [(0.0f32, 0.0f32, 0.0f32); SPINE_MAX as usize];
+    for (k, slot) in satellite.iter_mut().enumerate().take(sats) {
+        let key = shape.seed ^ (k as u32).wrapping_mul(0x85EB_CA6B);
+        let ang = spine_angle[k];
+        let dist = 1.0 + spine_reach[k] + 0.10 + hash_f32(key) * 0.25;
+        let rad = 0.05 + hash_f32(key ^ 0x1656_67B1) * 0.07;
+        *slot = (a * dist * m::cos(ang), b * dist * m::sin(ang), rad);
+    }
+    let reach_bound = spine_reach.iter().take(spines).fold(1.0f32, |rim, &reach| rim + reach);
+
     let half = px as f32 * 0.5;
     for y in 0..n {
         for x in 0..n {
@@ -306,35 +327,35 @@ pub fn rasterise(shape: &StainShape, px: u32, out: &mut [u8]) -> bool {
 
             // Elliptical body. `r` is 1 exactly on the rim.
             let r = m::sqrt((u / a) * (u / a) + (v / b) * (v / b));
-            let theta = m::atan2(v / b.max(1.0e-6), u / a.max(1.0e-6));
-
-            let mut rim = 1.0f32;
-            for k in 0..spines.min(SPINE_MAX as usize) {
-                let mut d = m::abs(theta - spine_angle[k]);
-                if d > PI {
-                    d = TAU - d;
-                }
-                let falloff = m::exp(-(d * d) / (2.0 * spine_width[k] * spine_width[k]));
-                rim += spine_reach[k] * falloff;
-            }
-
-            let mut cover = if r >= rim {
+            let mut cover = if r >= reach_bound {
                 0.0
             } else {
-                let t = (1.0 - r / rim).clamp(0.0, 1.0);
-                // Squared, so the body stays solid and only the last of the radius fades.
-                (t * t * 3.2).min(1.0)
+                let theta = m::atan2(v / b.max(1.0e-6), u / a.max(1.0e-6));
+                let mut rim = 1.0f32;
+                for k in 0..spines {
+                    let mut d = m::abs(theta - spine_angle[k]);
+                    if d > PI {
+                        d = TAU - d;
+                    }
+                    let arg = -(d * d) / (2.0 * spine_width[k] * spine_width[k]);
+                    if arg < -17.0 {
+                        continue;
+                    }
+                    rim += spine_reach[k] * m::exp(arg);
+                }
+                if r >= rim {
+                    0.0
+                } else {
+                    let t = (1.0 - r / rim).clamp(0.0, 1.0);
+                    // Squared, so the body stays solid and only the last of the radius fades.
+                    (t * t * 3.2).min(1.0)
+                }
             };
 
             // Satellites: small discs beyond the rim at the spine angles, because a satellite IS a
             // spine tip that pinched off. Placing them anywhere else would make them look like a
             // second, unrelated spray.
-            for k in 0..(shape.satellites as usize).min(spines.min(SPINE_MAX as usize)) {
-                let key = shape.seed ^ (k as u32).wrapping_mul(0x85EB_CA6B);
-                let ang = spine_angle[k];
-                let dist = 1.0 + spine_reach[k] + 0.10 + hash_f32(key) * 0.25;
-                let rad = 0.05 + hash_f32(key ^ 0x1656_67B1) * 0.07;
-                let (sx, sy) = (a * dist * m::cos(ang), b * dist * m::sin(ang));
+            for &(sx, sy, rad) in satellite.iter().take(sats) {
                 let (ddx, ddy) = (u - sx, v - sy);
                 let dd = m::sqrt(ddx * ddx + ddy * ddy);
                 if dd < rad {
@@ -660,5 +681,97 @@ mod tests {
             row > col * 2,
             "a 15 deg impact must be at least twice as long as it is wide: {row} vs {col}"
         );
+    }
+
+    /// The mask by its definition, every term at every texel: what [`rasterise`] computed before it
+    /// learnt which terms cannot change a byte.
+    fn rasterise_by_definition(shape: &StainShape, px: u32) -> StdVec<u8> {
+        let n = px as usize;
+        let mut out = std::vec![0u8; n * n];
+        let aspect = if shape.major > 0.0 { (shape.minor / shape.major).clamp(0.02, 1.0) } else { 1.0 };
+        let (dx, dy) = (shape.direction[0], shape.direction[1]);
+        let dlen = m::sqrt(dx * dx + dy * dy);
+        let (ux, uy) = if dlen > 0.0 { (dx / dlen, dy / dlen) } else { (1.0, 0.0) };
+        let spines = shape.spines as usize;
+        let mut spine_angle = [0.0f32; SPINE_MAX as usize];
+        let mut spine_reach = [0.0f32; SPINE_MAX as usize];
+        let mut spine_width = [0.0f32; SPINE_MAX as usize];
+        let arc = PI * aspect;
+        for k in 0..spines.min(SPINE_MAX as usize) {
+            let key = shape.seed ^ (k as u32).wrapping_mul(0x9E37_79B9);
+            let centred = if spines > 1 { k as f32 / (spines as f32 - 1.0) - 0.5 } else { 0.0 };
+            let jitter = (hash_f32(key) - 0.5) * (arc / spines.max(1) as f32);
+            spine_angle[k] = centred * 2.0 * arc + jitter;
+            spine_reach[k] = 0.18 + hash_f32(key ^ 0xC2B2_AE35) * 0.42;
+            spine_width[k] = 0.05 + hash_f32(key ^ 0x27D4_EB2F) * 0.10;
+        }
+        let max_spine = (0..spines.min(SPINE_MAX as usize)).map(|k| spine_reach[k]).fold(0.0f32, f32::max);
+        let max_satellite = if shape.satellites > 0 { 1.0 + max_spine + 0.35 + 0.12 } else { 0.0 };
+        let extent = (1.0 + max_spine).max(max_satellite) * 1.04;
+        let a = 0.5f32 / extent;
+        let b = a * aspect;
+        let half = px as f32 * 0.5;
+        for y in 0..n {
+            for x in 0..n {
+                let tx = (x as f32 + 0.5 - half) / half * 0.5;
+                let ty = (y as f32 + 0.5 - half) / half * 0.5;
+                let u = tx * ux + ty * uy;
+                let v = -tx * uy + ty * ux;
+                let r = m::sqrt((u / a) * (u / a) + (v / b) * (v / b));
+                let theta = m::atan2(v / b.max(1.0e-6), u / a.max(1.0e-6));
+                let mut rim = 1.0f32;
+                for k in 0..spines.min(SPINE_MAX as usize) {
+                    let mut d = m::abs(theta - spine_angle[k]);
+                    if d > PI {
+                        d = TAU - d;
+                    }
+                    rim += spine_reach[k] * m::exp(-(d * d) / (2.0 * spine_width[k] * spine_width[k]));
+                }
+                let mut cover = if r >= rim {
+                    0.0
+                } else {
+                    let t = (1.0 - r / rim).clamp(0.0, 1.0);
+                    (t * t * 3.2).min(1.0)
+                };
+                for k in 0..(shape.satellites as usize).min(spines.min(SPINE_MAX as usize)) {
+                    let key = shape.seed ^ (k as u32).wrapping_mul(0x85EB_CA6B);
+                    let dist = 1.0 + spine_reach[k] + 0.10 + hash_f32(key) * 0.25;
+                    let rad = 0.05 + hash_f32(key ^ 0x1656_67B1) * 0.07;
+                    let (sx, sy) = (a * dist * m::cos(spine_angle[k]), b * dist * m::sin(spine_angle[k]));
+                    let dd = m::sqrt((u - sx) * (u - sx) + (v - sy) * (v - sy));
+                    if dd < rad {
+                        let t = (1.0 - dd / rad).clamp(0.0, 1.0);
+                        cover = cover.max((t * t * 3.2).min(1.0));
+                    }
+                }
+                out[y * n + x] = m::round(cover * 255.0).clamp(0.0, 255.0) as u8;
+            }
+        }
+        out
+    }
+
+    /// **Every byte `rasterise` skips computing is a byte it would have written the same.** Three
+    /// thousand shapes — round to a fiftieth as wide as long, from no spines to [`SPINE_MAX`], with
+    /// and without satellites, any direction — at five mask sizes, against the mask by definition. The
+    /// spatter and the wetmap's stamps are made of these bytes, so a skip that moved one would move
+    /// every recorder's digest.
+    #[test]
+    fn rasterise_writes_the_mask_its_definition_does() {
+        for i in 0..3000u32 {
+            let h = |k: u32| hash_f32(i.wrapping_mul(2_654_435_761).wrapping_add(k.wrapping_mul(40_503)));
+            let major = 0.002 + h(1) * 0.03;
+            let shape = StainShape {
+                major,
+                minor: major * (0.02 + h(2) * 0.98),
+                spines: (h(3) * (SPINE_MAX as f32 + 1.0)) as u8,
+                satellites: (h(4) * 6.0) as u8,
+                direction: if i % 7 == 0 { [0.0, 0.0] } else { [h(5) * 2.0 - 1.0, h(6) * 2.0 - 1.0] },
+                seed: i.wrapping_mul(0x9E37_79B9),
+            };
+            let px = [8u32, 17, 32, 48, 64][(i % 5) as usize];
+            let mut fast = std::vec![0u8; (px * px) as usize];
+            assert!(rasterise(&shape, px, &mut fast));
+            assert!(fast == rasterise_by_definition(&shape, px), "shape {i} at {px} px rasterised differently: {shape:?}");
+        }
     }
 }

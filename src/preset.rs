@@ -735,6 +735,21 @@ impl Bounds {
         self.span(from, dir).is_some()
     }
 
+    /// **How far along the ray from `from` along `dir` it enters the box**, in multiples of `dir`,
+    /// `0` from inside: a landing on the mesh inside is never nearer, since the box is padded past its
+    /// triangles. `Some(0.0)` for a ray that cannot be tested, which is cast at as [`reached_by`]
+    /// casts it; `None` when the ray never enters.
+    ///
+    /// [`reached_by`]: Self::reached_by
+    fn entry(&self, from: Vec3, dir: Vec3) -> Option<f32> {
+        let origin = self.to_local.transform_point3(from);
+        let d = self.to_local.transform_vector3(dir);
+        if !(origin.is_finite() && d.is_finite()) {
+            return Some(0.0);
+        }
+        self.span(from, dir).map(|(enters, _)| enters)
+    }
+
     /// **Where the ray from `from` along `dir` is inside the box**, as `(enters, leaves)` in multiples
     /// of `dir`, the entry clamped to the origin. The map into the box's space is affine, so these are
     /// the world ray's own parameters. `None` when it never is, or cannot be tested.
@@ -2109,6 +2124,8 @@ fn throw_spray(
     let walls = drawn.iter().flatten().any(|(s, ..)| s.gore.kind == GoreKind::Wall);
     let mut caught = vec![false; droplets.len()];
     let mut soak: Vec<Vec<(Vec2, StainShape, u32)>> = vec![Vec::new(); drawn.len()];
+    // `(where the ray enters its box, surface)`, reused by every droplet.
+    let mut order: Vec<(f32, usize)> = Vec::with_capacity(drawn.len());
     for (i, d) in droplets.iter().enumerate().take(if walls { WALL_CAST } else { SPRAY_CAST }) {
         let dir = Vec3::from_array(d.dir);
         // Past the ordinary cap a droplet is cast only toward a wall, which is what the wider cap is for.
@@ -2118,26 +2135,11 @@ fn throw_spray(
         if i >= SPRAY_CAST && !toward_wall() {
             continue;
         }
-        let mut best: Option<(usize, Landing)> = None;
-        for (k, entry) in drawn.iter().enumerate() {
-            let Some((s, m, xf, b)) = entry else { continue };
-            // **Broad phase.** A droplet whose ray misses the surface's box cannot land on it; a
-            // surface with no box is cast at, so its refusal is still heard.
-            if b.as_ref().is_some_and(|b| !b.reached_by(at_world, dir)) {
-                continue;
-            }
-            let Some(l) = ray_hit(m, xf, at_world, dir) else { continue };
-            if best.as_ref().is_some_and(|(_, near)| near.t <= l.t) {
-                continue;
-            }
-            let through_hole = s.gore.kind == GoreKind::Cloth
-                && (holes.get(s.entity).is_ok_and(|h| h.is_open_at(l.uv))
-                    || opened.iter().any(|(e, uv, r)| *e == s.entity && uv.distance(l.uv) < *r));
-            if !through_hole {
-                best = Some((k, l));
-            }
-        }
-        let Some((k, l)) = best else { continue };
+        let through_hole = |s: &&Surface, l: &Landing| {
+            s.gore.kind == GoreKind::Cloth
+                && (holes.get(s.entity).is_ok_and(|h| h.is_open_at(l.uv)) || opened.iter().any(|(e, uv, r)| *e == s.entity && uv.distance(l.uv) < *r))
+        };
+        let Some((k, l)) = nearest_landing(&drawn, at_world, dir, &mut order, through_hole) else { continue };
         if let Some(c) = caught.get_mut(i) {
             *c = true;
         }
@@ -2242,8 +2244,53 @@ struct SubjectLookup<'w, 's> {
     holes: Query<'w, 's, &'static ClothHoles>,
 }
 
+/// Something a ray can be cast at — `T` says which — as drawn now, and its box.
+type Castable<'a, T> = (T, &'a Mesh, &'a GlobalTransform, Option<Bounds>);
+
 /// One surface a droplet can be cast at: itself, as drawn now, and its box.
-type Candidate<'a> = (&'a Surface, &'a Mesh, &'a GlobalTransform, Option<Bounds>);
+type Candidate<'a> = Castable<'a, &'a Surface>;
+
+/// **Where the ray from `from` along `dir` lands first among `drawn`**: the index of the surface and
+/// the landing, nearest first and, of two at one distance, the surface listed first. A landing
+/// `lets_through` passes (a droplet through a cloth's hole) is not a landing.
+///
+/// **The broad phase, nearest box first.** A ray that misses a surface's box cannot land on it; a
+/// surface with no box is cast at from the origin, so its refusal is still heard. The rest are cast
+/// in the order the ray enters their boxes, and once a landing is nearer than the next box's entry
+/// nothing further can beat it, since a mesh lies inside its padded box. Before 0.5.45 every box the
+/// ray entered was cast at, which in a crowd is most of them. `order` is scratch, reused.
+fn nearest_landing<T>(
+    drawn: &[Option<Castable<'_, T>>],
+    from: Vec3,
+    dir: Vec3,
+    order: &mut Vec<(f32, usize)>,
+    mut lets_through: impl FnMut(&T, &Landing) -> bool,
+) -> Option<(usize, Landing)> {
+    order.clear();
+    order.extend(drawn.iter().enumerate().filter_map(|(k, entry)| {
+        let (_, _, _, b) = entry.as_ref()?;
+        match b {
+            Some(b) => b.entry(from, dir).map(|t| (t, k)),
+            None => Some((0.0, k)),
+        }
+    }));
+    order.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut best: Option<(usize, Landing)> = None;
+    for &(enters, k) in order.iter() {
+        if best.as_ref().is_some_and(|(_, near)| near.t < enters) {
+            break;
+        }
+        let Some(Some((s, m, xf, _))) = drawn.get(k) else { continue };
+        let Some(l) = ray_hit(m, xf, from, dir) else { continue };
+        if best.as_ref().is_some_and(|(bk, near)| near.t < l.t || (near.t == l.t && *bk < k)) {
+            continue;
+        }
+        if !lets_through(s, &l) {
+            best = Some((k, l));
+        }
+    }
+    best
+}
 
 /// **Apply every hit.** See the module docs for the order.
 fn take_hits(
@@ -4488,6 +4535,72 @@ mod tests {
             turned_away += usize::from(!reached);
         }
         assert!(caught > 100 && turned_away > 1000, "{caught} rays hit and {turned_away} were culled: the test saw too little of one");
+    }
+
+    /// **Casting nearest box first lands every droplet where casting at everything would.** Eight
+    /// overlapping surfaces — spheres and boxes, scaled, turned and moved, one with no box, two that
+    /// let a droplet through half their atlas as a cloth's hole would — and four thousand
+    /// deterministic rays: `nearest_landing` and a cast at every surface in list order agree on the
+    /// surface and the landing for every ray. Some rays land behind a nearer surface's box, so the
+    /// early stop is exercised, and some pass through the hole to what lies behind.
+    #[test]
+    fn nearest_box_first_lands_where_casting_at_everything_would() {
+        let shapes = [
+            Sphere::new(0.4).mesh().uv(16, 8),
+            Cuboid::new(0.6, 0.3, 0.5).mesh().build(),
+            Sphere::new(0.25).mesh().uv(12, 6),
+            Cuboid::new(1.2, 0.1, 0.8).mesh().build(),
+        ];
+        let xfs: Vec<GlobalTransform> = (0..8u32)
+            .map(|k| {
+                let r = |s: u32| crate::hash_f32(k.wrapping_mul(31).wrapping_add(s.wrapping_mul(977)));
+                GlobalTransform::from(
+                    Transform::from_xyz(r(1) * 1.6 - 0.8, r(2) * 1.6 - 0.8, r(3) * 1.6 - 0.8)
+                        .with_rotation(Quat::from_euler(EulerRot::XYZ, r(4) * 3.0, r(5) * 3.0, r(6) * 3.0))
+                        .with_scale(Vec3::new(0.6 + r(7), 0.6 + r(8), 0.6 + r(9))),
+                )
+            })
+            .collect();
+        let drawn: Vec<Option<Castable<'_, usize>>> = xfs
+            .iter()
+            .enumerate()
+            .map(|(k, xf)| {
+                let mesh = &shapes[k % shapes.len()];
+                Some((k, mesh, xf, if k == 5 { None } else { Bounds::of(mesh, xf) }))
+            })
+            .collect();
+        let hole = |k: &usize, l: &Landing| *k % 4 == 3 && l.uv.x < 0.5;
+        let mut order = Vec::new();
+        let (mut behind, mut through) = (0, 0);
+        for i in 0..4000u32 {
+            let r = |k: u32| crate::hash_f32(i.wrapping_mul(7919).wrapping_add(k.wrapping_mul(104_729)));
+            let from = Vec3::new(r(1), r(2), r(3)) * 6.0 - Vec3::splat(3.0);
+            let aimed = Vec3::new(r(7), r(8), r(9)) * 1.6 - Vec3::splat(0.8);
+            let dir = if i % 3 == 0 { Vec3::new(r(4), r(5), r(6)) * 2.0 - Vec3::ONE } else { aimed - from };
+
+            let mut every: Option<(usize, Landing)> = None;
+            let mut hits = 0;
+            for (k, entry) in drawn.iter().enumerate() {
+                let Some((tag, m, xf, _)) = entry else { continue };
+                let Some(l) = ray_hit(m, xf, from, dir) else { continue };
+                hits += 1;
+                if hole(tag, &l) {
+                    through += 1;
+                    continue;
+                }
+                if every.as_ref().is_none_or(|(_, near)| l.t < near.t) {
+                    every = Some((k, l));
+                }
+            }
+            behind += usize::from(hits > 1);
+            let first = nearest_landing(&drawn, from, dir, &mut order, hole);
+            assert_eq!(
+                first.map(|(k, l)| (k, l.t.to_bits(), l.uv.to_array().map(f32::to_bits))),
+                every.map(|(k, l)| (k, l.t.to_bits(), l.uv.to_array().map(f32::to_bits))),
+                "ray {i} from {from:?} along {dir:?}"
+            );
+        }
+        assert!(behind > 500 && through > 50, "{behind} rays crossed two surfaces and {through} went through the hole: too few to test");
     }
 
     /// **A measurement, not a test**: milliseconds one `FixedUpdate` costs when it takes one hit, and
