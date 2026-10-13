@@ -56,7 +56,11 @@
 //! kept (2026-10-12, 0.5.15): `flesh`, and `carnage_web`, which is the preset over a textured body
 //! with a skin's base colour, metallic-roughness and normal textures all bound. Both ran in headless
 //! Chromium on ANGLE over Metal, at WebGL2's sixteen texture units, and drew their wounds with no
-//! shader or pipeline diagnostic. The demo site itself stays WebGPU, like every other module on it.
+//! shader or pipeline diagnostic. Again after the wet sheen was retuned (2026-10-12, 0.5.24, which
+//! carries `AG-096`): `carnage_web`, built from the mirror's tip with `webgl2`, in Chrome on ANGLE over
+//! Metal, took a shot, a slash, an arterial spurt and three shots to bone. It drew the wounds, the pools
+//! and the broken body, and the console held nothing but Bevy's notices that its optional plugins need
+//! storage buffers WebGL2 lacks. The demo site itself stays WebGPU, like every other module on it.
 //!
 //! The uniform block is sixteen-byte aligned, there are no storage buffers, and the extension adds
 //! five textures and one sampler to `StandardMaterial`'s. The shader reads the metallic-roughness
