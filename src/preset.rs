@@ -57,7 +57,7 @@ use bevy::prelude::*;
 use bevy::transform::helper::TransformHelper;
 use crate::cross_section::{CrossSectionPlugin, CrossSectionSettings, Layers, Region};
 use crate::flaymap::{BoneExposed, FlayCanvas, FlaySettings, FlaymapPlugin, Layer};
-use crate::laceration::{Gape, Laceration, LacerationClock, LacerationPlugin, Tension};
+use crate::laceration::{Gape, Laceration, LacerationBed, LacerationClock, LacerationPlugin, Tension};
 use crate::viscera::{Mesentery, Strand, ViscSettings, VisceraPlugin, VisceraSystems, spill, tube_mesh};
 use crate::wetmap::{StainShape, WetCanvas, WetSettings, WetmapPlugin};
 use crate::bloodstain::{BloodSettings, Wound as BloodWound, WoundKind, wound_seed};
@@ -134,6 +134,193 @@ impl Gore {
     pub fn with_gravity_uv(mut self, gravity_uv: Vec2) -> Self {
         self.gravity_uv = if gravity_uv.is_finite() { gravity_uv } else { Vec2::ZERO };
         self
+    }
+}
+
+/// **Dress a whole loaded scene.** Put this on the entity a glTF scene is spawned under and every mesh
+/// that appears below it, now or when the scene finishes streaming in, is given a [`Gore`] by name:
+/// the one system a game would otherwise write to walk the spawned hierarchy.
+///
+/// A mesh is matched on its own `Name` and then on the name of each node above it, nearest first, so
+/// a mesh called `Mesh.001` under a node called `Head` is the head. **A name is read as words**, split
+/// at punctuation, at a capital that follows a lower-case letter and at digits, so `ArmL`, `Arm_L` and
+/// `arm.L` are the words `arm` `l`. A rule matches when its words are a run of the name's, ignoring
+/// case: `"arm"` matches all three and not `Armature`, which a Blender export puts above its meshes,
+/// nor `Armor`. Substring matching dressed a whole character as one limb on exactly that name. **The
+/// last rule that matches wins**, so a rule added to [`GoreScene::humanoid`] overrides its own. What no
+/// rule matches gets the default, or is left alone if there is none. A mesh that already has a
+/// [`Gore`] is never touched, so one surface can be dressed by hand and the rest by name. The wound
+/// beds the preset itself spawns under a slashed skin ([`LacerationBed`]) are never dressed, though
+/// they sit below a node with its name.
+///
+/// ```ignore
+/// commands.spawn((
+///     WorldAssetRoot(assets.load("enemy.glb#Scene0")),
+///     GoreScene::skin(Region::Torso)
+///         .with("head", Gore::skin(Region::Head))
+///         .with("arm", Gore::skin(Region::Limb))
+///         .with("shirt", Gore::cloth())
+///         .without("weapon"),
+/// ));
+/// // Later, at whatever your physics found: the preset finds the mesh.
+/// hits.write(GoreHit::impact(enemy, from, dir, 0.03, 12.0));
+/// ```
+#[derive(Component, Clone, Debug)]
+pub struct GoreScene {
+    rules: Vec<(Vec<String>, Option<Gore>)>,
+    default: Option<Gore>,
+}
+
+/// A name as its lower-case words: split at anything that is not a letter or a digit, at a capital
+/// that follows a lower-case letter or a digit, where a run of capitals ends in a word (`XMLFile` is
+/// `xml` `file`), and between a letter and a digit.
+fn words(name: &str) -> Vec<String> {
+    let chars: Vec<char> = name.chars().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut word = String::new();
+    for (i, &c) in chars.iter().enumerate() {
+        if !c.is_alphanumeric() {
+            if !word.is_empty() {
+                out.push(std::mem::take(&mut word));
+            }
+            continue;
+        }
+        let prev = i.checked_sub(1).and_then(|j| chars.get(j)).copied().filter(|p| p.is_alphanumeric());
+        let next = chars.get(i + 1).copied();
+        let breaks = prev.is_some_and(|p| {
+            (c.is_uppercase() && (p.is_lowercase() || p.is_ascii_digit()))
+                || (c.is_uppercase() && p.is_uppercase() && next.is_some_and(char::is_lowercase))
+                || (c.is_ascii_digit() != p.is_ascii_digit())
+        });
+        if breaks && !word.is_empty() {
+            out.push(std::mem::take(&mut word));
+        }
+        word.extend(c.to_lowercase());
+    }
+    if !word.is_empty() {
+        out.push(word);
+    }
+    out
+}
+
+impl GoreScene {
+    /// Every mesh below is dressed as `default`, unless a rule says otherwise.
+    pub fn new(default: Gore) -> Self {
+        Self { rules: Vec::new(), default: Some(default) }
+    }
+
+    /// Every mesh below is skin of `region`, unless a rule says otherwise.
+    pub fn skin(region: Region) -> Self {
+        Self::new(Gore::skin(region))
+    }
+
+    /// A mesh named for `name`, or below a node that is, is dressed as `gore`. See [`GoreScene`] for
+    /// how a name is matched; a later rule beats an earlier one.
+    pub fn with(mut self, name: &str, gore: Gore) -> Self {
+        self.rules.push((words(name), Some(gore)));
+        self
+    }
+
+    /// A mesh named for `name`, or below a node that is, is left alone: a held weapon, a prop.
+    pub fn without(mut self, name: &str) -> Self {
+        self.rules.push((words(name), None));
+        self
+    }
+
+    /// A mesh no rule matches is left alone instead of dressed as a default.
+    pub fn otherwise_nothing(mut self) -> Self {
+        self.default = None;
+        self
+    }
+
+    /// **A starting point for a humanoid**, from the words character artists use: a head is a head,
+    /// an arm, a leg, a hand or a foot is a limb, clothing is cloth, and a weapon is left alone.
+    /// Anything else, `Body` or `Torso` or a mesh named for nothing, is torso skin. A name heuristic,
+    /// which is all a glTF offers: rules you add after it win, so name what your rig calls things.
+    pub fn humanoid() -> Self {
+        let limbs = ["arm", "forearm", "upperarm", "lowerarm", "hand", "leg", "upperleg", "lowerleg", "foot", "feet", "thigh", "calf", "shin", "finger", "toe"];
+        let heads = ["head", "skull", "face"];
+        let cloth = ["shirt", "jacket", "coat", "pants", "trousers", "dress", "skirt", "vest", "cloak", "cape", "cloth", "clothes", "scarf", "hat"];
+        let weapons = ["weapon", "gun", "rifle", "pistol", "sword", "knife", "axe", "bow"];
+        let mut scene = Self::skin(Region::Torso);
+        for word in limbs {
+            scene = scene.with(word, Gore::skin(Region::Limb));
+        }
+        for word in heads {
+            scene = scene.with(word, Gore::skin(Region::Head));
+        }
+        for word in cloth {
+            scene = scene.with(word, Gore::cloth());
+        }
+        for word in weapons {
+            scene = scene.without(word);
+        }
+        scene
+    }
+
+    /// What a mesh is dressed as, from its own name and the names above it, nearest first.
+    fn gore_for(&self, names: &[Vec<String>]) -> Option<Gore> {
+        for name in names {
+            let matches = |rule: &Vec<String>| !rule.is_empty() && name.windows(rule.len()).any(|run| run == rule.as_slice());
+            if let Some((_, gore)) = self.rules.iter().rev().find(|(rule, _)| matches(rule)) {
+                return *gore;
+            }
+        }
+        self.default
+    }
+}
+
+/// A mesh no [`Gore`] has claimed, and that is not the preset's own wound bed.
+type Unclaimed = (With<Mesh3d>, Without<Gore>, Without<LacerationBed>);
+
+/// **Dress every mesh that appears under a [`GoreScene`].** Event-shaped rather than a poll: a mesh is
+/// looked at when it is added, and a scene is walked when it is added, so a scene that streams in over
+/// many ticks and one whose component was added after its meshes both end up dressed. A
+/// [`LacerationBed`] is a mesh the preset spawned *under* a dressed skin, so it would match that skin's
+/// name and be dressed as a second skin; it is skipped.
+#[allow(clippy::too_many_arguments)]
+fn scene_gore(
+    mut commands: Commands,
+    added_meshes: Query<Entity, (Added<Mesh3d>, Unclaimed)>,
+    added_scenes: Query<Entity, Added<GoreScene>>,
+    children: Query<&Children>,
+    meshes: Query<(), Unclaimed>,
+    scenes: Query<&GoreScene>,
+    parents: Query<&ChildOf>,
+    names: Query<&Name>,
+) {
+    let mut candidates: Vec<Entity> = added_meshes.iter().collect();
+    for root in &added_scenes {
+        candidates.extend(children.iter_descendants(root).filter(|e| meshes.contains(*e)));
+        if meshes.contains(root) {
+            candidates.push(root);
+        }
+    }
+    candidates.sort_unstable();
+    candidates.dedup();
+    for mesh in candidates {
+        // The nearest scene at or above the mesh, and the words of every name between them. The
+        // scene's own name is the game's label for the whole character, not a part of it.
+        let mut chain: Vec<Vec<String>> = Vec::new();
+        let mut at = mesh;
+        loop {
+            let scene = scenes.get(at).ok();
+            if (scene.is_none() || at == mesh)
+                && let Ok(name) = names.get(at)
+            {
+                chain.push(words(name.as_str()));
+            }
+            if let Some(scene) = scene {
+                if let Some(gore) = scene.gore_for(&chain) {
+                    commands.entity(mesh).try_insert(gore);
+                }
+                break;
+            }
+            match parents.get(at) {
+                Ok(parent) => at = parent.parent(),
+                Err(_) => break,
+            }
+        }
     }
 }
 
@@ -1103,6 +1290,7 @@ impl Plugin for GorePlugin {
             .init_resource::<GoreClock>()
             .add_message::<GoreHit>()
             .add_message::<GoreFractured>()
+            .add_systems(FixedUpdate, scene_gore.before(dress).in_set(GoreSystems))
             .configure_sets(FixedUpdate, GoreSystems.before(VisceraSystems))
             .add_systems(
                 FixedUpdate,
@@ -2202,6 +2390,7 @@ mod tests {
             .init_resource::<FractureCache>()
             .init_resource::<WetSettings>()
             .init_resource::<FlaySettings>()
+            .add_systems(FixedUpdate, scene_gore.before(dress))
             .add_systems(FixedUpdate, (advance_clock, dress, take_hits, throw_bodies, bleed, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
         let images = app.world_mut().resource_mut::<Assets<Image>>().reserve_handle();
         app.world_mut().resource_mut::<FleshTables>().sss = images;
@@ -3014,5 +3203,106 @@ mod tests {
         // Which of the two is lower is Bevy's to say; the rule is that it is the one wounded.
         let (lower, higher) = if first < second { (first, second) } else { (second, first) };
         assert_eq!((open_wounds(&app, lower), open_wounds(&app, higher)), (1, 0));
+    }
+
+    /// What a mesh entity was dressed as, by kind, or `None` if it has no `Gore`.
+    fn dressed_as(app: &App, e: Entity) -> Option<GoreKind> {
+        app.world().get::<Gore>(e).map(|g| g.kind)
+    }
+
+    /// **A scene is dressed by name, as it streams in.** The root is spawned first and its meshes arrive
+    /// on a later tick, the way a glTF scene's do. A mesh is matched on its own name and then on the
+    /// nodes above it, nearest first: `Mesh.001` under `Head_Node` is the head. A held weapon is left
+    /// alone, a mesh with its own `Gore` is not touched, and a mesh
+    /// outside the scene is not dressed at all.
+    #[test]
+    fn a_scene_is_dressed_by_name_as_it_streams_in() {
+        let mut app = headless();
+        let cube = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.4, 0.4, 0.4).mesh().build());
+        let scene = GoreScene::skin(Region::Limb)
+            .with("head", Gore::skin(Region::Head))
+            .with("shirt", Gore::cloth())
+            .without("sword");
+        let root = app.world_mut().spawn((Transform::IDENTITY, GlobalTransform::IDENTITY, scene)).id();
+        app.world_mut().run_schedule(FixedUpdate);
+        let world = app.world_mut();
+        let node = world.spawn((Name::new("Head_Node"), ChildOf(root))).id();
+        let mut mesh = |name: &str, parent: Entity| world.spawn((Name::new(name.to_string()), Mesh3d(cube.clone()), ChildOf(parent))).id();
+        let head = mesh("Mesh.001", node);
+        let shirt = mesh("Shirt.002", root);
+        let sword = mesh("Sword", root);
+        let arm = mesh("Arm_L", root);
+        let own = world.spawn((Name::new("Head"), Mesh3d(cube.clone()), Gore::skin(Region::Torso), ChildOf(root))).id();
+        let outside = world.spawn((Name::new("Head"), Mesh3d(cube.clone()))).id();
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(dressed_as(&app, head), Some(GoreKind::Skin(Region::Head)), "a mesh below a node named Head");
+        assert_eq!(dressed_as(&app, shirt), Some(GoreKind::Cloth), "a rule's own name beats the default");
+        assert_eq!(dressed_as(&app, sword), None, "a held weapon was dressed");
+        assert_eq!(dressed_as(&app, arm), Some(GoreKind::Skin(Region::Limb)), "the default");
+        assert_eq!(dressed_as(&app, own), Some(GoreKind::Skin(Region::Torso)), "a mesh with its own Gore was overwritten");
+        assert_eq!(dressed_as(&app, outside), None, "a mesh outside every scene was dressed");
+        assert!(app.world().get::<Dressed>(head).is_some(), "the dressed mesh got its canvases on the same tick");
+    }
+
+    /// **A scene component added after its meshes still dresses them**, and `humanoid` reads the words
+    /// a rig is named with, not the letters. A Blender export puts every mesh below a node called
+    /// `Armature` and a game labels its root with whatever it likes, and neither is a limb: with
+    /// substring matching `arm` and `hand` dressed the body as one. `Elbow` is not a `bow`, and a rule
+    /// added after `humanoid`'s own wins over it.
+    #[test]
+    fn a_scene_added_late_dresses_the_meshes_already_there() {
+        let mut app = headless();
+        let cube = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.4, 0.4, 0.4).mesh().build());
+        let world = app.world_mut();
+        let root = world.spawn((Name::new("Hand_Gun_Hero"), Transform::IDENTITY, GlobalTransform::IDENTITY)).id();
+        let armature = world.spawn((Name::new("Armature"), ChildOf(root))).id();
+        let mut mesh = |name: &str, parent: Entity| world.spawn((Name::new(name.to_string()), Mesh3d(cube.clone()), ChildOf(parent))).id();
+        let (skull, thigh, jacket, gun) = (mesh("Skull", root), mesh("Thigh_R", root), mesh("Jacket", root), mesh("Rifle_Gun", root));
+        let (body, elbow, hat, fore) = (mesh("Body", armature), mesh("Elbow_Pad", root), mesh("Hat", root), mesh("ForeArm.L", root));
+        let all = [skull, thigh, jacket, gun, body, elbow, hat, fore];
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(all.iter().all(|e| dressed_as(&app, *e).is_none()), "dressed with no scene");
+        app.world_mut().entity_mut(root).insert(GoreScene::humanoid().with("hat", Gore::skin(Region::Head)));
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(dressed_as(&app, skull), Some(GoreKind::Skin(Region::Head)));
+        assert_eq!(dressed_as(&app, thigh), Some(GoreKind::Skin(Region::Limb)));
+        assert_eq!(dressed_as(&app, jacket), Some(GoreKind::Cloth));
+        assert_eq!(dressed_as(&app, gun), None, "a gun was dressed");
+        assert_eq!(dressed_as(&app, body), Some(GoreKind::Skin(Region::Torso)), "a body under Armature, in a scene named for a hand and a gun");
+        assert_eq!(dressed_as(&app, elbow), Some(GoreKind::Skin(Region::Torso)), "an elbow pad was taken for a bow");
+        assert_eq!(dressed_as(&app, hat), Some(GoreKind::Skin(Region::Head)), "the added rule lost to the preset's");
+        assert_eq!(dressed_as(&app, fore), Some(GoreKind::Skin(Region::Limb)), "ForeArm.L has the word arm");
+    }
+
+    /// How a name is cut into words, which is what a rule matches against.
+    #[test]
+    fn names_are_cut_into_words_at_case_punctuation_and_digits() {
+        let cut = |s: &str| words(s).join(" ");
+        assert_eq!(cut("ArmL"), "arm l");
+        assert_eq!(cut("Arm_L"), "arm l");
+        assert_eq!(cut("arm.L"), "arm l");
+        assert_eq!(cut("Mesh.001"), "mesh 001");
+        assert_eq!(cut("LegR2"), "leg r 2");
+        assert_eq!(cut("XMLFile"), "xml file");
+        assert_eq!(cut("Armature"), "armature");
+        assert_eq!(cut("__"), "");
+    }
+
+    /// **The wound bed a slash opens is not a second skin.** The preset spawns it as a child of the
+    /// slashed mesh, so it sits below a node named for the limb and would match that limb's rule.
+    /// Measured on the skinned demo before this was excluded: the bed was dressed as `Skin(Limb)` and
+    /// every frame after the first slash differed from the hand-dressed clip.
+    #[test]
+    fn a_wound_bed_below_a_dressed_skin_is_not_dressed_as_a_second_skin() {
+        let mut app = headless();
+        let cube = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.4, 0.4, 0.4).mesh().build());
+        let world = app.world_mut();
+        let root = world.spawn((Transform::IDENTITY, GlobalTransform::IDENTITY, GoreScene::skin(Region::Torso).otherwise_nothing().with("arm", Gore::skin(Region::Limb)))).id();
+        let arm = world.spawn((Name::new("ArmL"), Mesh3d(cube.clone()), ChildOf(root))).id();
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(dressed_as(&app, arm), Some(GoreKind::Skin(Region::Limb)));
+        let bed = app.world_mut().spawn((Mesh3d(cube), LacerationBed, ChildOf(arm))).id();
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(dressed_as(&app, bed), None, "the wound bed was dressed");
     }
 }

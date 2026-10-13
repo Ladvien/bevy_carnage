@@ -23,7 +23,7 @@ use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy_carnage::cross_section::Region;
-use bevy_carnage::preset::{Gore, GoreHit};
+use bevy_carnage::preset::{Gore, GoreHit, GoreScene};
 
 use super::preset_scene;
 
@@ -518,8 +518,9 @@ pub fn gravity_uv(limb: Limb) -> Vec2 {
 /// Every part, in spawn order.
 pub const LIMBS: [Limb; 6] = [Limb::Torso, Limb::Head, Limb::ArmL, Limb::ArmR, Limb::LegL, Limb::LegR];
 
-/// **Spawn the character**: a root, eleven joints under it, and six skinned meshes sharing them, each
-/// a `Gore` surface. Its atlas density is not stated: the preset measures it from the pose.
+/// **Spawn the character**: a root, eleven joints under it, and six skinned meshes sharing them. The
+/// meshes carry no `Gore` of their own: the root carries a [`GoreScene`] that dresses each by its name,
+/// as a game would a loaded glTF. Its atlas density is not stated: the preset measures it from the pose.
 pub fn spawn(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -536,7 +537,10 @@ pub fn spawn(
     let inverse_bindposes = bindposes.add(SkinnedMeshInverseBindposes::from(
         Bone::ALL.iter().map(|b| Mat4::from_translation(-b.bind())).collect::<Vec<_>>(),
     ));
-    let root = commands.spawn((Transform::IDENTITY, Visibility::default(), Mannequin)).id();
+    let scene = LIMBS.iter().fold(GoreScene::new(Gore::floor()).otherwise_nothing(), |scene, limb| {
+        scene.with(&format!("{limb:?}"), Gore::skin(limb.region()).with_gravity_uv(gravity_uv(*limb)))
+    });
+    let root = commands.spawn((Transform::IDENTITY, Visibility::default(), Mannequin, scene)).id();
     let mut entities: Vec<Entity> = Vec::new();
     for bone in Bone::ALL {
         let parent = bone.parent().map(|p| entities[p as usize]).unwrap_or(root);
@@ -552,7 +556,7 @@ pub fn spawn(
             // bounds, so it is never culled by them.
             NoFrustumCulling,
             Transform::IDENTITY,
-            Gore::skin(limb.region()).with_gravity_uv(gravity_uv(limb)),
+            Name::new(format!("{limb:?}")),
             Part(limb),
             ChildOf(root),
         ));

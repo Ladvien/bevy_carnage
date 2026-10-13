@@ -1,5 +1,10 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.24`: dress a loaded character with one component** (`AG-097`). `GoreScene` on the entity a glTF
+# scene is spawned under dresses every mesh that appears below it, by the words in its node's name:
+# `humanoid()` for the common names, `with` / `without` for yours, the last matching rule winning. A
+# name is read as words, so `arm` is not `Armature`. The preset's own wound beds are never dressed.
+#
 # **`0.5.23`: a flat pool no longer clips to white** (`AG-096`). A wet film took a roughness of 0.25
 # and a clear coat of 1.0 at its first texel of blood, and a flat pool in a directional light's mirror
 # angle clipped to a white sticker. A film now smooths what it lies on in proportion to its depth, the
@@ -129,7 +134,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.23"
+version = "0.5.24"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
