@@ -642,7 +642,8 @@ mkdir -p frames-lac && for n in $(seq 300 419); do
 WIDTH=480 LEGEND=none tools/gif.sh frames-lac docs/laceration.gif ""
 
 # `spectral.gif` and `wetmap.gif` are `capture_family`'s two clips: frames 0-149, every second one,
-# and frames 150-389, renumbered from frame0000.
+# and frames 150-389, renumbered from frame0000. The sphere's canvas is drawn at
+# `WetCanvas::new_detailed`'s detail 4 since 0.5.39; `--detail 1` records it texel for texel.
 cargo run --release --example capture_family -- --out frames-family
 mkdir -p frames-spectral frames-wet && for n in $(seq 0 149); do
   cp "frames-family/frame$(printf %04d "$n").png" "frames-spectral/frame$(printf %04d "$n").png"; done

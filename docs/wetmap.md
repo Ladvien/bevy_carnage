@@ -91,9 +91,10 @@ fn on_hit(
 | Component | `WetCanvas` | One actor's canvas. Holds the buffer and the two image handles. |
 | Resource | `WetSettings` | Nine dials: `drip_rate`, `spread_rate`, `dry_ticks`, `absorbency`, `max_canvas_updates_per_tick`, `humidity`, `film_depth_mm`, `so2`, `edge_samples`. |
 | Constant | `UV_SPAN_M` | How much world one UV unit is taken to be — see below. |
+| Constant | `MAX_DETAIL`, `DETAIL_EDGE` | The finest `new_detailed` draws (4), and where it draws a stain's edge (4 % of full coverage). |
 | Re-export | `StainShape`, `bevy_carnage::bloodstain` | The silhouette `paint_*` takes, and the blood model it comes from. |
 
-`WetCanvas`: `new`, `albedo`, `roughness`, `paint_uv`, `paint_uv_with`, `paint_world`, `paint_world_with`, `tick`, `flush`, `digest`, `wetted_area`, plus the read-only `size`, `amount_at`, `age_at`, `is_dirty`, `dirty_since`, `is_still`.
+`WetCanvas`: `new`, `new_detailed`, `albedo`, `roughness`, `paint_uv`, `paint_uv_with`, `paint_world`, `paint_world_with`, `tick`, `flush`, `digest`, `wetted_area`, plus the read-only `size`, `detail`, `amount_at`, `age_at`, `is_dirty`, `dirty_since`, `is_still`, `heap_bytes`, `image_bytes`.
 
 ## The metallic-roughness image carries data, not just gloss
 
@@ -113,6 +114,19 @@ So `R · film_depth_mm / 255` is the millimetres of blood on a texel and `A` is 
 `bloodstain::stain::rasterise` answers *how covered is this texel* once per texel, at the texel's own centre, so at the shipped 128-texel canvas a stain's rim is a staircase. `WetSettings::edge_samples = n` rasterises the mask at `n` times the resolution and box-filters each `n × n` block down, so a texel the silhouette only clips receives the share of it that is actually inside.
 
 It ships at **`1`** and that is not a fallback: the box filter over one tap is the identity — divisor one, rounding term zero — so the default writes the bytes the crate has always written and **every frozen digest is untouched by the dial existing**. `4` is what the examples use; the scratch mask costs `(major · size · n)²` bytes, so past 4 it buys nothing a player can see for four times the rasterisation. Reach it through `paint_uv_with` / `paint_world_with`, which take the settings the way `tick` does — `paint_uv` and `paint_world` are the same stamp at one sample.
+
+## Smooth edges on a plain `StandardMaterial`: `new_detailed`
+
+A canvas's images are its texels, and a sampler magnifies them bilinearly, so close up a stain's rim is the texels' staircase drawn soft. `WetCanvas::new_detailed(images, size, detail, base_srgb, base_roughness)` keeps the canvas — the same buffer, the same passes and the same `digest` as `new` at `size` — and draws its two images `detail` times finer, up to `MAX_DETAIL` (4). On `flush`, every 32-texel tile whose texels changed is redrawn: the coverage is read as a cubic B-spline (Sigg & Hadwiger, *GPU Gems 2*, ch. 20), the same reading the `flesh` feature's shader makes of the map, and the blood is drawn where that crosses `DETAIL_EDGE`, 4 % of full coverage, anti-aliased over one pixel. Inside the edge the colour is the film's own, weighted by how much blood each texel holds, so a pool keeps its colour up to its rim instead of fading into the surface. R and A of the metallic-roughness image are the smoothed coverage and wetness under that edge. `wetmap.gif` is drawn this way, at detail 4.
+
+What it cannot do, and what it costs:
+
+- **A long, shallow staircase stays a gentle wave.** A straight edge at a slant, drawn in whole texels, comes out with its corners gone and its steps softened, not straight: the spline is four texels wide and does not know the line was meant to be straight. `a_detailed_image_draws_an_edge_crisp_and_red_to_its_rim` measures a slope of 0.3.
+- **The edge sits where the faintest blood is.** At 4 % of full coverage a stain is drawn out to the edge of its texels, so its size matches the canvas's; a threshold of a quarter was tried and lost most of the clip's stains, whose coverage is mostly below that. The other side of it: a run one texel wide at full coverage is drawn close to three texels wide, by the spline's arithmetic.
+- **`detail²` the bytes.** Both images and their CPU copies grow by it, so at 128 a detail of 2 uploads what a 256 canvas does and 4 what a 512 does — see the budget below.
+- **A redraw per flush.** Measured on an x86_64 Linux host in release, at 128 and detail 4: 1.7 ms to redraw six drying stains of 10×10 texels, and 5.9 ms when a third of the canvas changed at once; at detail 2, 0.5 ms and 1.7 ms. The plugin's budget counts canvases, not milliseconds, so a game with many detailed canvases should lower `max_canvas_updates_per_tick`.
+
+A material that reads the canvas in its own shader, as the `flesh` feature's does, gains nothing from it and should keep `new`.
 
 ## Two things the caller owns, and one convention
 

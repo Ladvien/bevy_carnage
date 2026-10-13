@@ -1,5 +1,11 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.39`: a wetmap's stains have smooth edges on a plain `StandardMaterial`** (`AG-112`). A canvas's
+# images were its texels, so close up every stain was a soft staircase. `WetCanvas::new_detailed` keeps
+# the canvas and its digest and draws the two images up to `MAX_DETAIL` (4) times finer, redrawing the
+# tiles that changed on each flush: the coverage read as a cubic B-spline, the edge drawn crisp at
+# `DETAIL_EDGE`, the film's colour up to the rim. `docs/wetmap.gif` is drawn that way.
+#
 # **`0.5.38`: a cut face is wet with its own blood** (`AG-111`). A broken body's pieces showed their cut
 # faces bare, and a fat band read as cheese. The flesh material in `FleshMode::Cap` now lays a film of
 # blood over the tissue, full where the muscle is and a quarter of it over the fat at the rim, with its
@@ -206,7 +212,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.38"
+version = "0.5.39"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

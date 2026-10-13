@@ -12,6 +12,10 @@
 //! | 0–149 | `bloodstain` | sixteen films, eight thicknesses by two oxygen saturations, ageing to dry |
 //! | 150–389 | `wetmap` | six shots on a pale sphere, running under gravity, spreading, drying |
 //!
+//! The sphere's canvas is drawn at `WetCanvas::new_detailed`'s detail 4, so its stains have smooth
+//! edges on a plain `StandardMaterial`; `--detail 1` draws the same canvas texel for texel, as
+//! `WetCanvas::new` does. The digest is the canvas's, so it is the same at either.
+//!
 //! The first clip is the spectral model with nothing else in the frame: each swatch's colour is
 //! `bevy_carnage::bloodstain::spectral::srgb` for that film, and the ageing is `dry::appearance_of`, so a
 //! thin arterial smear reads pink-scarlet and a thick venous pool near-black before either dries
@@ -39,6 +43,8 @@ const SWATCH_AREA_M2: f32 = 0.002;
 const AGE_PER_FRAME: u32 = 12;
 /// Wetmap canvas edge, texels — the crate's shipped default.
 const CANVAS: u32 = 128;
+/// Image pixels per canvas texel along each edge — the most `WetCanvas::new_detailed` draws.
+const DETAIL: u32 = 4;
 
 #[derive(Component)]
 struct Swatch(spectral::Film);
@@ -131,7 +137,8 @@ fn main() {
     // ---- Phase 2: wetmap. A pale sphere, shot six times, running and drying. ----------------
     {
         let world = rec.world();
-        let canvas = WetCanvas::new(&mut world.resource_mut::<Assets<Image>>(), CANVAS, [0.80, 0.68, 0.62], 0.55);
+        let detail = common::arg("--detail").and_then(|d| d.parse().ok()).unwrap_or(DETAIL);
+        let canvas = WetCanvas::new_detailed(&mut world.resource_mut::<Assets<Image>>(), CANVAS, detail, [0.80, 0.68, 0.62], 0.55);
         let material = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
             base_color_texture: Some(canvas.albedo()),
             metallic_roughness_texture: Some(canvas.roughness()),

@@ -119,6 +119,22 @@ pub struct WetCanvas {
     /// grown rectangle every pass would read zeros and write the zeros already there. Re-measured
     /// after every tick, so it shrinks as the substrate takes the blood.
     live: Option<Live>,
+    /// **Image pixels per texel along each edge**, `1..=MAX_DETAIL`. See
+    /// [`new_detailed`](Self::new_detailed).
+    detail: u32,
+    /// The two images' bytes at `detail > 1`: the shaded texels redrawn `detail` times finer through
+    /// a cubic B-spline, with the stain's edge drawn crisp. Empty at `detail == 1`, where the images
+    /// are `albedo_px` and `rough_px` themselves.
+    detail_albedo: Vec<u8>,
+    detail_rough: Vec<u8>,
+    /// One flag per [`STALE_TILE`]-square tile, row-major: its texels' shaded bytes changed since
+    /// the detail images were last redrawn. Empty at `detail == 1`, where there is nothing to redraw.
+    stale: Vec<bool>,
+    /// Scratch for the redraw: each texel's six coverage-weighted values, the pass along the rows'
+    /// sums, and the smoothed coverage per pixel.
+    texels: Vec<f32>,
+    rows: Vec<[f32; 6]>,
+    cover: Vec<f32>,
 }
 
 impl WetCanvas {
@@ -143,11 +159,46 @@ impl WetCanvas {
         base_srgb: [f32; 3],
         base_roughness: f32,
     ) -> Self {
+        Self::new_detailed(images, size, 1, base_srgb, base_roughness)
+    }
+
+    /// **[`new`](Self::new), with images `detail` times finer than the canvas**, so a stain's edge
+    /// is a smooth line on a plain `StandardMaterial` instead of the texels' staircase.
+    ///
+    /// The canvas, its passes and its [`digest`](Self::digest) are exactly [`new`](Self::new)'s at
+    /// `size`: only the two images change. On [`flush`](Self::flush) the texels that changed are
+    /// redrawn at `detail × detail` pixels each, read as a cubic B-spline (Sigg & Hadwiger, *GPU
+    /// Gems 2*, ch. 20) — the same reading `flesh.wgsl` makes of the map in its shader, done here
+    /// once per upload instead — and the blood's edge is drawn where the smoothed coverage crosses
+    /// [`DETAIL_EDGE`], anti-aliased over one pixel. Inside the edge the colour is the film's own,
+    /// weighted by how much blood each texel holds, so a stain keeps its colour up to its rim rather
+    /// than fading into the surface it lies on. R and A of the roughness image are the smoothed
+    /// coverage and wetness under that edge.
+    ///
+    /// **The cost is `detail²`.** Both images and their CPU copies grow by it, so at 128 a `detail`
+    /// of 2 uploads what a 256 canvas would and 4 what a 512 one would, and a flush redraws the
+    /// changed texels' pixels, about 50 float multiply-adds each. `1` is [`new`](Self::new), where the
+    /// images are the texels themselves; it is clamped to `1..=`[`MAX_DETAIL`], warning when it is
+    /// outside. A material that reads the canvas in its own shader, as the `flesh` feature's does,
+    /// gains nothing from it.
+    pub fn new_detailed(
+        images: &mut Assets<Image>,
+        size: u32,
+        detail: u32,
+        base_srgb: [f32; 3],
+        base_roughness: f32,
+    ) -> Self {
         let size = if size == 0 {
             warn!("wetmap: a canvas of size 0 has no texels; using 1");
             1
         } else {
             size
+        };
+        let detail = if (1..=MAX_DETAIL).contains(&detail) {
+            detail
+        } else {
+            warn!("wetmap: an image detail of {detail} is outside 1..={MAX_DETAIL}; clamping");
+            detail.clamp(1, MAX_DETAIL)
         };
         let base_rgba = [enc(base_srgb[0]), enc(base_srgb[1]), enc(base_srgb[2]), 255];
         let base_rough = enc(base_roughness);
@@ -157,7 +208,8 @@ impl WetCanvas {
         // depth) and A is wetness. An untouched texel has no blood on it, so both are 0.
         let base_rough_rgba = [0, base_rough, 0, 0];
 
-        let extent = Extent3d { width: size, height: size, depth_or_array_layers: 1 };
+        let edge = size.saturating_mul(detail);
+        let extent = Extent3d { width: edge, height: edge, depth_or_array_layers: 1 };
         // `MAIN_WORLD | RENDER_WORLD` because `flush` rewrites the pixels every time they change: with
         // `RENDER_WORLD` alone the main-world copy is dropped after the first upload and every
         // subsequent write would land in nothing.
@@ -182,6 +234,7 @@ impl WetCanvas {
         );
 
         let texels = (size as usize) * (size as usize);
+        let pixels = if detail > 1 { (edge as usize) * (edge as usize) } else { 0 };
         Self {
             size,
             wet: vec![(0, 0); texels],
@@ -200,6 +253,13 @@ impl WetCanvas {
             film_key: None,
             quiet: None,
             live: None,
+            detail,
+            detail_albedo: base_rgba.iter().copied().cycle().take(pixels * 4).collect(),
+            detail_rough: base_rough_rgba.iter().copied().cycle().take(pixels * 4).collect(),
+            stale: if detail > 1 { vec![false; (size.div_ceil(STALE_TILE as u32) as usize).pow(2)] } else { Vec::new() },
+            texels: Vec::new(),
+            rows: Vec::new(),
+            cover: Vec::new(),
         }
     }
 
@@ -244,10 +304,18 @@ impl WetCanvas {
         self.size
     }
 
+    /// Image pixels per texel along each edge: `1` from [`new`](Self::new), and what
+    /// [`new_detailed`](Self::new_detailed) was given, clamped. The images are `size() · detail()`
+    /// pixels square.
+    pub fn detail(&self) -> u32 {
+        self.detail
+    }
+
     /// **The bytes this canvas holds in the main world**, apart from its two images: the `(amount,
-    /// age)` buffer and its snapshot, the stamp scratch, and the CPU copy of each image. At 128 it is
-    /// 16 bytes a texel, 256 KiB. Nothing here is read back from `Assets<Image>`; see
-    /// [`image_bytes`](Self::image_bytes) for what the images add.
+    /// age)` buffer and its snapshot, the stamp scratch, and the CPU copy of each image (at a
+    /// [`detail`](Self::detail) above 1, both the texels' and the finer images', and the redraw's
+    /// scratch). At 128 and detail 1 it is 16 bytes a texel, 256 KiB. Nothing here is read back from
+    /// `Assets<Image>`; see [`image_bytes`](Self::image_bytes) for what the images add.
     pub fn heap_bytes(&self) -> usize {
         let cell = std::mem::size_of::<(u8, u16)>();
         (self.wet.capacity() + self.prev.capacity()) * cell
@@ -255,13 +323,25 @@ impl WetCanvas {
             + self.fine.capacity()
             + self.albedo_px.capacity()
             + self.rough_px.capacity()
+            + self.detail_albedo.capacity()
+            + self.detail_rough.capacity()
+            + self.texels.capacity() * std::mem::size_of::<f32>()
+            + self.rows.capacity() * std::mem::size_of::<[f32; 6]>()
+            + self.cover.capacity() * std::mem::size_of::<f32>()
     }
 
     /// **The size of the two images this canvas uploads** (albedo and metallic-roughness), once. The
     /// main world keeps a copy of each and the GPU holds another, so the memory they cost is twice this,
-    /// and `Assets<Image>` is where the first copy is. Eight bytes a texel: 128 KiB at 128.
+    /// and `Assets<Image>` is where the first copy is. Eight bytes a pixel: 128 KiB at 128 and detail
+    /// 1, `detail²` times that above it.
     pub fn image_bytes(&self) -> usize {
-        self.albedo_px.len() + self.rough_px.len()
+        let (albedo, rough) = self.images_px();
+        albedo.len() + rough.len()
+    }
+
+    /// The bytes the two images hold: the texels' own at detail 1, the redrawn ones above it.
+    fn images_px(&self) -> (&[u8], &[u8]) {
+        if self.detail > 1 { (&self.detail_albedo, &self.detail_rough) } else { (&self.albedo_px, &self.rough_px) }
     }
 
     /// Normalised coverage at a texel, `0` outside the canvas — a texel that does not exist holds no
@@ -646,12 +726,181 @@ impl WetCanvas {
         if self.dirty_since.is_none() {
             return false;
         }
-        let ok = upload(images, &self.albedo_handle, &self.albedo_px)
-            && upload(images, &self.rough_handle, &self.rough_px);
+        self.redraw();
+        let (albedo, rough) = self.images_px();
+        let ok = upload(images, &self.albedo_handle, albedo) && upload(images, &self.rough_handle, rough);
         if ok {
             self.dirty_since = None;
         }
         ok
+    }
+
+    /// **Redraw the detail images over the tiles whose texels changed, and forget them.** Nothing at
+    /// detail 1, where the images are the texels and no tile is ever marked. See
+    /// [`new_detailed`](Self::new_detailed).
+    ///
+    /// A run of marked tiles along a tile row is redrawn as one rectangle, so a stain costs what its
+    /// tiles cover rather than what the box around every stain on the canvas would.
+    fn redraw(&mut self) {
+        if self.detail <= 1 {
+            return;
+        }
+        let n = self.size as i64;
+        let tiles = (n + STALE_TILE - 1) / STALE_TILE;
+        for ty in 0..tiles {
+            let mut tx = 0;
+            while tx < tiles {
+                let marked = |s: &mut Vec<bool>, tx: i64| s.get_mut((ty * tiles + tx) as usize).map(std::mem::take).unwrap_or(false);
+                if !marked(&mut self.stale, tx) {
+                    tx += 1;
+                    continue;
+                }
+                let start = tx;
+                tx += 1;
+                while tx < tiles && marked(&mut self.stale, tx) {
+                    tx += 1;
+                }
+                let last = n - 1;
+                self.redraw_rect(Live {
+                    x0: start * STALE_TILE,
+                    y0: ty * STALE_TILE,
+                    x1: (tx * STALE_TILE - 1).min(last),
+                    y1: ((ty + 1) * STALE_TILE - 1).min(last),
+                });
+            }
+        }
+    }
+
+    /// **Redraw the detail images' pixels that read any texel of `stale`.**
+    ///
+    /// Separable, in three passes over scratch: each texel's six coverage-weighted values once; along
+    /// each texel row, every pixel column's four-texel sum; down the columns, every pixel's sum of
+    /// four of those, coverage first — over the pixels to write and one more on every side, because
+    /// the edge is anti-aliased by the coverage's change from one pixel to the next — and the other
+    /// five only where there is blood to draw. The scratch rectangles reach two texels past the
+    /// canvas on every side where they meet it, filled with the edge texel's values the way a
+    /// `ClampToEdge` sampler would, so no tap is ever out of range.
+    fn redraw_rect(&mut self, stale: Live) {
+        let n = self.size as i64;
+        let k = self.detail as i64;
+        let nf = n * k;
+        // A pixel reads the two texels on either side of it, so a changed texel moves pixels up to
+        // two texels away.
+        let r = stale.grown(2, n);
+        let (px0, py0, px1, py1) = (r.x0 * k, r.y0 * k, r.x1 * k + k - 1, r.y1 * k + k - 1);
+        let (gx0, gy0, gx1, gy1) = ((px0 - 1).max(0), (py0 - 1).max(0), (px1 + 1).min(nf - 1), (py1 + 1).min(nf - 1));
+        let w = (gx1 - gx0 + 1) as usize;
+        // The texels those pixels read, unclamped: `tx0..=tx1` by `ty0..=ty1`.
+        let (tx0, ty0, tx1, ty1) = (gx0 / k - 2, gy0 / k - 2, gx1 / k + 2, gy1 / k + 2);
+        let tw = (tx1 - tx0 + 1) as usize;
+
+        // Each of the `k` positions a pixel can have in its texel: the first of its four texels,
+        // relative to its own, and their weights.
+        let mut taps = [(0i64, [0.0f32; 4]); MAX_DETAIL as usize];
+        for (j, tap) in taps.iter_mut().enumerate().take(k as usize) {
+            let u = (j as f32 + 0.5) / k as f32 - 0.5;
+            let i0 = u.floor();
+            *tap = (i0 as i64 - 1, bspline(u - i0));
+        }
+        let tap = |p: i64| taps.get(p.rem_euclid(k) as usize).copied().unwrap_or((0, [0.0; 4]));
+
+        // Each texel's coverage, and its colour, roughness and wetness weighted by its coverage.
+        self.texels.clear();
+        let pre = &mut self.texels;
+        for ty in ty0..=ty1 {
+            for tx in tx0..=tx1 {
+                let i = (ty.clamp(0, n - 1) * n + tx.clamp(0, n - 1)) as usize;
+                let amount = self.wet.get(i).map_or(0, |c| c.0);
+                let (Some(c), Some(g)) = (self.albedo_px.get(i * 4..i * 4 + 4), self.rough_px.get(i * 4..i * 4 + 4)) else {
+                    pre.extend([0.0; 6]);
+                    continue;
+                };
+                let a = amount as f32;
+                pre.extend([a, a * c[0] as f32, a * c[1] as f32, a * c[2] as f32, a * g[1] as f32, a * g[3] as f32]);
+            }
+        }
+        // Along the rows: per texel row and pixel column, the four texels' weighted sums.
+        self.rows.clear();
+        for ty in 0..(ty1 - ty0 + 1) as usize {
+            let row = self.texels.get(ty * tw * 6..(ty + 1) * tw * 6).unwrap_or(&[]);
+            for x in gx0..=gx1 {
+                let (o, wt) = tap(x);
+                let first = ((x / k + o - tx0) * 6) as usize;
+                let mut acc = [0.0f32; 6];
+                if let Some(texels) = row.get(first..first + 24) {
+                    for (texel, wt) in texels.as_chunks::<6>().0.iter().zip(wt) {
+                        for (slot, v) in acc.iter_mut().zip(texel) {
+                            *slot += wt * v;
+                        }
+                    }
+                }
+                self.rows.push(acc);
+            }
+        }
+        // The four rows of sums a pixel row reads, and their weights.
+        let rows = &self.rows;
+        let four = |y: i64| -> ([&[[f32; 6]]; 4], [f32; 4]) {
+            let (o, wt) = tap(y);
+            let row = |t: i64| {
+                let first = ((y / k + o + t - ty0) as usize) * w;
+                rows.get(first..first + w).unwrap_or(&[])
+            };
+            ([row(0), row(1), row(2), row(3)], wt)
+        };
+        // Down the columns: the coverage at every pixel the edge's gradient reads.
+        self.cover.clear();
+        for y in gy0..=gy1 {
+            let ([a, b, c, d], wt) = four(y);
+            for (((a, b), c), d) in a.iter().zip(b).zip(c).zip(d) {
+                self.cover.push(wt[0] * a[0] + wt[1] * b[0] + wt[2] * c[0] + wt[3] * d[0]);
+            }
+        }
+
+        let cover = &self.cover;
+        let at = |x: i64, y: i64| cover.get(((y.clamp(gy0, gy1) - gy0) as usize) * w + (x.clamp(gx0, gx1) - gx0) as usize).copied().unwrap_or(0.0);
+        let edge = DETAIL_EDGE * 255.0;
+        let base = self.base_rgba;
+        let base_rough = [0, self.base_rough, 0, 0];
+        for y in py0..=py1 {
+            let ([ra, rb, rc, rd], wt) = four(y);
+            for x in px0..=px1 {
+                let c = at(x, y);
+                let m = if c > 0.0 {
+                    // Anti-aliased over one pixel: how far the coverage is past the edge, in units
+                    // of how much it changes from one pixel to the next.
+                    let (dx, dy) = (0.5 * (at(x + 1, y) - at(x - 1, y)), 0.5 * (at(x, y + 1) - at(x, y - 1)));
+                    ((c - edge) / (dx * dx + dy * dy).sqrt().max(1.0e-3) + 0.5).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let (albedo, rough) = if m > 0.0 {
+                    let col = (x - gx0) as usize;
+                    let mut s = [0.0f32; 6];
+                    for (row, wt) in [ra, rb, rc, rd].iter().zip(wt) {
+                        if let Some(v) = row.get(col) {
+                            for (slot, v) in s.iter_mut().zip(v) {
+                                *slot += wt * v;
+                            }
+                        }
+                    }
+                    let mean = |v: f32| v / s[0].max(1.0e-6);
+                    let mix = |from: u8, to: f32| byte(from as f32 + (to - from as f32) * m);
+                    (
+                        [mix(base[0], mean(s[1])), mix(base[1], mean(s[2])), mix(base[2], mean(s[3])), base[3]],
+                        [byte(c * m), mix(self.base_rough, mean(s[4])), 0, byte(mean(s[5]) * m)],
+                    )
+                } else {
+                    (base, base_rough)
+                };
+                let i = ((y * nf + x) * 4) as usize;
+                if let Some(px) = self.detail_albedo.get_mut(i..i + 4) {
+                    px.copy_from_slice(&albedo);
+                }
+                if let Some(px) = self.detail_rough.get_mut(i..i + 4) {
+                    px.copy_from_slice(&rough);
+                }
+            }
+        }
     }
 
     /// **FNV-1a over the wet buffer** — `amount` then `age` little-endian, row-major.
@@ -876,26 +1125,35 @@ impl WetCanvas {
                     (memo_srgb, over(base_rough, memo_rough, amount))
                 };
 
+                let mut touched = false;
                 if let Some([r, g, b, _]) = self.albedo_px.get_mut(i * 4..i * 4 + 4)
                     && (*r != rgb[0] || *g != rgb[1] || *b != rgb[2])
                 {
                     *r = rgb[0];
                     *g = rgb[1];
                     *b = rgb[2];
-                    changed = true;
+                    touched = true;
                 }
                 // **All four channels of the metallic-roughness image**, per
                 // [`roughness`](Self::roughness): R the coverage byte, G the roughness, B the
                 // metallic zero, A the wetness. R and A are the buffer's own two numbers written
                 // where a shader can read them, so nothing has to be inferred from the albedo — and
-                // they are still *output*: no pass in this file reads a pixel back.
+                // they are still *output*: no pass that moves blood reads a pixel back, and the
+                // detail redraw reads these bytes, never the images.
                 let want = [amount, rough_byte, 0, wetness(amount, age, span)];
                 if let Some(r_px) = self.rough_px.get_mut(i * 4..i * 4 + 4) {
                     for (slot, want) in r_px.iter_mut().zip(want) {
                         if *slot != want {
                             *slot = want;
-                            changed = true;
+                            touched = true;
                         }
+                    }
+                }
+                if touched {
+                    changed = true;
+                    let tiles = (n + STALE_TILE - 1) / STALE_TILE;
+                    if let Some(tile) = self.stale.get_mut(((y / STALE_TILE) * tiles + x / STALE_TILE) as usize) {
+                        *tile = true;
                     }
                 }
             }
@@ -944,6 +1202,37 @@ impl Live {
 /// one was tried first and lost the second step's share: `the_live_rectangle_changes_nothing_but_the_cost`
 /// caught it on a spined stain at tick 0.
 const TICK_REACH: i64 = 2;
+
+/// **The tile a detailed canvas tracks changes in, texels square: 32.** A redraw reads two texels
+/// past whatever it redraws, so a smaller tile spends more of its work on that apron (at 32 it is an
+/// eighth more along each edge) and a larger one redraws more untouched surface around a stain.
+/// This crate's own number.
+const STALE_TILE: i64 = 32;
+
+/// **The finest a canvas's images may be drawn: four pixels per texel along each edge**, sixteen to
+/// a texel. At 128 that is the bytes of a 512 canvas, which [`WetCanvas::new`] already calls a
+/// bandwidth budget rather than a texture; past it the redraw costs more than the look gains.
+pub const MAX_DETAIL: u32 = 4;
+
+/// **Where a detailed image draws a stain's edge**: at `0.04` of full coverage in the smoothed map.
+/// The same fraction `flesh.wgsl` draws its rim at (`WET_EDGE`), so a canvas looks the same through
+/// either. This crate's own number: low enough to keep a thin smear, high enough that the spline's
+/// faint tail past a stain is not drawn as a halo.
+pub const DETAIL_EDGE: f32 = 0.04;
+
+/// The cubic B-spline weights of the four texels around a sample at fraction `f` between the middle
+/// two. They sum to one and none is negative, so a smoothed coverage never overshoots.
+fn bspline(f: f32) -> [f32; 4] {
+    let g = 1.0 - f;
+    let (f2, f3) = (f * f, f * f * f);
+    [g * g * g / 6.0, (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0, (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0, f3 / 6.0]
+}
+
+/// A `0..=255` value as a byte, rounded.
+#[inline]
+fn byte(v: f32) -> u8 {
+    if v.is_finite() { v.round().clamp(0.0, 255.0) as u8 } else { 0 }
+}
 
 /// **The share of full coverage blood wicked into a weave holds at the centre of its front**: `0.7`.
 /// Cloth holds blood in its yarns rather than as a film on top, so a soak is never a pool. This
@@ -1309,6 +1598,95 @@ mod tests {
             full.shade(all, t, s);
             assert_eq!(fast.wet, full.wet, "size {size}, tick {t}: the buffers parted");
             assert_eq!((&fast.albedo_px, &fast.rough_px), (&full.albedo_px, &full.rough_px), "size {size}, tick {t}: the images parted");
+        }
+    }
+
+    /// **A detailed image draws a pool's edge crisp, with its corners softened, and in the pool's
+    /// colour up to it.** A pool of full texels whose edge slants at 0.3 across a 32 canvas, drawn at
+    /// detail 1 and at detail 4 and read back from the uploaded images the way a sampler reads them,
+    /// bilinearly, down each column. At detail 1 the colour takes most of a texel to go from the
+    /// pool's to the surface's, and the line where it is half way is the texels' staircase, turning
+    /// a corner at every step. At detail 4 it must take under a third of that, and the line must bend
+    /// less from one half-texel to the next. (It does not come out straight: the canvas holds a
+    /// staircase, and a spline four texels wide softens a step three long rather than erasing it.)
+    /// And the pixels one in from the detailed edge must be the pool's colour, not a paler mix with
+    /// the surface.
+    #[test]
+    fn a_detailed_image_draws_an_edge_crisp_and_red_to_its_rim() {
+        const N: i64 = 32;
+        let s = WetSettings::default();
+        let mut images = Assets::<Image>::default();
+        // The green channel of the albedo a canvas at detail `k` uploads, and that image's edge in pixels.
+        let mut draw = |k: u32| -> (Vec<i32>, i64) {
+            let mut c = WetCanvas::new_detailed(&mut images, N as u32, k, [0.8, 0.7, 0.65], 0.6);
+            for y in 0..N {
+                for x in 0..N {
+                    if (y as f32 + 0.5) < 0.3 * (x as f32 + 0.5) + 10.0 {
+                        c.wet[(y * N + x) as usize] = (255, 0);
+                    }
+                }
+            }
+            c.shade(whole(&c), 0, &s);
+            assert!(c.flush(&mut images));
+            let px = images.get(&c.albedo()).and_then(|i| i.data.clone()).unwrap_or_default();
+            let side = N * k as i64;
+            assert_eq!(px.len() as i64, side * side * 4, "the image is not detail times the canvas");
+            (px.chunks(4).map(|p| p[1] as i32).collect(), side)
+        };
+        let (texels, _) = draw(1);
+        let (pixels, nf) = draw(4);
+        let (pool, base) = (pixels[0], pixels[pixels.len() - 1]);
+        assert_eq!((texels[0], texels[texels.len() - 1]), (pool, base), "the two images disagree on the colours");
+
+        // Down each column, in texels, the first place the image is `frac` of the way from the pool
+        // to the surface.
+        let edge = |g: &[i32], side: i64, frac: f32| -> Vec<f32> {
+            let unit = side as f32 / N as f32;
+            let at = |x: i64, y: i64| g[(y.clamp(0, side - 1) * side + x.clamp(0, side - 1)) as usize] as f32;
+            let bilinear = |tx: f32, ty: f32| {
+                let (px, py) = (tx * unit - 0.5, ty * unit - 0.5);
+                let (x0, y0) = (px.floor(), py.floor());
+                let (fx, fy) = (px - x0, py - y0);
+                let (x0, y0) = (x0 as i64, y0 as i64);
+                let top = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * fx;
+                let bottom = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * fx;
+                top + (bottom - top) * fy
+            };
+            let ys: Vec<f32> = (0..400)
+                .filter_map(|i| {
+                    let x = 6.0 + i as f32 * 0.05;
+                    (0..6000).map(|j| 4.0 + j as f32 * 0.005).find(|&y| (bilinear(x, y) - pool as f32).abs() > frac * (base - pool).abs() as f32)
+                })
+                .collect();
+            assert_eq!(ys.len(), 400, "a column found no edge");
+            ys
+        };
+        // The widest the colour's change from 10 % to 90 % is, and the most the half-way line bends
+        // from one half-texel to the next, as a second difference.
+        let measure = |g: &[i32], side: i64| -> (f32, f32) {
+            let (near, far, half) = (edge(g, side, 0.1), edge(g, side, 0.9), edge(g, side, 0.5));
+            let width = near.iter().zip(&far).map(|(a, b)| b - a).fold(0.0, f32::max);
+            let bend = (10..half.len() - 10).map(|i| (half[i + 10] - 2.0 * half[i] + half[i - 10]).abs()).fold(0.0, f32::max);
+            (width, bend)
+        };
+        let (stairs_width, stairs_bend) = measure(&texels, N);
+        let (width, bend) = measure(&pixels, nf);
+        assert!(width < stairs_width / 3.0, "the detailed edge takes {width} texels to change, the texels' own {stairs_width}");
+        assert!(bend < 0.8 * stairs_bend, "the detailed edge bends {bend} texels in a half-texel, the texels' own {stairs_bend}");
+
+        // One pixel in from the detailed edge, every pixel is the pool's colour within two code values.
+        let bloody = |x: i64, y: i64| {
+            let g = pixels[(y.clamp(0, nf - 1) * nf + x.clamp(0, nf - 1)) as usize];
+            (g - base).abs() * 2 > (pool - base).abs()
+        };
+        for y in 0..nf {
+            for x in 0..nf {
+                let ring = (-1..=1).all(|j| (-1..=1).all(|i| bloody(x + i, y + j))) && !(-2..=2).all(|j| (-2..=2).all(|i| bloody(x + i, y + j)));
+                if ring {
+                    let g = pixels[(y * nf + x) as usize];
+                    assert!((g - pool).abs() <= 2, "({x}, {y}) one in from the rim has green {g}, the pool {pool}");
+                }
+            }
         }
     }
 }
