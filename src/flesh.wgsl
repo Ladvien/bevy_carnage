@@ -154,16 +154,23 @@ fn fragment(
     // ---- Blood: composite the film over whatever is under it, on the GPU. -------------------
     // The wetmap's own albedo image already carries this film over a grey; reading the amount byte
     // and compositing here instead keeps the hue of the base — skin, a peeled tissue, a weave.
+    // **How much liquid there is to shine**, as a share of enough to mirror: nothing under two per cent
+    // of the film's depth, all of it from a quarter of it up. A smear a few microns deep follows the
+    // surface it lies on and only a pool smooths it. Every film used to count as a pool, and a wet
+    // surface went to a roughness of 0.25 and a coat of 1.0 at the first texel of blood. At 0.25 a
+    // flat pool in a light's mirror angle clips to white, because a directional light has no size and a
+    // flat pool has no ripples; 0.45 keeps the sheen as a pale gloss.
+    let pool = smoothstep(0.02, 0.25, amount);
     if amount > 0.0 {
         let depth_mm = amount * flesh.wet.z;
         let base = pbr_input.material.base_color.rgb;
         pbr_input.material.base_color = vec4<f32>(blood_over(base, depth_mm), pbr_input.material.base_color.a);
         // A wet film smooths whatever it lies on; a dried one is matte again.
-        pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, 0.25, wetness);
+        pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, 0.45, wetness * pool);
     }
 
     // ---- The wet clear coat: a specular layer of liquid above the diffuse colour. --------------
-    let coat = wetness * flesh.wet.x * step(0.0001, amount);
+    let coat = wetness * flesh.wet.x * pool;
     pbr_input.material.clearcoat = coat;
     pbr_input.material.clearcoat_perceptual_roughness = flesh.wet.y;
 

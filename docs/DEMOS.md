@@ -517,6 +517,8 @@ Run it and you aim it yourself: `1` a shot to the raised forearm, `2` a slash ac
 
 **Every shot is addressed to the character's root**, which is all a game's physics would hand it: the capsule it found belongs to the character, and which of the six meshes the ray reaches first is the preset's to say, from each mesh as it is drawn (`Aim` in `common/mannequin.rs`). Since 0.5.22 that is a supported way to send a hit, and the clip is byte-identical to the one the shots made when each named the part it was aimed at.
 
+`--eye x,y,z` renders the clip from another camera position, aimed at the same point, and changes no digest. It is how a render is checked from an angle the committed clip does not use: from `-0.9,1.3,3.0` the floor's pools once clipped to white (`AG-096`).
+
 ## `tiers` — the player's violence setting
 
 ![The same scripted scene three times side by side: at the stylised tier a yellow spark marks each shot and nothing bleeds; at the blood tier the wounds bleed and pool on the floor and the body stays standing; at blood and gore the body comes apart and the guts spill](tiers.gif)

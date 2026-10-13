@@ -127,6 +127,8 @@ pub struct FleshParams {
     pub bands: Vec4,
     /// `x` clearcoat strength at full wetness, `y` clearcoat perceptual roughness, `z` film depth in
     /// mm at amount byte 255 (the wetmap's `film_depth_mm`), `w` the blood's oxygen saturation `[0, 1]`.
+    /// **Shipped as `(0.3, 0.3, 2.0, venous)` since 0.5.23**, where it was `(1.0, 0.08, ..)`: a coat
+    /// that sharp and that strong clips to white wherever a flat pool crosses a light's mirror angle.
     pub wet: Vec4,
     /// `x` subsurface strength, `y` millimetres per mesh unit (curvature is measured in mesh units
     /// and the table is in mm), `z` the [`FleshMode`] code, `w` the canvas flags — which of `wet`,
@@ -156,7 +158,7 @@ impl FleshParams {
         let s = layers.starts_mm();
         Self {
             bands: Vec4::new(s[1] / span, s[2] / span, s[3] / span, s[4] / span),
-            wet: Vec4::new(1.0, 0.08, 2.0, SO2_VENOUS),
+            wet: Vec4::new(0.3, 0.3, 2.0, SO2_VENOUS),
             sss: Vec4::new(1.0, mm_per_unit, mode.code(), 0.0),
         }
     }

@@ -4,6 +4,8 @@
 //! cargo run --release -p bevy_carnage --example capture_skinned -- --out frames-skinned
 //! ```
 //!
+//! `--eye x,y,z` renders from another camera position, aimed at the same point. It changes no digest.
+//!
 //! Writes `frame0000.png …` and prints one digest line; two runs must print the same line.
 //!
 //! The subject is `common/mannequin.rs`: six skinned meshes on eleven joints, walking in place with
@@ -38,7 +40,12 @@ const FRAMES: u32 = 360;
 
 fn main() {
     let out = common::arg("--out").unwrap_or_else(|| "frames-skinned".to_string());
-    let camera = mannequin::view();
+    // `--eye x,y,z` looks at the body from somewhere else: the digest does not depend on it, so it
+    // is how a render is checked from an angle the committed clip does not use.
+    let camera = match common::arg("--eye").map(|e| e.split(',').filter_map(|v| v.trim().parse::<f32>().ok()).collect::<Vec<_>>()) {
+        Some(v) if v.len() == 3 => Transform::from_xyz(v[0], v[1], v[2]).looking_at(Vec3::new(0.12, 0.93, 0.1), Vec3::Y),
+        _ => mannequin::view(),
+    };
     let Some(mut rec) = Recorder::new_with(800, 500, camera, &out, |app| {
         // **The clock is the frame, not the wall**, for the reason `capture_preset` gives: one sixtieth
         // per update and a 60 Hz fixed step is one tick per frame, and the animation reads the same
