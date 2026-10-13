@@ -555,8 +555,11 @@ pub fn spawn(
     let inverse_bindposes = bindposes.add(SkinnedMeshInverseBindposes::from(
         Bone::ALL.iter().map(|b| Mat4::from_translation(-b.bind())).collect::<Vec<_>>(),
     ));
+    // **Its skin canvases are 256 a side**, the preset's ceiling, where 128 ships: 3.6 mm a texel on
+    // these limbs, against 7.2. A showcase's choice — at 128 every run of blood on a thigh blurred
+    // into the patch it came from — and it costs 4 times the shipped bytes per part.
     let scene = LIMBS.iter().fold(GoreScene::new(Gore::floor()).otherwise_nothing(), |scene, limb| {
-        scene.with(&format!("{limb:?}"), Gore::skin(limb.region()).with_gravity_uv(gravity_uv(*limb)))
+        scene.with(&format!("{limb:?}"), Gore::skin(limb.region()).with_gravity_uv(gravity_uv(*limb)).with_canvas(256))
     });
     let scene = scene.with("Shirt", Gore::cloth().with_gravity_uv(gravity_uv(Limb::Torso)));
     let root = commands.spawn((Transform::IDENTITY, Visibility::default(), Mannequin, scene)).id();

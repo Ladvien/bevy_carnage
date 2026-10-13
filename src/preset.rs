@@ -927,16 +927,42 @@ pub struct WoundSite {
     pub cut: Option<CutLine>,
 }
 
+impl WoundSite {
+    /// **Where well `k` of this wound beads, from its centre on the wetmap, and which way is out**:
+    /// along a cut's lower lip ([`CutLine::well`]), or on a hole's rim, the wells fanned over the arc
+    /// that faces `downhill`, where the blood that fills a crater spills over. A level hole spills all
+    /// round. The rim is the wound's own radius at `density` UV per metre.
+    fn well(&self, k: u32, downhill: Vec2, density: f32) -> (Vec2, Vec2) {
+        if let Some(cut) = self.cut {
+            return cut.well(self.bleed.seed, k, downhill);
+        }
+        let h = |salt: u32| crate::bloodstain::hash_f32(self.bleed.seed ^ k.wrapping_mul(0x85EB_CA6B) ^ salt);
+        let n = BLEED_WELLS.max(1) as f32;
+        let rim = (self.wound.area / core::f32::consts::PI).max(0.0).sqrt() * density;
+        let down = downhill.normalize_or_zero();
+        let (axis, fan) = if down == Vec2::ZERO { (Vec2::Y, core::f32::consts::PI) } else { (down, RIM_FAN) };
+        // Stratified over the fan, each a little off its share.
+        let angle = ((k as f32 + 0.25 + 0.5 * h(0x51)) / n * 2.0 - 1.0) * fan;
+        let (s, c) = (libm::sinf(angle), libm::cosf(angle));
+        let out = Vec2::new(c * axis.x - s * axis.y, s * axis.x + c * axis.y);
+        (out * rim, out)
+    }
+}
+
+/// **How far either side of downhill a hole's wells fan**, radians: 50°. Blood that fills a crater
+/// spills over the lower part of its rim, not the sides. This crate's own number.
+const RIM_FAN: f32 = 0.87;
+
 /// **How wide a slash opens, in metres on the body**: the lips stand this far apart at the middle of
 /// the cut once it has finished opening. 6 mm, which is what `Gape::default()` under
 /// `Tension::default()` opened at metre scale before 0.5.34 and still does; this crate's own number, as
 /// `Gape::default` is. Stated in metres now so the wound's area and its gape agree on any mesh scale.
 pub const SLASH_OPEN_M: f32 = 0.006;
 
-/// **How many places along a cut each pulse wells at.** The pulse's blood is shared between them, so a
-/// cut bleeds as beads over its lips that each run, rather than one stream from its middle. This
-/// crate's own number.
-pub const SLASH_WELLS: u32 = 3;
+/// **How many places each pulse of a wound wells at**: along a cut's lower lip, or round the downhill
+/// rim of a hole. The pulse's blood is shared between them, so a wound bleeds as a few runs down the
+/// skin rather than one column its own width. This crate's own number.
+pub const BLEED_WELLS: u32 = 3;
 
 /// **A slash's line on a wetmap**: where along the cut, and how far out its lips are.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -958,7 +984,7 @@ impl CutLine {
     /// left wet; a bead somewhere new each pulse spends itself wetting new skin.
     fn well(&self, seed: u32, k: u32, downhill: Vec2) -> (Vec2, Vec2) {
         let h = |salt: u32| crate::bloodstain::hash_f32(seed ^ k.wrapping_mul(0x85EB_CA6B) ^ salt);
-        let n = SLASH_WELLS.max(1) as f32;
+        let n = BLEED_WELLS.max(1) as f32;
         // Stratified over `[-0.75, 0.75]`, kept off the tips, where the cut has closed.
         let along = ((k as f32 + 0.25 + 0.5 * h(0x51)) / n * 2.0 - 1.0) * 0.75;
         let across = self.half_uv.normalize_or_zero().perp();
@@ -2905,42 +2931,26 @@ fn bleed(
             };
             let r = (site.wound.area / core::f32::consts::PI).sqrt().max(0.002) * (0.6 + pulse.severity);
             let texels = wet.size();
-            match site.cut {
-                // **A cut wells over its lower lip.** The pulse is shared between `SLASH_WELLS` beads,
-                // by area, each at its own place along the cut and drawn out downhill, so a cut bleeds
-                // as a few runs down the skin rather than one stream from its middle.
-                Some(cut) => {
-                    let bead = r / (SLASH_WELLS as f32).sqrt();
-                    let run = if downhill == Vec2::ZERO { [0.0, 1.0] } else { downhill.normalize_or_zero().to_array() };
-                    for k in 0..SLASH_WELLS {
-                        // The bead's area is the share's, but drawn out down the slope and narrow: a run
-                        // goes as far as its blood over its width, and as round beads a bead's worth
-                        // ran about its own length before the wetmap's threshold held it.
-                        let shape = StainShape {
-                            major: bead * 2.6,
-                            minor: bead * 0.6,
-                            spines: 0,
-                            satellites: 0,
-                            direction: run,
-                            seed: site.bleed.seed ^ tick ^ k.wrapping_mul(0x27D4_EB2F),
-                        };
-                        // Centred half a bead out past the lip, so it sits on the skin, not in the gap.
-                        let (lip, out) = cut.well(site.bleed.seed, k, downhill);
-                        let at = site.uv + lip + out * (0.5 * bead * gore.density());
-                        wet.paint_uv_with(at, &shape_on(gore, &shape, texels), tick, &edges);
-                    }
-                }
-                None => {
-                    let shape = StainShape {
-                        major: r * 1.6,
-                        minor: r,
-                        spines: 0,
-                        satellites: 0,
-                        direction: [0.0, 1.0],
-                        seed: site.bleed.seed ^ tick,
-                    };
-                    wet.paint_uv_with(site.uv, &shape_on(gore, &shape, texels), tick, &edges);
-                }
+            // **A wound wells where its blood spills**: over a cut's lower lip, or the downhill rim of
+            // a hole. The pulse is shared between `BLEED_WELLS` beads by area, each at its own fixed
+            // place and drawn out down the slope, narrow: a run goes as far as its blood over its
+            // width. Until 0.5.35 a hole pulsed one ellipse at its centre, and the blood ran from it as
+            // one column the wound's own width.
+            let bead = r / (BLEED_WELLS as f32).sqrt();
+            let run = if downhill == Vec2::ZERO { [0.0, 1.0] } else { downhill.normalize_or_zero().to_array() };
+            for k in 0..BLEED_WELLS {
+                let shape = StainShape {
+                    major: bead * 2.6,
+                    minor: bead * 0.6,
+                    spines: 0,
+                    satellites: 0,
+                    direction: run,
+                    seed: site.bleed.seed ^ tick ^ k.wrapping_mul(0x27D4_EB2F),
+                };
+                // Centred half a bead out past the lip or the rim, so it sits on the skin.
+                let (edge, out) = site.well(k, downhill, gore.density());
+                let at = site.uv + edge + out * (0.5 * bead * gore.density());
+                wet.paint_uv_with(at, &shape_on(gore, &shape, texels), tick, &edges);
             }
             // What runs off the body onto the world is the world's share of the blood.
             if !drips {
@@ -3480,6 +3490,45 @@ mod tests {
         let Some(cut) = wounded.last() else { panic!("the slash announced nothing") };
         let disc = core::f32::consts::PI * radius * radius;
         assert!(cut.area > 0.0 && cut.area <= disc / 10.0, "the slash announced {} m², against {disc} for a disc its half-length across", cut.area);
+    }
+
+    /// **A hole bleeds over its downhill rim in runs, not as one column its own width.** A shot at a
+    /// skin box, four seconds of pulses, and the canvas read across in rows from two and a half to
+    /// three and a half radii below the wound, past what the hit's own stain covers: some row there
+    /// holds two or more separate runs. One stream from the wound's centre is one run in every row.
+    #[test]
+    fn a_hole_bleeds_in_runs_from_its_lower_rim() {
+        let mut app = headless();
+        let body = {
+            let world = app.world_mut();
+            let mesh = world.resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.6, 0.6, 0.2).mesh().build());
+            world.spawn((Mesh3d(mesh), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Torso).with_canvas(256))).id()
+        };
+        app.world_mut().run_schedule(FixedUpdate);
+        let radius = 0.05;
+        app.world_mut().write_message(GoreHit::impact(body, Vec3::new(0.0, 0.0, 2.0), Vec3::NEG_Z, radius, 4.0));
+        for _ in 0..240 {
+            app.world_mut().run_schedule(FixedUpdate);
+        }
+        let world = app.world();
+        let (Some(wet), Some(gore), Some(wounds)) = (world.get::<WetCanvas>(body), world.get::<Gore>(body), world.get::<Wounds>(body)) else {
+            panic!("the body was not dressed, or the shot opened no wound")
+        };
+        let Some(site) = wounds.0.first() else { panic!("the shot opened no wound") };
+        let n = wet.size() as f32;
+        let r = radius * gore.density() * n;
+        let (cx, cy) = (site.uv.x * n, site.uv.y * n);
+        let mut most = 0;
+        for y in (cy + 2.5 * r) as u32..(cy + 3.5 * r) as u32 {
+            let (mut runs, mut inside) = (0, false);
+            for x in (cx - 2.0 * r).max(0.0) as u32..((cx + 2.0 * r) as u32).min(wet.size()) {
+                let here = wet.amount_at(x, y) > 0;
+                runs += usize::from(here && !inside);
+                inside = here;
+            }
+            most = most.max(runs);
+        }
+        assert!(most >= 2, "below the wound the blood is at most {most} run(s) wide in any row");
     }
 
     /// **A droplet stops at the first thing it reaches, unless there is a hole in it.** A shot at a
