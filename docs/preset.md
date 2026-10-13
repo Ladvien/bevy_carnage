@@ -42,8 +42,11 @@ commands.spawn((
   its words are a run of the name's, so `"arm"` matches all three and **not** `Armature`, the node a
   Blender export puts above its meshes, nor `Armor`. The scene root's own name is ignored.
 - **A mesh is matched on its own name and then on each node above it, nearest first**, so `Mesh.001`
-  under a node called `Head` is the head. The last rule that matches wins. A mesh nothing matches gets
-  the scene's default (torso skin for `humanoid`), or is left alone after `otherwise_nothing()`.
+  under a node called `Head` is the head. That is what Bevy's glTF loader gives you: a node entity is
+  named for its node, and each primitive is a child of it named `{mesh}.{material}`, so **a material
+  called `shirt` dresses its primitive as cloth wherever the node sits**. The last rule that matches
+  wins. A mesh nothing matches gets the scene's default (torso skin for `humanoid`), or is left alone
+  after `otherwise_nothing()`.
 - **A mesh with its own `Gore` is never touched**, so one surface can be dressed by hand with a stated
   density or gravity and the rest by name. The wound bed a slash opens under a dressed skin
   (`LacerationBed`) is the preset's own and is never dressed.
