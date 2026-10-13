@@ -1,5 +1,12 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.41`: spilled guts look like bowel, not red tubing** (`AG-114`). Every strand was drawn in the
+# red of the blood it lay in, so a heap of guts read as red plastic tubing in a red pool.
+# `viscera::gut_image` is a texture for the tube's own `UV_0` — a salmon-pink serosa, the mesentery's
+# fat along the tethered side, faint vessels round the wall, the wound end bloodied and smears dragged
+# along the rest — and the preset's guts wear it at `viscera::GUT_ROUGHNESS`, one material for every
+# spill where each spill used to make its own.
+#
 # **`0.5.40`: a run of blood leans the way gravity does** (`AG-113`). A drip fell along the dominant
 # axis of gravity alone, so every run on a canvas was a straight, axis-parallel streak however the atlas
 # lay against the ground. A parcel now also steps one across on a share of the lines it falls through,
@@ -219,7 +226,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.40"
+version = "0.5.41"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

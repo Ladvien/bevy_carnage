@@ -2,6 +2,7 @@
 
 mod frame;
 mod hash;
+mod look;
 mod plugin;
 mod settings;
 mod solver;
@@ -10,6 +11,7 @@ mod strand;
 mod tube;
 
 pub use plugin::{VisceraPlugin, VisceraSystems};
+pub use look::{GUT_ROUGHNESS, gut_image};
 pub use settings::{
     ViscSettings, DEFAULT_COMPLIANCE_BEND, DEFAULT_COMPLIANCE_STRETCH, DEFAULT_DAMPING,
     DEFAULT_FLOOR_Y, DEFAULT_GRAVITY, DEFAULT_ITERATIONS, DEFAULT_MAX_STRANDS, DEFAULT_SUBSTEPS,

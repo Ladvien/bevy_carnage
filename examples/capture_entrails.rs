@@ -117,9 +117,10 @@ fn main() {
     rec.world().insert_resource(damage);
     body::stand(rec.world(), GRANULARITY);
 
+    let texture = rec.world().resource_mut::<Assets<Image>>().add(bevy_carnage::viscera::gut_image());
     let gut = rec.world().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
-        base_color: Color::srgb(0.52, 0.16, 0.15),
-        perceptual_roughness: 0.28,
+        base_color_texture: Some(texture),
+        perceptual_roughness: bevy_carnage::viscera::GUT_ROUGHNESS,
         ..default()
     });
     rec.world().insert_resource(GutMaterial(gut));

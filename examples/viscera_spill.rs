@@ -115,6 +115,7 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     settings: Res<ViscSettings>,
 ) {
     // Exactly one `Camera3d`: a second one makes every `Single<.., With<Camera3d>>` skip its system,
@@ -145,7 +146,11 @@ fn setup(
         Transform::from_xyz(0.0, 1.42, 0.0),
     ));
 
-    let gut = matte(&mut materials, [0.52, 0.16, 0.15], 0.28);
+    let gut = materials.add(StandardMaterial {
+        base_color_texture: Some(images.add(bevy_carnage::viscera::gut_image())),
+        perceptual_roughness: bevy_carnage::viscera::GUT_ROUGHNESS,
+        ..default()
+    });
     // Spill once through the same function every key press calls, so there is one path and the page
     // opens on something moving rather than on a bare torso.
     spill_guts(&mut commands, &mut meshes, &gut, &settings, SEED);

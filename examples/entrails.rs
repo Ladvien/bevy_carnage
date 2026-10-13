@@ -150,10 +150,11 @@ fn setup(world: &mut World) {
     let materials = BodyMaterials::new(world);
     let damage = body::Damage::fresh(&baked, GRANULARITY);
 
-    // The gut's own surface: darker and wetter than skin, rough enough not to read as plastic.
+    // The gut's own surface: bowel's serosa, fat, vessels and smeared blood, wet but not plastic.
+    let texture = world.resource_mut::<Assets<Image>>().add(bevy_carnage::viscera::gut_image());
     let gut = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
-        base_color: Color::srgb(0.52, 0.16, 0.15),
-        perceptual_roughness: 0.28,
+        base_color_texture: Some(texture),
+        perceptual_roughness: bevy_carnage::viscera::GUT_ROUGHNESS,
         ..default()
     });
     world.insert_resource(GutMaterial(gut));

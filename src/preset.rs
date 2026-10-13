@@ -58,7 +58,7 @@ use bevy::transform::helper::TransformHelper;
 use crate::cross_section::{CrossSectionPlugin, CrossSectionSettings, Layers, Region};
 use crate::flaymap::{BoneExposed, FlayCanvas, FlaySettings, FlaymapPlugin, Layer};
 use crate::laceration::{Gape, Laceration, LacerationBed, LacerationClock, LacerationPlugin, Tension};
-use crate::viscera::{Mesentery, Strand, ViscSettings, VisceraPlugin, VisceraSystems, spill, tube_mesh};
+use crate::viscera::{GUT_ROUGHNESS, Mesentery, Strand, ViscSettings, VisceraPlugin, VisceraSystems, gut_image, spill, tube_mesh};
 use crate::wetmap::{StainShape, WetCanvas, WetSettings, WetmapPlugin};
 use crate::bloodstain::{BloodSettings, Wound as BloodWound, WoundKind, wound_seed};
 
@@ -2026,7 +2026,7 @@ fn layers_for(region: Region, settings: Option<&CrossSectionSettings>) -> Layers
 /// The settings, caches and outputs [`take_hits`] reads — grouped so the system stays under Bevy's
 /// parameter limit and the hit loop reads as the module docs list it.
 #[derive(bevy::ecs::system::SystemParam)]
-struct HitContext<'w> {
+struct HitContext<'w, 's> {
     clock: Res<'w, GoreClock>,
     dials: Res<'w, GoreDials>,
     flay_settings: Option<Res<'w, FlaySettings>>,
@@ -2038,10 +2038,13 @@ struct HitContext<'w> {
     meshes: ResMut<'w, Assets<Mesh>>,
     standard: ResMut<'w, Assets<StandardMaterial>>,
     flesh: ResMut<'w, Assets<FleshMaterial>>,
+    images: Option<ResMut<'w, Assets<Image>>>,
     bone: MessageWriter<'w, BoneExposed>,
     wounded: MessageWriter<'w, Wounded>,
     fractured: MessageWriter<'w, GoreFractured>,
     policy: Option<Res<'w, GorePolicy>>,
+    /// The material every spill's strands share, and the `mm_per_unit` bits it was made under.
+    gut_look: Local<'s, Option<(u32, Handle<FleshMaterial>)>>,
 }
 
 /// What [`throw_spray`] needs from the batch it is in: the surfaces, the poses and boxes cached across
@@ -2263,10 +2266,12 @@ fn take_hits(
         meshes,
         standard,
         flesh,
+        images,
         bone,
         wounded,
         fractured,
         policy,
+        gut_look,
     } = &mut cx;
     let SubjectLookup { parents, subjects, breakables, dressed, holes: cloth_holes } = &lookup;
     let tick = clock.0;
@@ -2667,18 +2672,32 @@ fn take_hits(
             && let Some(visc) = visc.as_deref()
         {
             let strands = spill(at_world, normal_world + Vec3::new(0.0, -0.4, 0.0), dials.strands, seed, visc);
-            let mut muscle_params = FleshParams::for_layers(&Layers::for_region(region), FleshMode::Cap, dials.mm_per_unit);
-            // Every texel is muscle: the strands carry no `UV_1`, so the shader's depth is `0`, and
-            // `layer_of` walks past every band start it is not below. Muscle is index 2, so fat and
-            // muscle start at `0` and cortex and marrow start past any depth. (`Vec4::ZERO` selected
-            // marrow, whose profile is fat's — caught in review.)
-            muscle_params.bands = Vec4::new(0.0, 0.0, 2.0, 2.0);
-            let gut_material = flesh.add(tables.material(
-                StandardMaterial { base_color: Color::srgb(0.55, 0.20, 0.22), perceptual_roughness: 0.25, ..default() },
-                muscle_params,
-                None,
-                None,
-            ));
+            // One material for every spill, made on the first: bowel's own texture over the muscle's
+            // subsurface profile. Until 0.5.41 each spill made a new one, the red of the blood it fell
+            // in.
+            let key = dials.mm_per_unit.to_bits();
+            let gut_material = match gut_look.as_ref() {
+                Some((k, material)) if *k == key => material.clone(),
+                _ => {
+                    let mut muscle_params = FleshParams::for_layers(&Layers::for_region(region), FleshMode::Cap, dials.mm_per_unit);
+                    // Every texel is muscle: the strands carry no `UV_1`, so the shader's depth is `0`, and
+                    // `layer_of` walks past every band start it is not below. Muscle is index 2, so fat and
+                    // muscle start at `0` and cortex and marrow start past any depth. (`Vec4::ZERO` selected
+                    // marrow, whose profile is fat's — caught in review.)
+                    muscle_params.bands = Vec4::new(0.0, 0.0, 2.0, 2.0);
+                    // The texture goes where every image goes; with no `Assets<Image>` there is no
+                    // renderer to draw the strands either.
+                    let texture = images.as_deref_mut().map(|images| images.add(gut_image()));
+                    let material = flesh.add(tables.material(
+                        StandardMaterial { base_color: Color::WHITE, base_color_texture: texture, perceptual_roughness: GUT_ROUGHNESS, ..default() },
+                        muscle_params,
+                        None,
+                        None,
+                    ));
+                    **gut_look = Some((key, material.clone()));
+                    material
+                }
+            };
             for strand in strands {
                 let anchors = (0..strand.nodes().len() as u32).step_by(4).map(|i| (i, at_world)).collect();
                 let tube = meshes.add(tube_mesh(&strand, 8));
