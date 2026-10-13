@@ -334,6 +334,25 @@ impl FlayCanvas {
         self.size
     }
 
+    /// **The bytes this canvas holds in the main world**, apart from its three images: the removed
+    /// depth (`u16` a texel), the stamp mask, the grain-averaged tissue table, and the CPU copy of each
+    /// image. See [`image_bytes`](Self::image_bytes) for what the images add.
+    pub fn heap_bytes(&self) -> usize {
+        self.depth.capacity() * std::mem::size_of::<u16>()
+            + self.mask.capacity()
+            + self.albedo_px.capacity()
+            + self.rough_px.capacity()
+            + self.normal_px.capacity()
+            + self.tissue.capacity() * std::mem::size_of::<Option<([u8; 3], u8)>>()
+    }
+
+    /// **The size of the three images this canvas uploads** (albedo, metallic-roughness and normal),
+    /// once. The main world keeps a copy of each and the GPU holds another, so the memory they cost
+    /// is twice this.
+    pub fn image_bytes(&self) -> usize {
+        self.albedo_px.len() + self.rough_px.len() + self.normal_px.len()
+    }
+
     /// Which body region's thickness row this canvas peels through.
     pub fn region(&self) -> Region {
         self.region

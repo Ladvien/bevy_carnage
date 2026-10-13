@@ -378,7 +378,21 @@ Note what this does *not* claim. Fragment geometry is `f32` arithmetic, so cross
 
 ## Status
 
-**`0.5.18`, published to crates.io, and pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+**`0.5.25` in the repository; the latest on crates.io is `0.5.18`. Pre-release in the sense that matters: the API can still move.** It is used in one shipping game — [`Ladvien/foundation_vs_slop`](https://github.com/Ladvien/foundation_vs_slop), which is also where it is developed and consumes it by path, not by version.
+
+### What `0.5.19` to `0.5.25` changed: the preset meets a real character
+
+Seven releases with one theme, the things a game finds out the first time it puts the preset on an animated glTF character. None is on crates.io yet; each has a ticket in `BACKLOG.md` (`AG-092` to `AG-098`) with what it was measured against, and the checklist is [`docs/preset.md`](docs/preset.md).
+
+- **`0.5.19`, skinned characters.** A hit lands on a body as it is drawn, not as its asset was authored. `bevy_carnage::skin` poses a skinned mesh the way `bevy_pbr`'s vertex shader does, a wound is a triangle and a place in it so it rides the limb, and blood runs downhill in the world however the atlas is laid out. `docs/skinned.gif`.
+- **`0.5.20`, a cheaper spray.** A droplet is tested against a surface's bounding box before the mesh. In a scene of forty characters, 240 surfaces, one hit went from 9.9 to 1.4 ms and twelve from 129 to 27 ms.
+- **`0.5.21`, the player's violence setting.** The preset reads `GorePolicy`: at `Stylised` a hit is announced as `Wounded` and nothing is painted, so the game puts its own effect there. `docs/tiers.gif`.
+- **`0.5.22`, hit the character.** `GoreHit::entity` may be any ancestor of the dressed meshes, which is all a physics raycast finds. The preset casts the ray at each skin under it, as drawn, and hurts the nearest.
+- **`0.5.23`, a pool no longer clips to white.** A wet film took a gloss that turned a flat pool in a light's mirror angle into a white sticker. A smear no longer smooths what it lies on.
+- **`0.5.24`, one component dresses a character.** `GoreScene` on the entity a glTF scene is spawned under dresses every mesh that appears below it, by the words in its node's name; `GoreScene::humanoid()` knows the common ones.
+- **`0.5.25`, memory is a number and a dial.** A dressed skin costs 1.3 MiB at the shipped 128 and a character of six, 7.7 MiB; `Gore::with_canvas` gives one surface its own edge, and the canvases report their bytes.
+
+**API:** new, `skin` (`Pose`, `Rig`, `posed_mesh`), `preset::GoreScene`, `Gore::canvas` and `Gore::with_canvas`, `heap_bytes` and `image_bytes` on `WetCanvas`, `FlayCanvas` and `DermisCanvas`. Changed, `Gore` has a field more, so build it with `Gore::skin`, `cloth` or `floor` rather than as a struct literal. Nothing was removed.
 
 ### What `0.5.18` changed: the preset measures the atlas
 

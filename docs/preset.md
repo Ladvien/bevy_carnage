@@ -107,7 +107,7 @@ part of the body is drawn that frame.
 | `HitKind::Impact::depth_mm`, `Slash::depth_mm` | millimetres of tissue removed at the centre |
 | `HitKind::Burn::{temp_c, seconds}` | contact temperature, °C, and contact time, s |
 | `GoreDials::hz` | fixed ticks per second |
-| `GoreDials::canvas`, `floor_canvas` | texels per canvas edge; 128 and 256 ship, and 256 is the ceiling |
+| `GoreDials::canvas`, `floor_canvas`, `Gore::canvas` | texels per canvas edge; 128 and 256 ship, and 256 is the ceiling. `Gore::with_canvas` gives one surface its own |
 | `GoreDials::floor_y`, `gravity` | world units, world units per second squared |
 
 A torso's skin and fat are 18 mm deep and its muscle wall reaches 25.5 mm, so an impact of 5 mm opens
@@ -191,6 +191,36 @@ canvases, `WetCanvas::shade`, `spread`, `tick` and `drip` were nearly all of the
 dresses only the characters near the player pays for those. The measurement is the ignored test
 `hit_cost_by_scene_size`: `cargo test -p bevy_carnage --lib --release -- hit_cost_by_scene_size
 --ignored --nocapture`.
+
+## What it costs in memory
+
+Every dressed surface owns canvases, and a canvas is a few bytes a texel: the table is what one costs,
+read off the canvases themselves (`heap_bytes` and `image_bytes` on `WetCanvas`, `FlayCanvas` and
+`DermisCanvas`; the ignored test `dressed_surface_memory` prints it). *Main heap* is what the canvas
+owns on the CPU. *Images* is the size of what it uploads, which is held once in `Assets<Image>` and
+once on the GPU, so the total counts it twice. The sizes do not depend on the build profile. The stamp
+scratch a first wound allocates is on top.
+
+| surface | edge | main heap | images, once | total |
+|---|---|---|---|---|
+| skin (flaymap, wetmap, dermis map) | 64 | 136 KiB | 96 KiB | 328 KiB |
+| skin | **128**, ships | 544 KiB | 384 KiB | **1.3 MiB** |
+| skin | 256 | 2.1 MiB | 1.5 MiB | 5.1 MiB |
+| cloth (wetmap) | 128 | 256 KiB | 128 KiB | 512 KiB |
+| floor (wetmap) | **256**, ships | 1.0 MiB | 512 KiB | **2.0 MiB** |
+
+So a character of six skin parts at the shipped 128 is **7.7 MiB**, forty of them 308 MiB, and the
+same at 64 is 1.9 MiB and 77 MiB. The cost is the edge squared: it is the dial to turn on a web build
+or a crowd. `GoreDials::canvas` sets it for everything, and `Gore::with_canvas` sets it for one
+surface, so a head, a hand or a background character can be dressed at 64 while the torso keeps its
+128 (`GoreScene::with` takes a `Gore`, so the same works by name).
+
+**64 is not free, and this is what it costs.** The skinned demo was recorded with every part but the
+torso at 64 and set beside the shipped clip, the same frame enlarged 4×. A wound's edge is
+stair-stepped where it was smooth, steps of three or four pixels at the clip's own size, and the
+wound is not quite the same wound: on the thigh it reached higher up the leg, probably because blood
+runs on texels twice as wide. Nothing else was seen to change. It is the right trade for a character
+the player never sees up close, and the wrong one for the one they shoot.
 
 ## Known limits
 

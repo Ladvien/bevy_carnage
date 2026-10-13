@@ -93,6 +93,12 @@ pub struct Gore {
     /// wounds land, as on an atlas that packs the face far denser than the body. Before 0.5.18 the
     /// default was `1.0`, which on a typical character atlas shrank every wound to a dot.
     pub uv_per_metre: Option<f32>,
+    /// **The edge, in texels, of this surface's canvases**, or `None` for the preset's own:
+    /// [`GoreDials::canvas`] for skin and cloth, [`GoreDials::floor_canvas`] for a floor. A dressed
+    /// skin owns three square canvases and each is a few bytes a texel, so the edge is the memory
+    /// bill: a head, a hand or a distant character does not need the 128 a torso's wounds read at, and
+    /// 64 costs a quarter. See [`Gore::with_canvas`] and *What it costs* in `docs/preset.md`.
+    pub canvas: Option<u32>,
 }
 
 /// The three surfaces the preset knows how to dress.
@@ -109,15 +115,29 @@ pub enum GoreKind {
 impl Gore {
     /// A body part of `region`.
     pub fn skin(region: Region) -> Self {
-        Self { kind: GoreKind::Skin(region), gravity_uv: Vec2::new(0.0, 1.0), uv_per_metre: None }
+        Self { kind: GoreKind::Skin(region), gravity_uv: Vec2::new(0.0, 1.0), uv_per_metre: None, canvas: None }
     }
     /// A fabric surface.
     pub fn cloth() -> Self {
-        Self { kind: GoreKind::Cloth, gravity_uv: Vec2::new(0.0, 1.0), uv_per_metre: None }
+        Self { kind: GoreKind::Cloth, gravity_uv: Vec2::new(0.0, 1.0), uv_per_metre: None, canvas: None }
     }
     /// A floor. Blood pools rather than runs, so its UV gravity is zero.
     pub fn floor() -> Self {
-        Self { kind: GoreKind::Floor, gravity_uv: Vec2::ZERO, uv_per_metre: None }
+        Self { kind: GoreKind::Floor, gravity_uv: Vec2::ZERO, uv_per_metre: None, canvas: None }
+    }
+    /// The same surface with its canvases `texels` on an edge instead of the preset's dial — see
+    /// [`Gore::canvas`]. Read when the mesh is dressed; a surface already dressed keeps its canvases.
+    /// Zero leaves the preset's own.
+    pub fn with_canvas(mut self, texels: u32) -> Self {
+        self.canvas = (texels > 0).then_some(texels);
+        self
+    }
+    /// The canvas edge to dress this surface with.
+    fn canvas_texels(&self, dials: &GoreDials) -> u32 {
+        self.canvas.unwrap_or(match self.kind {
+            GoreKind::Floor => dials.floor_canvas,
+            _ => dials.canvas,
+        })
     }
     /// The same surface with its atlas density stated — see [`Gore::uv_per_metre`]. A value that is
     /// not a positive finite number leaves it to be measured.
@@ -969,6 +989,16 @@ impl DermisCanvas {
         self.size
     }
 
+    /// The bytes this canvas holds in the main world apart from its image: the CPU copy of it.
+    pub fn heap_bytes(&self) -> usize {
+        self.px.capacity()
+    }
+
+    /// The size of the image it uploads, once; the main world and the GPU each hold a copy.
+    pub fn image_bytes(&self) -> usize {
+        self.px.len()
+    }
+
     /// Paint a radial field: `colour(r_mm)` returns the linear ratio the skin is multiplied by and an
     /// alpha, for the texel `r_mm` from `uv`, out to `radius_uv`. Alpha is taken as the max of what
     /// was there, so two injuries overlap rather than erase.
@@ -1417,17 +1447,17 @@ fn dress(
                 // The canvas is filled with the material's colour factor; the flesh material swaps
                 // that for the authored skin, texture included, wherever the skin is intact. The
                 // tangents the crater's normal map needs were generated above if the mesh had none.
-                let flay = FlayCanvas::new(&mut images, dials.canvas, region, layers, base_srgb, rough);
-                let wet = WetCanvas::new(&mut images, dials.canvas, base_srgb, rough);
+                let flay = FlayCanvas::new(&mut images, gore.canvas_texels(&dials), region, layers, base_srgb, rough);
+                let wet = WetCanvas::new(&mut images, gore.canvas_texels(&dials), base_srgb, rough);
                 let mut params = FleshParams::for_layers(&layers, FleshMode::Canvas, scale.mm_per_unit);
                 params.wet.z = wet_settings.as_ref().map(|w| w.film_depth_mm).unwrap_or(2.0);
-                let dermis = DermisCanvas::new(&mut images, dials.canvas);
+                let dermis = DermisCanvas::new(&mut images, gore.canvas_texels(&dials));
                 let mut material = tables.material(base, params, Some(wet.roughness()), Some(&flay));
                 material.extension.set_dermis(Some(dermis.image()));
                 entity_commands.insert((MeshMaterial3d(flesh.add(material)), flay, wet, dermis));
             }
             GoreKind::Cloth => {
-                let wet = WetCanvas::new(&mut images, dials.canvas, base_srgb, rough);
+                let wet = WetCanvas::new(&mut images, gore.canvas_texels(&dials), base_srgb, rough);
                 let layers = Layers::for_region(Region::Torso);
                 let mut params = FleshParams::for_layers(&layers, FleshMode::Cloth, scale.mm_per_unit);
                 params.wet.z = wet_settings.as_ref().map(|w| w.film_depth_mm).unwrap_or(2.0);
@@ -1435,7 +1465,7 @@ fn dress(
                 entity_commands.insert((MeshMaterial3d(flesh.add(material)), wet, Soaking::default()));
             }
             GoreKind::Floor => {
-                let wet = WetCanvas::new(&mut images, dials.floor_canvas, base_srgb, rough);
+                let wet = WetCanvas::new(&mut images, gore.canvas_texels(&dials), base_srgb, rough);
                 let layers = Layers::for_region(Region::Torso);
                 let mut params = FleshParams::for_layers(&layers, FleshMode::Cloth, scale.mm_per_unit);
                 params.wet.z = wet_settings.as_ref().map(|w| w.film_depth_mm).unwrap_or(2.0);
@@ -3304,5 +3334,66 @@ mod tests {
         let bed = app.world_mut().spawn((Mesh3d(cube), LacerationBed, ChildOf(arm))).id();
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(dressed_as(&app, bed), None, "the wound bed was dressed");
+    }
+
+    /// **A surface may carry its own canvas size**, and every canvas it owns takes it: a skin's
+    /// flaymap, wetmap and dermis map, a cloth's wetmap, a floor's. One at 32 against one at the
+    /// dial's 128 is a sixteenth of the image bytes, and a hit on the small one still opens a wound.
+    /// Zero is not a size and leaves the dial's.
+    #[test]
+    fn a_surface_is_dressed_at_its_own_canvas_size() {
+        let mut app = headless();
+        let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.4, 0.4, 0.4).mesh().build());
+        let plane = app.world_mut().resource_mut::<Assets<Mesh>>().add(Plane3d::new(Vec3::Y, Vec2::splat(1.0)).mesh().build());
+        let world = app.world_mut();
+        let mut spawn = |gore: Gore, mesh: &Handle<Mesh>| world.spawn((Mesh3d(mesh.clone()), Transform::IDENTITY, GlobalTransform::IDENTITY, gore)).id();
+        let small = spawn(Gore::skin(Region::Limb).with_canvas(32), &mesh);
+        let big = spawn(Gore::skin(Region::Limb), &mesh);
+        let zero = spawn(Gore::skin(Region::Limb).with_canvas(0), &mesh);
+        let cloth = spawn(Gore::cloth().with_canvas(64), &mesh);
+        let floor = spawn(Gore::floor().with_canvas(48), &plane);
+        app.world_mut().run_schedule(FixedUpdate);
+        let dial = app.world().resource::<GoreDials>().canvas;
+        let sizes = |e: Entity| {
+            let w = app.world();
+            (
+                w.get::<WetCanvas>(e).map(WetCanvas::size),
+                w.get::<FlayCanvas>(e).map(FlayCanvas::size),
+                w.get::<DermisCanvas>(e).map(DermisCanvas::size),
+            )
+        };
+        assert_eq!(sizes(small), (Some(32), Some(32), Some(32)), "every canvas of a skin takes its edge");
+        assert_eq!(sizes(big), (Some(dial), Some(dial), Some(dial)));
+        assert_eq!(sizes(zero), sizes(big), "zero was taken for a size");
+        assert_eq!(sizes(cloth), (Some(64), None, None));
+        assert_eq!(sizes(floor), (Some(48), None, None));
+        let image = |e: Entity| app.world().get::<WetCanvas>(e).map(|c| c.image_bytes()).unwrap_or(0);
+        assert_eq!(image(small) * (dial as usize / 32).pow(2), image(big), "bytes did not follow the edge squared");
+        app.world_mut().write_message(GoreHit::impact(small, Vec3::new(0.0, 0.0, 2.0), Vec3::NEG_Z, 0.03, 4.0));
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(open_wounds(&app, small), 1, "a hit on the small canvas opened no wound");
+    }
+
+    /// **What a dressed surface costs**, from the canvases themselves. Not a test: it prints the table
+    /// in `docs/preset.md`. Run it with
+    /// `cargo test -p bevy_carnage --lib -- dressed_surface_memory --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn dressed_surface_memory() {
+        let kib = |b: usize| format!("{:>7.0} KiB", b as f64 / 1024.0);
+        println!("{:<12}{:>6}  {:>11}  {:>11}  {:>11}", "surface", "edge", "main heap", "images x1", "total (x2)");
+        for edge in [64u32, 128, 256] {
+            for (name, gore) in [("skin", Gore::skin(Region::Torso)), ("cloth", Gore::cloth()), ("floor", Gore::floor())] {
+                let mut app = headless();
+                let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.4, 0.4, 0.4).mesh().build());
+                let e = app.world_mut().spawn((Mesh3d(mesh), Transform::IDENTITY, GlobalTransform::IDENTITY, gore.with_canvas(edge))).id();
+                app.world_mut().run_schedule(FixedUpdate);
+                let w = app.world();
+                let (wet, flay, dermis) = (w.get::<WetCanvas>(e), w.get::<FlayCanvas>(e), w.get::<DermisCanvas>(e));
+                let heap = wet.map_or(0, WetCanvas::heap_bytes) + flay.map_or(0, FlayCanvas::heap_bytes) + dermis.map_or(0, DermisCanvas::heap_bytes);
+                let image = wet.map_or(0, WetCanvas::image_bytes) + flay.map_or(0, FlayCanvas::image_bytes) + dermis.map_or(0, DermisCanvas::image_bytes);
+                println!("{name:<12}{edge:>6}  {}  {}  {}", kib(heap), kib(image), kib(heap + 2 * image));
+            }
+        }
     }
 }

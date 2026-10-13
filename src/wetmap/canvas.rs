@@ -244,6 +244,26 @@ impl WetCanvas {
         self.size
     }
 
+    /// **The bytes this canvas holds in the main world**, apart from its two images: the `(amount,
+    /// age)` buffer and its snapshot, the stamp scratch, and the CPU copy of each image. At 128 it is
+    /// 16 bytes a texel, 256 KiB. Nothing here is read back from `Assets<Image>`; see
+    /// [`image_bytes`](Self::image_bytes) for what the images add.
+    pub fn heap_bytes(&self) -> usize {
+        let cell = std::mem::size_of::<(u8, u16)>();
+        (self.wet.capacity() + self.prev.capacity()) * cell
+            + self.mask.capacity()
+            + self.fine.capacity()
+            + self.albedo_px.capacity()
+            + self.rough_px.capacity()
+    }
+
+    /// **The size of the two images this canvas uploads** (albedo and metallic-roughness), once. The
+    /// main world keeps a copy of each and the GPU holds another, so the memory they cost is twice this,
+    /// and `Assets<Image>` is where the first copy is. Eight bytes a texel: 128 KiB at 128.
+    pub fn image_bytes(&self) -> usize {
+        self.albedo_px.len() + self.rough_px.len()
+    }
+
     /// Normalised coverage at a texel, `0` outside the canvas — a texel that does not exist holds no
     /// blood.
     pub fn amount_at(&self, x: u32, y: u32) -> u8 {
