@@ -83,6 +83,12 @@ comes through soaks into the weave along a frayed front, pinker at its edge and 
 wet, and runs down the cloth only once it is saturated (`GoreDials::cloth_holds`). Before 0.5.29 the
 wound under a suit was never seen and the suit took a flat, glossy patch that ran in a straight column.
 
+**A blade cuts a slit** (0.5.31). A slash cuts the cloth over the skin it opens: a lens along the cut,
+as long as the blade and `SLIT_WIDTH` (0.3) of its half-length wide at the middle, its edges wavering
+and frayed, with no wipe around it. Its direction is the blade's travel read in the cloth's own UVs at
+the triangle it crossed, so it lies along the cut whatever way the garment's atlas is laid out. What
+shows through is the laceration as it looks on bare skin: a pale line, its bed the fat layer.
+
 **A shot that goes through** (0.5.30). Whether a projectile leaves a body is the game's ballistics —
 calibre, energy, armour — so the game says so: `GoreHit::impact(..).through()`. The preset finds where
 the ray leaves the part it entered and opens an exit there, `EXIT_SCALE` (1.6) times the entry's
@@ -300,17 +306,17 @@ the player never sees up close, and the wrong one for the one they shoot.
 - **A piece of a skinned body is rigid.** It is carried by one bone, to where that bone is, and does
   not bend with the pose: a thigh cut across a bent knee is a straight piece standing where the thigh
   was. The break itself is exact to the bone; the shape of each piece is the bind pose's.
-- **A hole does not fray or tear further, and a slash does not cut cloth.** Only an impact holes a
-  cloth, and it holds the shape it was shot with. A broken body's pieces are skin: the shirt goes
-  with the body it was on.
+- **A hole or a slit does not fray or tear further.** It holds the shape it was cut with. A broken
+  body's pieces are skin: the shirt goes with the body it was on.
 - **An exit is on the part that was entered, and the spray sees through things.** A shot through an
   arm into the chest exits the arm; the chest takes the forward spatter, not a second wound. Every
   droplet is cast at every surface on its own, so a wall behind a shirt is spattered as if the shirt
   were not in the way — true of the entry's spray too, and of every release before this one.
-- **A floor stain far from the body dries as a square.** Seen from behind the body in the default
-  skinned clip, the entry's back spatter on the floor in front of it reads as pale squares with a
-  darker rim and a tab, not drops. Not caused here and not fixed here; the committed clips do not
-  look that way.
+- **Wet blood on a floor reads pale at a grazing angle under a plain `AmbientLight`.** Seen low and
+  from far off, a fresh pool is a pale pink shape with a darker rim, not a red one; from above the
+  same pool is dark red. The likely cause, not yet tested: the film is smoother than the floor, and
+  at a grazing angle its Fresnel reflection of Bevy's uniform ambient, a bright sky from every
+  direction, outweighs its colour. A scene with an environment map would reflect its own sky.
 - **A skin's roughness map and a crater's slope give way.** See *What a dressed skin keeps*.
 - **One ageing bruise per mesh entity.** A second blow on the same entity starts a new bruise, and
   the first stops ageing where it was. Wounds have no such limit.

@@ -437,33 +437,13 @@ fn bind_landing(bind: &Mesh, landing: &Landing) -> Option<(Vec3, Vec3)> {
 /// so a drop striking a wall at a slant is an ellipse drawn out the way it was going, with its spines
 /// downrange. `None` for a triangle with no area or no UV extent, or a path along the face.
 fn hard_stain(mesh: &Mesh, xf: &GlobalTransform, l: &Landing, d: &crate::bloodstain::Droplet, blood: &BloodSettings, seed: u32) -> Option<StainShape> {
-    let Ok(Some(VertexAttributeValues::Float32x3(positions))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_POSITION) else {
-        return None;
-    };
-    let Ok(Some(VertexAttributeValues::Float32x2(uvs))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_UV_0) else {
-        return None;
-    };
-    let [p0, p1, p2] = l.tri.map(|v| positions.get(v as usize).copied().map(Vec3::from));
-    let [t0, t1, t2] = l.tri.map(|v| uvs.get(v as usize).copied().map(Vec2::from));
-    let (p0, p1, p2, t0, t1, t2) = (p0?, p1?, p2?, t0?, t1?, t2?);
-    let (e1, e2) = (p1 - p0, p2 - p0);
-    let normal = e1.cross(e2).normalize_or_zero();
     // The path in the mesh's own space, where the triangle is.
     let path = xf.affine().inverse().transform_vector3(Vec3::from_array(d.dir)).normalize_or_zero();
+    let (travel, normal) = face_uv(mesh, l.tri, path)?;
     let sin_theta = path.dot(normal).abs();
-    if normal == Vec3::ZERO || path == Vec3::ZERO || sin_theta < 1.0e-3 {
+    if path == Vec3::ZERO || sin_theta < 1.0e-3 {
         return None;
     }
-    // Along the face, into UV: `w = a·e1 + b·e2` by the triangle's Gram matrix, then `a·Δuv1 + b·Δuv2`.
-    let along = path - normal * path.dot(normal);
-    let (g11, g12, g22) = (e1.dot(e1), e1.dot(e2), e2.dot(e2));
-    let det = g11 * g22 - g12 * g12;
-    if det.abs() < 1.0e-12 {
-        return None;
-    }
-    let (we1, we2) = (along.dot(e1), along.dot(e2));
-    let (a, b) = ((we1 * g22 - we2 * g12) / det, (we2 * g11 - we1 * g12) / det);
-    let travel = (t1 - t0) * a + (t2 - t0) * b;
     let impact = crate::bloodstain::Impact {
         speed: d.speed,
         diameter: d.diameter,
@@ -472,6 +452,32 @@ fn hard_stain(mesh: &Mesh, xf: &GlobalTransform, l: &Landing, d: &crate::bloodst
         travel: if travel.is_finite() { travel.to_array() } else { [0.0, 0.0] },
     };
     Some(crate::bloodstain::stain_shape(&impact, blood, seed))
+}
+
+/// **A mesh-space vector, laid along triangle `tri` and read in UV**: its part along the face, as the
+/// change of `UV_0` it makes there — `w = a·e1 + b·e2` by the triangle's Gram matrix, then
+/// `a·Δuv1 + b·Δuv2` — and the face's unit normal. `None` for a triangle with no area or no UVs.
+fn face_uv(mesh: &Mesh, tri: [u32; 3], v: Vec3) -> Option<(Vec2, Vec3)> {
+    let Ok(Some(VertexAttributeValues::Float32x3(positions))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_POSITION) else {
+        return None;
+    };
+    let Ok(Some(VertexAttributeValues::Float32x2(uvs))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_UV_0) else {
+        return None;
+    };
+    let [p0, p1, p2] = tri.map(|i| positions.get(i as usize).copied().map(Vec3::from));
+    let [t0, t1, t2] = tri.map(|i| uvs.get(i as usize).copied().map(Vec2::from));
+    let (p0, p1, p2, t0, t1, t2) = (p0?, p1?, p2?, t0?, t1?, t2?);
+    let (e1, e2) = (p1 - p0, p2 - p0);
+    let normal = e1.cross(e2).normalize_or_zero();
+    let (g11, g12, g22) = (e1.dot(e1), e1.dot(e2), e2.dot(e2));
+    let det = g11 * g22 - g12 * g12;
+    if normal == Vec3::ZERO || det.abs() < 1.0e-12 {
+        return None;
+    }
+    let along = v - normal * v.dot(normal);
+    let (we1, we2) = (along.dot(e1), along.dot(e2));
+    let (a, b) = ((we1 * g22 - we2 * g12) / det, (we2 * g11 - we1 * g12) / det);
+    Some(((t1 - t0) * a + (t2 - t0) * b, normal))
 }
 
 /// The UV a world ray lands on, by the same Möller–Trumbore walk the canvases use — the preset needs
@@ -1215,6 +1221,12 @@ pub const HOLE_OPEN: f32 = 0.85;
 pub const HOLE_RIM: f32 = 1.5;
 /// The ratio the fabric is multiplied by at the hole's edge. Own number.
 const HOLE_WIPE: [f32; 3] = [0.32, 0.29, 0.27];
+/// **How wide a blade's slit in cloth opens at its middle**, as a share of its half-length: `0.3`. A
+/// cut weave is held under tension by the garment and parts; this crate's own number, set so the slit
+/// shows the laceration under it. At `0.18` it was a hairline a pixel or two wide at the demo's framing.
+pub const SLIT_WIDTH: f32 = 0.3;
+/// The ratio the fabric is multiplied by along a slit's frayed edge: its own shadow, no soot. Own number.
+const SLIT_FRAY: [f32; 3] = [0.62, 0.60, 0.58];
 
 impl ClothHoles {
     fn new(images: &mut Assets<Image>, size: u32) -> Self {
@@ -1254,8 +1266,7 @@ impl ClothHoles {
         if !uv.is_finite() || !radius_uv.is_finite() || radius_uv <= 0.0 {
             return;
         }
-        let canvas = &mut self.canvas;
-        let size = canvas.size;
+        let size = self.canvas.size;
         let n = size as i64;
         let reach = radius_uv * HOLE_RIM;
         let r_px = ((reach * size as f32).ceil() as i64).clamp(0, n);
@@ -1287,19 +1298,69 @@ impl ClothHoles {
                 if a <= 0.0 {
                     continue;
                 }
-                let i = ((y * n + x) * 4) as usize;
-                if let Some(px) = canvas.px.get_mut(i..i + 4) {
-                    let old_a = px[3] as f32 / 255.0;
-                    if a <= old_a {
-                        continue;
-                    }
-                    for (ch, wipe) in HOLE_WIPE.iter().enumerate() {
-                        px[ch] = px[ch].min((wipe * 255.0).round() as u8);
-                    }
-                    px[3] = (a * 255.0).round() as u8;
-                    canvas.dirty = true;
-                }
+                self.mark(x, y, a, &HOLE_WIPE);
             }
+        }
+    }
+
+    /// **Cut a slit**, a blade's, centred on `uv` and running `half_uv` either way from it, in this
+    /// canvas's UV. It is a lens: [`SLIT_WIDTH`] of its half-length wide at the middle and closing to
+    /// nothing at the ends, its edges wavering along the cut and frayed per texel by `seed`. A blade
+    /// leaves no wipe, so the ring around it is the fabric's own fraying, paler than a bullet's.
+    pub fn slit(&mut self, uv: Vec2, half_uv: Vec2, seed: u32) {
+        let len = half_uv.length();
+        if !uv.is_finite() || !half_uv.is_finite() || len <= 0.0 {
+            return;
+        }
+        let dir = half_uv / len;
+        let width = len * SLIT_WIDTH;
+        let size = self.canvas.size;
+        let n = size as i64;
+        let pad = width * 2.0;
+        let (lo, hi) = (uv - half_uv.abs() - Vec2::splat(pad), uv + half_uv.abs() + Vec2::splat(pad));
+        let (x0, y0) = (((lo.x * size as f32).floor() as i64).clamp(0, n), ((lo.y * size as f32).floor() as i64).clamp(0, n));
+        let (x1, y1) = (((hi.x * size as f32).ceil() as i64).clamp(0, n), ((hi.y * size as f32).ceil() as i64).clamp(0, n));
+        let phase = crate::bloodstain::hash_f32(seed ^ 0x2C1B_3C6D) * core::f32::consts::TAU;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let p = Vec2::new((x as f32 + 0.5) / size as f32, (y as f32 + 0.5) / size as f32) - uv;
+                let t = (p.dot(dir) / len).clamp(-1.0, 1.0);
+                let off = (p - dir * (t * len)).length();
+                let jitter = crate::bloodstain::hash_f32(seed ^ ((y as u32).wrapping_mul(0x9E37_79B9) ^ (x as u32).wrapping_mul(0x85EB_CA6B)));
+                let waver = 1.0 + 0.2 * libm::sinf(5.0 * core::f32::consts::PI * t + phase);
+                let edge = width * libm::sqrtf(1.0 - t * t) * waver * (0.8 + 0.4 * jitter);
+                let fray = edge + width * 0.8;
+                let a = if off <= edge {
+                    1.0
+                } else if off < fray {
+                    let s = (off - edge) / (fray - edge);
+                    0.35 * (1.0 - s) * (1.0 - s)
+                } else {
+                    0.0
+                };
+                self.mark(x, y, a, &SLIT_FRAY);
+            }
+        }
+    }
+
+    /// Raise texel `(x, y)` to opening `a`, darkening it toward `tint`; a texel already as open is
+    /// left alone, so cuts overlap rather than heal one another.
+    fn mark(&mut self, x: i64, y: i64, a: f32, tint: &[f32; 3]) {
+        if a <= 0.0 {
+            return;
+        }
+        let n = self.canvas.size as i64;
+        let i = ((y * n + x) * 4) as usize;
+        if let Some(px) = self.canvas.px.get_mut(i..i + 4) {
+            let old_a = px[3] as f32 / 255.0;
+            if a <= old_a {
+                return;
+            }
+            for (ch, t) in tint.iter().enumerate() {
+                px[ch] = px[ch].min((t * 255.0).round() as u8);
+            }
+            px[3] = (a * 255.0).round() as u8;
+            self.canvas.dirty = true;
         }
     }
 }
@@ -2181,8 +2242,9 @@ fn take_hits(
         // and the skin it wounds — a shirt over the wound, a curtain in front of the body — and opens
         // a hole in each where it crossed, so the wound under clothing is seen. A cloth behind the
         // skin is not reached when the shot stopped in the body; one that goes through holes it too,
-        // where it last crosses: the back of the shirt, a curtain behind.
-        if let (HitKind::Impact { .. }, Some(skin_landing)) = (hit.kind, landed) {
+        // where it last crosses: the back of the shirt, a curtain behind. **A blade cuts a slit**
+        // instead, in the cloth over the skin it opens, as long as the cut and along it.
+        if let (HitKind::Impact { .. } | HitKind::Slash { .. }, Some(skin_landing)) = (hit.kind, landed) {
             for surface in surfaces.iter().filter(|s| s.gore.kind == GoreKind::Cloth) {
                 let Some(asset) = meshes.get(&surface.mesh) else { continue };
                 let Some((cloth_mesh, cloth_xf)) = cast_at(surface, asset, &rigging, &mut posed, &identity) else { continue };
@@ -2191,16 +2253,35 @@ fn take_hits(
                     continue;
                 }
                 let front = ray_hit(cloth_mesh, cloth_xf, hit.from, hit.dir).filter(|c| c.t <= skin_landing.t);
-                let behind = if hit.through { ray_exit(cloth_mesh, cloth_xf, hit.from, hit.dir).filter(|c| c.t > skin_landing.t) } else { None };
-                let radius_uv = hit.radius_m * surface.gore.density() / crate::flaymap::UV_SPAN_M;
-                let openings: Vec<(Vec2, f32)> = [front.map(|c| (c.uv, radius_uv)), behind.map(|c| (c.uv, radius_uv * EXIT_SCALE))].into_iter().flatten().collect();
-                if !openings.is_empty()
+                let mut holes: Vec<(Vec2, f32)> = Vec::new();
+                let mut slits: Vec<(Vec2, Vec2)> = Vec::new();
+                match hit.kind {
+                    HitKind::Slash { along, .. } => {
+                        // The blade's half-length, carried into the cloth's own space and read in its UV
+                        // at the triangle it crossed.
+                        let half = cloth_xf.affine().inverse().transform_vector3(along.normalize_or_zero() * hit.radius_m);
+                        if let Some(c) = front
+                            && let Some((half_uv, _)) = face_uv(cloth_mesh, c.tri, half)
+                        {
+                            slits.push((c.uv, half_uv));
+                        }
+                    }
+                    _ => {
+                        let behind = if hit.through { ray_exit(cloth_mesh, cloth_xf, hit.from, hit.dir).filter(|c| c.t > skin_landing.t) } else { None };
+                        let radius_uv = hit.radius_m * surface.gore.density() / crate::flaymap::UV_SPAN_M;
+                        holes.extend([front.map(|c| (c.uv, radius_uv)), behind.map(|c| (c.uv, radius_uv * EXIT_SCALE))].into_iter().flatten());
+                    }
+                }
+                if !(holes.is_empty() && slits.is_empty())
                     && let Ok(mut e) = commands.get_entity(surface.entity)
                 {
                     e.queue(move |mut e: EntityWorldMut| {
-                        if let Some(mut holes) = e.get_mut::<ClothHoles>() {
-                            for (uv, radius_uv) in openings {
-                                holes.open(uv, radius_uv, seed);
+                        if let Some(mut cloth) = e.get_mut::<ClothHoles>() {
+                            for (uv, radius_uv) in holes {
+                                cloth.open(uv, radius_uv, seed);
+                            }
+                            for (uv, half_uv) in slits {
+                                cloth.slit(uv, half_uv, seed);
                             }
                         }
                     });
@@ -3135,6 +3216,44 @@ mod tests {
         assert_eq!(wall_wet, 0.0, "a shot that stopped spattered the wall behind the body");
         assert!(!holed, "a shot that stopped holed the curtain behind the body");
         assert_eq!(normals.len(), 1);
+    }
+
+    /// **A blade cuts a slit in the cloth over the skin it opens, along the cut.** A sheet of cloth in
+    /// front of a skin box, a slash across it along world `X`, which on this plane is the atlas's `u`.
+    /// The cloth is open at the middle of the cut; the opening runs at least twice as far along `u` as
+    /// across it, where a bullet's round hole runs as far either way; and its length is about the blade's.
+    #[test]
+    fn a_slash_cuts_a_slit_along_the_blade_in_the_cloth_over_the_wound() {
+        let mut app = headless();
+        let world = app.world_mut();
+        let (body, sheet) = {
+            let mut meshes = world.resource_mut::<Assets<Mesh>>();
+            (meshes.add(Cuboid::new(0.6, 0.6, 0.2).mesh().build()), meshes.add(Plane3d::new(Vec3::Z, Vec2::splat(0.5)).mesh().build()))
+        };
+        let body = world.spawn((Mesh3d(body), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Torso))).id();
+        let at = Transform::from_xyz(0.0, 0.0, 0.15);
+        let cloth = world.spawn((Mesh3d(sheet), at, GlobalTransform::from(at), Gore::cloth().with_canvas(128))).id();
+        app.world_mut().run_schedule(FixedUpdate);
+        app.world_mut().write_message(GoreHit::slash(body, Vec3::new(0.0, 0.0, 2.0), Vec3::NEG_Z, Vec3::X, 0.1, 5.0));
+        app.world_mut().run_schedule(FixedUpdate);
+        let Some(holes) = app.world().get::<ClothHoles>(cloth) else { panic!("the cloth was not dressed") };
+        assert!(holes.is_open_at(Vec2::splat(0.5)), "the cloth is not open at the middle of the cut");
+        let n = 128;
+        let (mut us, mut vs) = (Vec::new(), Vec::new());
+        for y in 0..n {
+            for x in 0..n {
+                if holes.is_open_at(Vec2::new((x as f32 + 0.5) / n as f32, (y as f32 + 0.5) / n as f32)) {
+                    us.push(x);
+                    vs.push(y);
+                }
+            }
+        }
+        let extent = |v: &[i32]| v.iter().max().zip(v.iter().min()).map_or(0, |(a, b)| a - b + 1);
+        let (along, across) = (extent(&us), extent(&vs));
+        assert!(along >= 2 * across, "the slit is {along} texels along the blade and {across} across it");
+        // A 0.2 m blade on a 1 m sheet of 128 texels is 25.6 texels end to end; the lens closes before
+        // its tips.
+        assert!((14..=27).contains(&along), "the slit is {along} texels long for a 25.6-texel blade");
     }
 
     /// **An atlas density nobody stated is measured from the mesh, at its world scale.** A 3 m

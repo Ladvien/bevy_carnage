@@ -74,6 +74,7 @@ fn main() {
     rec.warm_up(6);
     let breaking = breaking();
     let through = flag("--through");
+    let shirt = shirted();
     let mut aim = bevy::ecs::system::SystemState::<mannequin::Aim>::new(rec.world());
     for frame in 0..FRAMES {
         {
@@ -85,6 +86,7 @@ fn main() {
                 120 | 150 => aim.shot(Bone::Spine, -0.22, 0.035, 9.0),
                 190 => aim.blow(Bone::LegLowL, 0.12, 0.04),
                 200 if breaking => aim.shot(Bone::Spine, -0.22, 0.035, 60.0),
+                200 if shirt => aim.slash(Bone::Spine, -0.05, Vec3::new(1.0, -0.35, 0.0).normalize(), 0.09, 6.0),
                 _ => None,
             });
             if let Some(hit) = hit {

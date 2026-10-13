@@ -1,5 +1,8 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.31`: a blade cuts the shirt** (`AG-104`). A slash left the cloth over it whole. It now cuts a
+# slit along the blade (`ClothHoles::slit`, `SLIT_WIDTH`), its direction read in the garment's own UVs.
+#
 # **`0.5.30`: a shot that goes through** (`AG-103`). Every impact stopped in the body: no exit wound,
 # and nothing behind a victim was ever touched. `GoreHit::through()` opens an exit where the ray leaves
 # the part, `EXIT_SCALE` wider, bleeding, and throws its forward spatter (`FORWARD_MIST` times its area)
@@ -169,7 +172,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.30"
+version = "0.5.31"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
