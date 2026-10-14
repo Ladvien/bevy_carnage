@@ -72,6 +72,12 @@ impl Pose {
         self.matrices.is_empty()
     }
 
+    /// The matrix joint `joint` moves its vertices by — `joint_global · inverse_bindpose` — or `None`
+    /// past the end of the pose.
+    pub fn joint(&self, joint: u16) -> Option<&Mat4> {
+        self.matrices.get(joint as usize)
+    }
+
     /// **A vertex's world matrix**: its four joint matrices blended by its four weights, exactly as
     /// `skin_model` sums them — no renormalisation, so a vertex whose weights do not add to one is
     /// scaled the way the GPU scales it. `None` when a weight is not finite or a joint index is past
@@ -165,8 +171,22 @@ pub fn posed_mesh(mesh: &Mesh, pose: &Pose) -> Option<Mesh> {
         return None;
     };
     let mut posed = Vec::with_capacity(positions.len());
+    // The last blend, by its exact inputs: runs of vertices on the same joints with the same weights —
+    // every vertex of a part carried by one bone — blend once. The same inputs give the same matrix to
+    // the bit, so this is the blend `rig.matrix` would have made.
+    let mut last: Option<([u16; 4], [u32; 4], Mat4)> = None;
     for (vertex, at) in positions.iter().enumerate() {
-        let world = rig.matrix(pose, vertex)?.transform_point3(Vec3::from_array(*at));
+        let (joints, weights) = (*rig.joints.get(vertex)?, *rig.weights.get(vertex)?);
+        let key = weights.map(f32::to_bits);
+        let blended = match last {
+            Some((j, w, m)) if j == joints && w == key => m,
+            _ => {
+                let m = pose.blend(joints, weights)?;
+                last = Some((joints, key, m));
+                m
+            }
+        };
+        let world = blended.transform_point3(Vec3::from_array(*at));
         if !world.is_finite() {
             return None;
         }

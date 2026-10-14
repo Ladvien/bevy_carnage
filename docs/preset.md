@@ -501,6 +501,21 @@ interleaved with 0.5.59: one hit on one character 0.50 to 0.31 ms a tick, one on
 left at forty is not casting — 0.12 ms of the spray — but the stains the droplets leave on the other
 bodies, 6.1 ms: each is rasterised at the edge's supersampling.
 
+**Since 0.5.61 a skinned crowd costs what a rigid one does.** Every measurement above is of rigid
+parts. A game's crowd is skinned, and the same scene with every part skinned took twelve hits in
+23.2 ms a tick, because every batch posed every skinned surface in the world — a blend of up to four
+joint matrices per vertex — to box it for the spray, and every cast at a pose walked all its
+triangles. Now a skinned surface is boxed by its joints without being posed: each joint's
+bind-space box of the vertices it moves, carried by the joint's matrix, contains every vertex it
+blends, padded for weights that do not add to one, with the origin for a vertex that has none
+(`a_skinned_mesh_is_boxed_by_its_joints_without_being_posed`). A surface is posed only when a ray
+reaches that box; the pose reuses the blend of the vertex before when its joints and weights are the
+same; and the index built over its bind pose is refitted to the pose, its boxes moved and its
+triangles not, so a cast at it tests only what it can reach and lands exactly where walking them all
+does. On `big`, interleaved with 0.5.60: forty skinned characters 23.2 to 10.5 ms a tick, against
+9.4 for forty rigid ones; one skinned character 1.94 to 1.41, its worst tick 6.5 to 2.6. Every frame
+of the skinned clips and the tiers is byte-identical.
+
 ## What it costs in memory
 
 Every dressed surface owns canvases, and a canvas is a few bytes a texel: the table is what one costs,

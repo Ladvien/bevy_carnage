@@ -68,6 +68,68 @@ impl Bvh {
         Self { nodes, tris: items.into_iter().map(|item| item.tri).collect() }
     }
 
+    /// This hierarchy, to cast through.
+    pub(crate) fn fitted(&self) -> Fitted<'_> {
+        Fitted { tree: self, nodes: &self.nodes }
+    }
+
+    /// **The same tree with its boxes fitted to `positions` instead**: the vertices moved — a skinned
+    /// mesh posed — and the triangles not. Bottom up, each leaf's box round its triangles' corners where
+    /// they are now, padded as a built one is, and each parent's round its children's. One pass over the
+    /// triangles, against a cast walking all of them; every box still holds its triangles, so a cast
+    /// through it lands exactly where walking them does.
+    pub(crate) fn refit(&self, positions: &[[f32; 3]]) -> Refit {
+        let at = |i: u32| positions.get(i as usize).map(|p| Vec3::from(*p));
+        let mut nodes = self.nodes.clone();
+        for k in (0..nodes.len()).rev() {
+            let Some(node) = nodes.get(k).copied() else { continue };
+            let (lo, hi) = if node.count > 0 {
+                let (mut lo, mut hi) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+                for tri in self.tris.get(node.start as usize..(node.start + node.count) as usize).unwrap_or(&[]) {
+                    // A corner that is not there is a triangle a cast passes over, whose box is moot.
+                    for p in tri.corners.iter().filter_map(|&c| at(c)) {
+                        lo = lo.min(p);
+                        hi = hi.max(p);
+                    }
+                }
+                let pad = (hi - lo).max_element() * 1.0e-5 + lo.abs().max(hi.abs()).max_element() * 1.0e-6 + 1.0e-12;
+                (lo - Vec3::splat(pad), hi + Vec3::splat(pad))
+            } else {
+                // Children come after their parent, so both are already fitted.
+                match (nodes.get(k + 1), nodes.get(node.start as usize)) {
+                    (Some(l), Some(r)) => (l.lo.min(r.lo), l.hi.max(r.hi)),
+                    _ => (node.lo, node.hi),
+                }
+            };
+            if let Some(slot) = nodes.get_mut(k) {
+                slot.lo = lo;
+                slot.hi = hi;
+            }
+        }
+        Refit { nodes }
+    }
+
+    /// This tree with the boxes of `refit`, which must have been fitted from it.
+    pub(crate) fn with<'a>(&'a self, refit: &'a Refit) -> Fitted<'a> {
+        Fitted { tree: self, nodes: &refit.nodes }
+    }
+}
+
+/// **A tree's boxes fitted to moved vertices** — see [`Bvh::refit`]; cast through it with
+/// [`Bvh::with`].
+#[derive(Debug)]
+pub(crate) struct Refit {
+    nodes: Vec<Node>,
+}
+
+/// **A tree and the boxes to cast through it with**: its own, or a [`Refit`] of them.
+#[derive(Clone, Copy)]
+pub(crate) struct Fitted<'a> {
+    tree: &'a Bvh,
+    nodes: &'a [Node],
+}
+
+impl Fitted<'_> {
     /// **The nearest crossing of the ray from `origin` along `d`**, as `cross` measures it, and the
     /// triangle it is on: the least `(t, ordinal)` over every triangle, which is what walking them in
     /// index order and keeping the strictly nearer finds.
@@ -82,6 +144,7 @@ impl Bvh {
         let mut best: Option<(f32, f32, f32, Tri)> = None;
         let mut stack = [0u32; DEPTH];
         let mut top = if self.nodes.is_empty() { 0 } else { 1 };
+        let tris = &self.tree.tris;
         while top > 0 {
             top -= 1;
             let Some(node) = stack.get(top).and_then(|&k| self.nodes.get(k as usize).map(|n| (k, *n))) else { break };
@@ -91,7 +154,7 @@ impl Bvh {
             }
             if node.count > 0 {
                 let (from, to) = (node.start as usize, node.start as usize + node.count as usize);
-                for tri in self.tris.get(from..to).unwrap_or(&[]) {
+                for tri in tris.get(from..to).unwrap_or(&[]) {
                     let [a, b, c] = tri.corners;
                     let (Some(pa), Some(pb), Some(pc)) = (corner(a), corner(b), corner(c)) else { continue };
                     let Some((t, u, v)) = cross(origin, d, [pa, pb, pc]) else { continue };
