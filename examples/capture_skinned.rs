@@ -18,6 +18,9 @@
 //! both ageing. `--stroll` takes no hits: the body walks along a tiled floor instead of in place,
 //! through a spill of blood painted on the floor ahead of it at frame 0, and every foot it puts down is
 //! sent as a `GoreStep` — so it walks out of the spill leaving prints that fade, seen from above.
+//! `--guard` stands the body on guard in front of the wall instead of walking, the right forearm held
+//! across the chest, and takes one shot through it at frame 40: it goes in and out of the forearm and
+//! on into the chest, and once the arm is lowered the wound it hid is seen, its forward spatter round it.
 //!
 //! Writes `frame0000.png …` and prints one digest line; two runs must print the same line.
 //!
@@ -62,11 +65,20 @@ fn main() {
             .and_then(|v| (v.len() == 3).then(|| Vec3::new(v[0], v[1], v[2])))
     };
     let stroll = flag("--stroll");
-    // A stroll is seen from above and to the side, the whole path in frame and the prints facing up at it.
-    let at = point("--at").unwrap_or(if stroll { Vec3::new(0.05, 0.5, 0.05) } else { Vec3::new(0.12, 0.93, 0.1) });
+    let guard = flag("--guard");
+    // A stroll is seen from above and to the side, the whole path in frame and the prints facing up at
+    // it; a guard from in front and to the left, close on the chest and the forearm across it.
+    let at = point("--at").unwrap_or(if stroll {
+        Vec3::new(0.05, 0.5, 0.05)
+    } else if guard {
+        Vec3::new(-0.03, 1.24, 0.06)
+    } else {
+        Vec3::new(0.12, 0.93, 0.1)
+    });
     let camera = match point("--eye") {
         Some(eye) => Transform::from_translation(eye).looking_at(at, Vec3::Y),
         None if stroll => Transform::from_xyz(-2.9, 2.75, 0.15).looking_at(at, Vec3::Y),
+        None if guard => Transform::from_xyz(-0.5, 1.46, 1.5).looking_at(at, Vec3::Y),
         None => mannequin::view(),
     };
     let Some(mut rec) = Recorder::new_with(800, 500, camera, &out, |app| {
@@ -82,6 +94,8 @@ fn main() {
             .add_systems(Startup, setup);
         if flag("--stroll") {
             app.add_systems(Update, mannequin::stroll_animate);
+        } else if flag("--guard") {
+            app.add_systems(Update, mannequin::guard_animate);
         } else {
             app.add_systems(Update, mannequin::animate);
         }
@@ -98,7 +112,7 @@ fn main() {
     }
     rec.warm_up(6);
     let breaking = breaking();
-    let through = flag("--through");
+    let through = flag("--through") || guard;
     let shirt = shirted();
     // `--quiet` takes no hits; `--reset-at N` heals the body and wipes every surface on frame `N`,
     // after which a run is the quiet one again, frame for frame.
@@ -128,6 +142,8 @@ fn main() {
             }
             let hit = aim.get(world).ok().and_then(|aim| match frame {
                 _ if quiet || stroll => None,
+                40 if guard => aim.shot(Bone::ArmLowR, 0.16, 0.014, 7.0),
+                _ if guard => None,
                 60 if blows => aim.blow(Bone::LegLowL, 0.32, 0.04),
                 30 => aim.shot(Bone::ArmLowL, 0.13, 0.03, 7.0),
                 66 => aim.slash(Bone::LegUpR, 0.20, Vec3::new(0.8, -0.6, 0.0).normalize(), 0.07, 6.0),
@@ -221,7 +237,7 @@ fn setup(
     } else {
         preset_scene::spawn_set(&mut commands, &mut meshes, &mut materials);
     }
-    if flag("--through") {
+    if flag("--through") || flag("--guard") {
         preset_scene::spawn_wall(&mut commands, &mut meshes, &mut materials);
     }
 }

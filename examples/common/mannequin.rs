@@ -168,6 +168,56 @@ pub fn animate(time: Res<Time>, mut joints: Query<(&Joint, &mut Transform)>) {
     }
 }
 
+/// **When [`guard`] starts lowering the forearm**, seconds, and how long it takes to reach the side.
+pub const GUARD_DROP: f32 = 1.25;
+pub const GUARD_LOWER: f32 = 0.9;
+
+/// **Standing on guard, `t` seconds in**: a rotation for every joint, and how far the hips are lifted.
+/// The right forearm is held level across the chest, a hand's breadth in front of it, until
+/// [`GUARD_DROP`]; then the arm is lowered to the side over [`GUARD_LOWER`], so whatever is behind
+/// the forearm is seen. The body breathes and sways a little, and the legs stand.
+///
+/// The arm is posed by where its joints go rather than by angles: the elbow below and in front of the
+/// shoulder, the wrist across the body, each bone turned the shortest way from hanging, and each
+/// joint's rotation read back into its parent's frame.
+pub fn guard(t: f32) -> ([Quat; 11], f32) {
+    let (rx, ry) = (Quat::from_rotation_x, Quat::from_rotation_y);
+    let breath = (TAU * 0.25 * t).sin();
+    let hips = ry(0.03 * (TAU * 0.13 * t).sin());
+    let spine = rx(0.02 + 0.01 * breath);
+    let hang = |d: Vec3| Quat::from_rotation_arc(Vec3::NEG_Y, d.normalize());
+    let shoulder = Bone::ArmUpR.bind();
+    let (elbow, wrist) = (Vec3::new(-0.19, 1.27, 0.17), Vec3::new(0.10, 1.32, 0.17));
+    let u = ((t - GUARD_DROP) / GUARD_LOWER).clamp(0.0, 1.0);
+    let s = u * u * (3.0 - 2.0 * u);
+    let upper = hang(elbow - shoulder).slerp(hang(Vec3::new(-0.03, -1.0, 0.04)), s);
+    let lower = hang(wrist - elbow).slerp(hang(Vec3::new(0.0, -1.0, 0.14)), s);
+    let mut q = [Quat::IDENTITY; 11];
+    q[Bone::Hips as usize] = hips;
+    q[Bone::Spine as usize] = spine;
+    q[Bone::Head as usize] = rx(-0.03) * ry(-0.06);
+    q[Bone::ArmUpR as usize] = (hips * spine).inverse() * upper;
+    q[Bone::ArmLowR as usize] = upper.inverse() * lower;
+    q[Bone::ArmUpL as usize] = (hips * spine).inverse() * hang(Vec3::new(0.05, -1.0, 0.03 + 0.01 * breath));
+    q[Bone::ArmLowL as usize] = rx(-0.15);
+    for (thigh, shin) in [(Bone::LegUpL, Bone::LegLowL), (Bone::LegUpR, Bone::LegLowR)] {
+        q[thigh as usize] = rx(-0.04);
+        q[shin as usize] = rx(0.08);
+    }
+    (q, 0.004 * breath)
+}
+
+/// **Drive the skeleton through [`guard`] from the clock**, as [`animate`] does the walk.
+pub fn guard_animate(time: Res<Time>, mut joints: Query<(&Joint, &mut Transform)>) {
+    let (rotations, lift) = guard(time.elapsed_secs());
+    for (joint, mut tf) in &mut joints {
+        tf.rotation = rotations[joint.0 as usize];
+        if joint.0 == Bone::Hips {
+            tf.translation = Bone::Hips.bind() + Vec3::Y * lift;
+        }
+    }
+}
+
 /// **How long two steps of [`stroll`] take**, seconds: a slow, deliberate walk.
 pub const STROLL_PERIOD: f32 = 1.3;
 /// **The stance thigh's sweep either side of upright** in [`stroll`], radians: from `−` at touchdown,

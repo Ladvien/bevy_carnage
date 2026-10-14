@@ -1,5 +1,11 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.62`: a shot that goes through goes through everything on its line** (`AG-135`). A shot
+# through a forearm held across the chest went in and out of the forearm and stopped there. It now
+# walks every crossing of the body it was sent at, counting itself in and out of each mesh by the
+# winding of the triangles it crosses, and opens a wound at every way in and out; every cloth crossing
+# is holed. A skin takes each droplet as its own stain, as a wall does. `capture_skinned --guard`.
+#
 # **`0.5.61`: a skinned crowd costs what a rigid one does** (`AG-134`). Every batch posed every
 # skinned surface in the world to box it for the spray, and walked every pose's triangles. A skinned
 # surface is now boxed by its joints without posing it, posed only when a ray reaches it, with the
@@ -364,7 +370,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.61"
+version = "0.5.62"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

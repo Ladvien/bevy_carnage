@@ -1265,17 +1265,35 @@ impl Bounds {
     }
 }
 
-/// **Where a ray leaves a mesh**: its last crossing, found as the first crossing of the same line
-/// cast back from just past the mesh's box. `t` is in the forward ray's measure, so it compares with
-/// a [`ray_hit`] on the same ray. `None` when the ray never reaches the mesh.
-fn ray_exit(mesh: &Mesh, index: Option<crate::bvh::Fitted<'_>>, xf: &GlobalTransform, from: Vec3, dir: Vec3) -> Option<Landing> {
-    let (_, leaves) = Bounds::of(mesh, xf)?.span(from, dir)?;
-    let beyond = leaves + 1.0e-3 * (1.0 + leaves.abs());
-    if !beyond.is_finite() {
-        return None;
+/// **How far past a crossing a walk along a ray casts again**, metres: far enough that the surface just
+/// crossed is behind the new cast at any coordinate a scene uses — twenty `f32` steps at four metres
+/// from the origin — and near enough that no two surfaces a shot crosses lie closer together.
+const WALK_STEP: f32 = 1.0e-5;
+
+/// **The most crossings a walk along one ray reads**: a bound on what a pathological mesh can cost,
+/// far past the eight a shot through a forearm and a chest in a shirt makes.
+const MAX_CROSSINGS: usize = 64;
+
+/// **Every place a ray crosses `mesh`**, nearest first, out to `upto` in the ray's own measure: each
+/// cast from [`WALK_STEP`] past the one before, so `t` compares with a [`ray_cast`] on the same ray.
+/// The first is that cast, to the bit.
+fn crossings_of(mesh: &Mesh, index: Option<crate::bvh::Fitted<'_>>, xf: &GlobalTransform, from: Vec3, dir: Vec3, upto: f32) -> Vec<Landing> {
+    let step = WALK_STEP / dir.length();
+    let mut found = Vec::new();
+    if !step.is_finite() {
+        return found;
     }
-    let back = ray_cast(mesh, index, xf, from + dir * beyond, -dir)?;
-    Some(Landing { t: beyond - back.t, ..back })
+    let mut t0 = 0.0f32;
+    while found.len() < MAX_CROSSINGS {
+        let Some(landing) = ray_cast(mesh, index, xf, from + dir * t0, dir) else { break };
+        let t = t0 + landing.t;
+        if t > upto {
+            break;
+        }
+        found.push(Landing { t, ..landing });
+        t0 = t + step;
+    }
+    found
 }
 
 /// **What to cast at for one dressed surface**: its asset placed by its own transform, or, for a
@@ -1312,14 +1330,82 @@ fn is_under(root: Entity, entity: Entity, parents: &Query<&ChildOf>) -> bool {
     }
 }
 
-/// **The skin a ray reaches first under a character**: the nearest landing among the [`GoreKind::Skin`]
-/// surfaces below `hit.entity`, as each is drawn now. Clothing is not a candidate, because it is
-/// not what a wound opens on: the spray soaks it from the wound. Ties go to the lower entity, so the
-/// answer does not depend on the order a query happened to yield them. `None` when the ray reaches
-/// none of them.
+/// **The first surface a ray crosses among those `candidate` picks**, as each is drawn now: which, the
+/// landing on it, and the transform it was cast with. Ties go to the lower entity, so the answer does
+/// not depend on the order a query happened to yield them. `None` when the ray reaches none of them.
 #[allow(clippy::too_many_arguments)]
-fn nearest_skin(
+fn first_crossing(
+    candidate: impl Fn(&Surface) -> bool,
+    from: Vec3,
+    dir: Vec3,
+    surfaces: &[Surface],
+    meshes: &Assets<Mesh>,
+    rigging: &Rigging,
+    posed: &mut std::collections::HashMap<Entity, Option<Mesh>>,
+    bounds: &mut std::collections::HashMap<Entity, Reach>,
+    identity: &GlobalTransform,
+    index: &MeshIndex,
+    refits: &mut std::collections::HashMap<Entity, crate::bvh::Refit>,
+) -> Option<(Entity, Landing, GlobalTransform)> {
+    let mut best: Option<(Entity, Landing, GlobalTransform)> = None;
+    for surface in surfaces.iter().filter(|s| candidate(s)) {
+        let Some(asset) = meshes.get(&surface.mesh) else { continue };
+        let reach = *bounds.entry(surface.entity).or_insert_with(|| reach_of(surface, asset, rigging, posed, identity, index));
+        match reach {
+            Reach::Never => continue,
+            Reach::Within(b) if !b.reached_by(from, dir) => continue,
+            _ => {}
+        }
+        // Posed only now that the ray can reach it.
+        let Some((mesh, xf)) = cast_at(surface, asset, rigging, posed, identity) else { continue };
+        let xf = *xf;
+        let Some(landing) = ray_cast(mesh, cast_index(index, refits, surface, asset, mesh), &xf, from, dir) else { continue };
+        if best.as_ref().is_none_or(|(entity, l, _)| landing.t < l.t || (landing.t == l.t && surface.entity < *entity)) {
+            best = Some((surface.entity, landing, xf));
+        }
+    }
+    best
+}
+
+/// **The skins a hit at a character is cast at**: the [`GoreKind::Skin`] surfaces below the entity it
+/// names. Clothing is not a candidate, because it is not what a wound opens on: the spray soaks it from
+/// the wound.
+fn skin_under<'a>(root: Entity, parents: &'a Query<&ChildOf>) -> impl Fn(&Surface) -> bool + 'a {
+    move |s| matches!(s.gore.kind, GoreKind::Skin(_)) && is_under(root, s.entity, parents)
+}
+
+/// **One place a shot going through crosses the surface of the body it was sent at.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Leg {
+    /// It goes in here.
+    In,
+    /// It comes out here; `last` when nothing of the body lies beyond.
+    Out { last: bool },
+}
+
+/// **What [`take_hits`] works through**: a hit as the game sent it, or one leg of a shot going through,
+/// its `entity` the surface crossed there. A leg going in has its `from` where nothing of the body lies
+/// between it and the crossing; one coming out, just outside the crossing, and is cast back from there.
+enum Pass {
+    Sent(GoreHit),
+    Leg(GoreHit, Leg),
+}
+
+/// **The legs of a shot that goes through**: every place it crosses the surface of the body it was sent
+/// at, in order along it. The walk reads every crossing of every skin under the entity it was sent at
+/// — of that mesh alone, sent at one — nearest first, and keeps count of how deep in the body the shot
+/// is. A crossing goes in or comes out by its triangle's winding, read against the first crossing of
+/// the same mesh, which goes in because the shot starts outside: so a mesh wound inside out is read
+/// the right way round, and one made of overlapping shells counts each. A leg goes in where the count
+/// leaves zero and comes out where it returns there. A shot through a forearm held across the chest
+/// goes in and out of the forearm and then in and out of the chest; one through a shoulder where the
+/// arm's mesh overlaps the torso's goes in once and out once, since inside the overlap it is inside the
+/// body. A later leg in is [`EXIT_SCALE`] wider than the shot was sent: the projectile is the one that
+/// came out. Empty when the shot crosses nothing of the body.
+#[allow(clippy::too_many_arguments)]
+fn legs_through(
     hit: &GoreHit,
+    direct: bool,
     surfaces: &[Surface],
     parents: &Query<&ChildOf>,
     meshes: &Assets<Mesh>,
@@ -1329,27 +1415,72 @@ fn nearest_skin(
     identity: &GlobalTransform,
     index: &MeshIndex,
     refits: &mut std::collections::HashMap<Entity, crate::bvh::Refit>,
-) -> Option<Entity> {
-    let mut best: Option<(f32, Entity)> = None;
-    for surface in surfaces {
-        if !matches!(surface.gore.kind, GoreKind::Skin(_)) || !is_under(hit.entity, surface.entity, parents) {
+) -> Vec<Pass> {
+    let out = hit.dir.normalize_or_zero();
+    if out == Vec3::ZERO || !hit.from.is_finite() {
+        return Vec::new();
+    }
+    let root = hit.entity;
+    let skins = skin_under(root, parents);
+    let candidate = |s: &Surface| if direct { s.entity == root } else { skins(s) };
+    // Every crossing, nearest first: the surface, where, where its cast started, and its triangle's
+    // winding against the shot — negative where the triangle faces the shot.
+    let mut crossings: Vec<(Entity, Vec3, Vec3, f32)> = Vec::new();
+    let mut start = hit.from;
+    while crossings.len() < MAX_CROSSINGS {
+        let Some((entity, landing, xf)) = first_crossing(candidate, start, hit.dir, surfaces, meshes, rigging, posed, bounds, identity, index, refits) else {
+            break;
+        };
+        let at = start + hit.dir * landing.t;
+        let facing = landing.normal.dot(xf.affine().inverse().transform_vector3(hit.dir));
+        crossings.push((entity, at, start, facing));
+        start = at + out * WALK_STEP;
+    }
+    // Which sign of winding goes in, per mesh, and how deep the shot is.
+    let mut sense: Vec<(Entity, bool)> = Vec::new();
+    let mut depth = 0u32;
+    let mut legs: Vec<(usize, bool)> = Vec::new();
+    for (k, &(entity, _, _, facing)) in crossings.iter().enumerate() {
+        if facing == 0.0 || !facing.is_finite() {
             continue;
         }
-        let Some(asset) = meshes.get(&surface.mesh) else { continue };
-        let reach = *bounds.entry(surface.entity).or_insert_with(|| reach_of(surface, asset, rigging, posed, identity, index));
-        match reach {
-            Reach::Never => continue,
-            Reach::Within(b) if !b.reached_by(hit.from, hit.dir) => continue,
-            _ => {}
-        }
-        // Posed only now that the ray can reach it.
-        let Some((mesh, xf)) = cast_at(surface, asset, rigging, posed, identity) else { continue };
-        let Some(landing) = ray_cast(mesh, cast_index(index, refits, surface, asset, mesh), xf, hit.from, hit.dir) else { continue };
-        if best.is_none_or(|(t, entity)| landing.t < t || (landing.t == t && surface.entity < entity)) {
-            best = Some((landing.t, surface.entity));
+        let facing_in = match sense.iter().find(|(e, _)| *e == entity) {
+            Some(&(_, s)) => s,
+            None => {
+                sense.push((entity, facing < 0.0));
+                facing < 0.0
+            }
+        };
+        if (facing < 0.0) == facing_in {
+            depth += 1;
+            if depth == 1 {
+                legs.push((k, true));
+            }
+        } else if depth > 0 {
+            depth -= 1;
+            if depth == 0 {
+                legs.push((k, false));
+            }
         }
     }
-    best.map(|(_, entity)| entity)
+    let mut first = true;
+    let count = legs.len();
+    legs.iter()
+        .enumerate()
+        .filter_map(|(i, &(k, goes_in))| {
+            let &(entity, at, start, _) = crossings.get(k)?;
+            if goes_in {
+                let radius_m = if first { hit.radius_m } else { hit.radius_m * EXIT_SCALE };
+                first = false;
+                Some(Pass::Leg(GoreHit { entity, from: start, radius_m, ..*hit }, Leg::In))
+            } else {
+                // Just outside, but nearer than whatever the shot crosses next.
+                let gap = crossings.get(k + 1).map_or(f32::INFINITY, |c| c.1.distance(at));
+                let outside = at + out * SURFACE_STAND_OFF.min(0.5 * gap);
+                Some(Pass::Leg(GoreHit { entity, from: outside, ..*hit }, Leg::Out { last: i + 1 == count }))
+            }
+        })
+        .collect()
 }
 
 /// What [`dress`] visits: every [`Gore`] entity that has not been dressed yet.
@@ -2302,13 +2433,23 @@ impl GoreHit {
     }
     /// **The same impact, going through.** Whether a projectile leaves a body is the game's ballistics,
     /// not this crate's — its calibre, its energy, the armour — so the game says so. The preset then
-    /// finds where the ray leaves the part it entered, opens an exit wound there [`EXIT_SCALE`] times
-    /// the entry's radius, as an exit is larger and more ragged than the hole it went in by, bleeds
-    /// from both, and throws the exit's **forward spatter** along the shot onto whatever is behind: a
-    /// wall, the floor, the next body part. Every cloth the ray crosses is holed, behind the body as
-    /// well as in front. The exit is announced as a second [`Wounded`], after the entry's, at the exit
-    /// point with its outward normal, so whatever a game hangs on a wound happens at both. The exit is
-    /// on the part that was entered: a shot through an arm into the chest exits the arm.
+    /// goes through **everything of the body on the shot's line**: a shot through a forearm held
+    /// across the chest goes in and out of the forearm, then in and out of the chest. Each way out is an
+    /// exit wound [`EXIT_SCALE`] times the entry's radius, as an exit is larger and more ragged than the
+    /// hole it went in by, and throws its **forward spatter** along the shot onto whatever is behind:
+    /// the chest the forearm was held over, a wall, the floor. A way back in after the first is as wide
+    /// as an exit, since the projectile is the one that came out. Every wound bleeds, every cloth the
+    /// ray crosses is holed — in front, between the parts, and behind — and every wound is announced as
+    /// a [`Wounded`] of its own, in order along the shot, an exit's normal facing the way the shot left.
+    ///
+    /// "The body" is every [`Gore::skin`] under the entity the hit names, or, sent at a mesh, that mesh,
+    /// so one mesh with an arm in front of its chest is gone through the same way. Where parts overlap
+    /// — an upper arm into the shoulder — the shot is inside the body all through the overlap and opens
+    /// nothing there. The walk counts the shot in and out of each mesh by the winding of the triangles it
+    /// crosses, so a part is read as closed; one left open where the shot leaves it opens no exit there.
+    /// A shot is never
+    /// carried on into a second character: whether it still could is the game's ballistics again, and
+    /// the last [`Wounded`] is where it left.
     pub fn through(mut self) -> Self {
         self.through = true;
         self
@@ -2785,9 +2926,12 @@ fn throw_spray(
         let Ok((_, _, _, _, _, Some(mut wet))) = bodies.get_mut(s.entity) else { continue };
         let texels = wet.size();
         let shape = match s.gore.kind {
-            // **On a wall each droplet is its own stain**: sized, stretched and pointed by how it
-            // struck (`hard_stain`), not the blob a body part or a sheet takes for it.
-            GoreKind::Wall => match hard_stain(m, xf, &l, d, &dials.blood, seed.wrapping_add(i as u32)) {
+            // **On a wall or a skin each droplet is its own stain**: sized, stretched and pointed by
+            // how it struck (`hard_stain`), not the blob a sheet takes for it. Until 0.5.62 a skin took
+            // the blob too, at least 2 cm across for the smallest droplet, and the forward spatter of a
+            // forearm's exit landed on the chest 4 cm behind it as twenty-four of them in one place:
+            // a sheet of blood the width of the chest where a stipple of drops belongs.
+            GoreKind::Wall | GoreKind::Skin(_) => match hard_stain(m, xf, &l, d, &dials.blood, seed.wrapping_add(i as u32)) {
                 Some(stain) => stain,
                 None => continue,
             },
@@ -3028,16 +3172,41 @@ fn take_hits(
     let identity = GlobalTransform::IDENTITY;
     // Every hole this batch opened, for droplets to fly through before the queued cut lands.
     let mut opened: Vec<(Entity, Vec2, f32)> = Vec::new();
-    for hit in hits {
-        // **A hit at a character** names the entity the game's physics found, which is rarely the mesh
-        // that was struck: the preset casts the ray at every skin under it and hurts the nearest.
-        let hit = if bodies.contains(hit.entity) {
-            hit
-        } else {
-            let Some(entity) = nearest_skin(&hit, &surfaces, parents, meshes, &rigging, &mut posed, &mut bounds, &identity, index, &mut refits) else {
-                continue;
-            };
-            GoreHit { entity, ..hit }
+    // Every hit in the order it was sent, and a shot going through as its legs, each taken in turn
+    // before the next hit.
+    let mut queue: std::collections::VecDeque<Pass> = hits.into_iter().map(Pass::Sent).collect();
+    while let Some(pass) = queue.pop_front() {
+        let (hit, leg) = match pass {
+            Pass::Leg(hit, leg) => (hit, leg),
+            Pass::Sent(hit) => {
+                let direct = bodies.contains(hit.entity);
+                // **A shot that goes through** is walked first: every place it crosses the body, in and
+                // out, is a leg of its own (see [`legs_through`]). One that crosses nothing goes on as
+                // any hit does.
+                if hit.through && matches!(hit.kind, HitKind::Impact { .. }) {
+                    let legs = legs_through(&hit, direct, &surfaces, parents, meshes, &rigging, &mut posed, &mut bounds, &identity, index, &mut refits);
+                    if !legs.is_empty() {
+                        for leg in legs.into_iter().rev() {
+                            queue.push_front(leg);
+                        }
+                        continue;
+                    }
+                }
+                // **A hit at a character** names the entity the game's physics found, which is rarely
+                // the mesh that was struck: the preset casts the ray at every skin under it and hurts
+                // the nearest.
+                if direct {
+                    (hit, Leg::In)
+                } else {
+                    let skins = skin_under(hit.entity, parents);
+                    let Some((entity, ..)) =
+                        first_crossing(skins, hit.from, hit.dir, &surfaces, meshes, &rigging, &mut posed, &mut bounds, &identity, index, &mut refits)
+                    else {
+                        continue;
+                    };
+                    (GoreHit { entity, ..hit }, Leg::In)
+                }
+            }
         };
         let Ok((gore, mesh3d, xf, skin, flay, wet)) = bodies.get_mut(hit.entity) else { continue };
         let gore = *gore;
@@ -3077,6 +3246,99 @@ fn take_hits(
             GoreKind::Skin(r) => r,
             _ => Region::Torso,
         };
+
+        // **Where a shot going through comes out**: a crater wider than the way in, cut from outside
+        // along the way the shot left, its own bleeding wound, and the forward spatter thrown along the
+        // shot onto what is behind — the next part of the body, a wall. Where nothing of the body lies
+        // beyond, every cloth the shot crosses after it is holed: the back of the shirt, a curtain.
+        if let Leg::Out { last } = leg {
+            let HitKind::Impact { depth_mm } = hit.kind else { continue };
+            let out = hit.dir.normalize_or_zero();
+            // Cast back from just outside: the first of this surface it meets is where the shot left.
+            let outside = hit.from;
+            let Some(exit) = ray_cast(mesh, struck_index, xf, outside, -hit.dir) else { continue };
+            let exit_world = xf.transform_point(exit.point);
+            let exit_normal = xf.affine().transform_vector3(exit.normal).normalize_or_zero();
+            let exit_normal = if exit_normal.dot(out) < 0.0 { -exit_normal } else { exit_normal };
+            let exit_radius = hit.radius_m * EXIT_SCALE;
+            let exit_wound = BloodWound {
+                at: exit_world.to_array(),
+                normal: exit_normal.to_array(),
+                area: core::f32::consts::PI * exit_radius * exit_radius,
+                severity: 1.0,
+                kind: WoundKind::Channel,
+            };
+            if !draws_blood {
+                wounded.write(Wounded { area: exit_wound.area, ..announce(&hit, exit_world, exit_normal) });
+                continue;
+            }
+            let exit_seed = wound_seed(&exit_wound);
+            if let Some(mut flay) = flay {
+                let _ = flay.paint_world(mesh, xf, outside, -out, radius_uv * EXIT_SCALE, depth_mm, tick);
+                if let Some(s) = flay_settings.as_deref() {
+                    flay.shade(s);
+                }
+            }
+            let mut exit_uv = None;
+            if let Some(mut wet) = wet {
+                let shape = StainShape {
+                    major: exit_radius * 2.6,
+                    minor: exit_radius * 2.0,
+                    spines: 6,
+                    satellites: 3,
+                    direction: [0.0, 1.0],
+                    seed: exit_seed,
+                };
+                let texels = wet.size();
+                exit_uv = wet.paint_world_with(mesh, xf, outside, -out, &shape_on(gore, &shape, texels), tick, &edges);
+            }
+            if last {
+                for surface in surfaces.iter().filter(|s| s.gore.kind == GoreKind::Cloth) {
+                    let Some(asset) = meshes.get(&surface.mesh) else { continue };
+                    let reach = *bounds.entry(surface.entity).or_insert_with(|| reach_of(surface, asset, &rigging, &mut posed, &identity, index));
+                    match reach {
+                        Reach::Never => continue,
+                        Reach::Within(b) if !b.reached_by(exit_world, hit.dir) => continue,
+                        _ => {}
+                    }
+                    let Some((cloth_mesh, cloth_xf)) = cast_at(surface, asset, &rigging, &mut posed, &identity) else { continue };
+                    let cloth_index = cast_index(index, &mut refits, surface, asset, cloth_mesh);
+                    let radius_uv = exit_radius * surface.gore.density() / crate::flaymap::UV_SPAN_M;
+                    let holes: Vec<(Vec2, f32)> =
+                        crossings_of(cloth_mesh, cloth_index, cloth_xf, exit_world, hit.dir, f32::INFINITY).iter().map(|c| (c.uv, radius_uv)).collect();
+                    // Open to the spray below before the queued hole is cut, as a hole in front is.
+                    opened.extend(holes.iter().map(|(uv, r)| (surface.entity, *uv, r * HOLE_OPEN * 0.75)));
+                    if !holes.is_empty()
+                        && let Ok(mut e) = commands.get_entity(surface.entity)
+                    {
+                        e.queue(move |mut e: EntityWorldMut| {
+                            if let Some(mut cloth) = e.get_mut::<ClothHoles>() {
+                                for (uv, radius_uv) in holes {
+                                    cloth.open(uv, radius_uv, exit_seed);
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+            if spray {
+                // Forward spatter leaves along the shot, not off the skin's face: the cone's axis is
+                // the projectile's own direction.
+                let forward = BloodWound { normal: out.to_array(), area: exit_wound.area * FORWARD_MIST, ..exit_wound };
+                let mut thrown = Thrown { surfaces: &surfaces, posed: &mut posed, bounds: &mut bounds, identity: &identity, edges: &edges, tick, holes: cloth_holes, opened: &opened, index, refits: &mut refits };
+                throw_spray(&forward, exit_seed, hit.entity, &mut thrown, &mut bodies, meshes, &rigging, dials, &mut commands);
+            }
+            let exit_at = match &drawn {
+                Drawn::Posed(..) => bind_landing(&bind, &exit).map(|(p, _)| (p, Some(SkinAnchor { tri: exit.tri, bary: exit.bary }))),
+                _ => Some((exit.point, None)),
+            };
+            if let (Some(uv), Some((at_local, skin))) = (exit_uv, exit_at) {
+                let site = WoundSite { uv, at_local, skin, wound: exit_wound, bleed: crate::bloodstain::Bleed::new(tick, &exit_wound), cut: None };
+                open_site(&mut commands, hit.entity, site, exit_radius * gore.density(), dials.open_wounds);
+            }
+            wounded.write(Wounded { area: exit_wound.area, ..announce(&hit, exit_world, exit_normal) });
+            continue;
+        }
 
         // **Reduction is substitution, never deletion** ([`GorePolicy`]). At a tier that does not draw
         // blood, a hit that would have opened a wound is still found, placed and announced: the same
@@ -3241,10 +3503,10 @@ fn take_hits(
         }
         // **A hole in what it went through.** An impact crosses every cloth between where it came from
         // and the skin it wounds — a shirt over the wound, a curtain in front of the body — and opens
-        // a hole in each where it crossed, so the wound under clothing is seen. A cloth behind the
-        // skin is not reached when the shot stopped in the body; one that goes through holes it too,
-        // where it last crosses: the back of the shirt, a curtain behind. **A blade cuts a slit**
-        // instead, in the cloth over the skin it opens, as long as the cut and along it.
+        // a hole in each wherever it crossed, so the wound under clothing is seen. A cloth behind the
+        // skin is not reached when the shot stopped in the body; one going through holes what is
+        // behind from where it comes out, above. **A blade cuts a slit** instead, in the cloth over the
+        // skin it opens, as long as the cut and along it.
         if let (HitKind::Impact { .. } | HitKind::Slash { .. }, Some(skin_landing)) = (hit.kind, landed) {
             for surface in surfaces.iter().filter(|s| s.gore.kind == GoreKind::Cloth) {
                 let Some(asset) = meshes.get(&surface.mesh) else { continue };
@@ -3256,7 +3518,10 @@ fn take_hits(
                 }
                 // Posed only now that the shot can reach it.
                 let Some((cloth_mesh, cloth_xf)) = cast_at(surface, asset, &rigging, &mut posed, &identity) else { continue };
-                let front = ray_cast(cloth_mesh, cast_index(index, &mut refits, surface, asset, cloth_mesh), cloth_xf, hit.from, hit.dir).filter(|c| c.t <= skin_landing.t);
+                // Every place the shot crosses it on the way to the skin, nearest first: a shirt's
+                // front, or the sleeve a shot left a forearm through and then the shirt over the chest.
+                let crossed = crossings_of(cloth_mesh, cast_index(index, &mut refits, surface, asset, cloth_mesh), cloth_xf, hit.from, hit.dir, skin_landing.t);
+                let front = crossed.first().copied();
                 let mut holes: Vec<(Vec2, f32)> = Vec::new();
                 let mut slits: Vec<(Vec2, Vec2)> = Vec::new();
                 match hit.kind {
@@ -3271,9 +3536,8 @@ fn take_hits(
                         }
                     }
                     _ => {
-                        let behind = if hit.through { ray_exit(cloth_mesh, cast_index(index, &mut refits, surface, asset, cloth_mesh), cloth_xf, hit.from, hit.dir).filter(|c| c.t > skin_landing.t) } else { None };
                         let radius_uv = hit.radius_m * surface.gore.density() / crate::flaymap::UV_SPAN_M;
-                        holes.extend([front.map(|c| (c.uv, radius_uv)), behind.map(|c| (c.uv, radius_uv * EXIT_SCALE))].into_iter().flatten());
+                        holes.extend(crossed.iter().map(|c| (c.uv, radius_uv)));
                         // What a droplet can fly through this batch, before the queued hole is cut: the
                         // hole's open core, inside the narrowest its ragged edge comes.
                         opened.extend(holes.iter().map(|(uv, r)| (surface.entity, *uv, r * HOLE_OPEN * 0.75)));
@@ -3317,69 +3581,7 @@ fn take_hits(
         }
         wounded.write(announce(&hit, at_world, normal_world));
 
-        // 3. **An exit**, for an impact the game says went through: where the ray leaves the part it
-        // entered, a crater wider than the entry's, cut from outside along the way the shot left, its
-        // own bleeding wound, and the forward spatter thrown along the shot onto what is behind.
-        if hit.through
-            && let HitKind::Impact { depth_mm } = hit.kind
-            && let Some(entry) = landed
-            && let Some(exit) = ray_exit(mesh, struck_index, xf, hit.from, hit.dir).filter(|e| e.t > entry.t)
-        {
-            let out = hit.dir.normalize_or_zero();
-            let exit_world = xf.transform_point(exit.point);
-            let exit_normal = xf.affine().transform_vector3(exit.normal).normalize_or_zero();
-            let exit_normal = if exit_normal.dot(out) < 0.0 { -exit_normal } else { exit_normal };
-            let exit_radius = hit.radius_m * EXIT_SCALE;
-            let exit_wound = BloodWound {
-                at: exit_world.to_array(),
-                normal: exit_normal.to_array(),
-                area: core::f32::consts::PI * exit_radius * exit_radius,
-                severity: 1.0,
-                kind: WoundKind::Channel,
-            };
-            let exit_seed = wound_seed(&exit_wound);
-            // Cut from just outside the exit, back along the shot, so the crater opens on that face.
-            let outside = exit_world + out * SURFACE_STAND_OFF;
-            let mut exit_uv = None;
-            if let Ok((_, _, _, _, flay, wet)) = bodies.get_mut(hit.entity) {
-                if let Some(mut flay) = flay {
-                    let _ = flay.paint_world(mesh, xf, outside, -out, radius_uv * EXIT_SCALE, depth_mm, tick);
-                    if let Some(s) = flay_settings.as_deref() {
-                        flay.shade(s);
-                    }
-                }
-                if let Some(mut wet) = wet {
-                    let shape = StainShape {
-                        major: exit_radius * 2.6,
-                        minor: exit_radius * 2.0,
-                        spines: 6,
-                        satellites: 3,
-                        direction: [0.0, 1.0],
-                        seed: exit_seed,
-                    };
-                    let texels = wet.size();
-                    exit_uv = wet.paint_world_with(mesh, xf, outside, -out, &shape_on(gore, &shape, texels), tick, &edges);
-                }
-            }
-            if spray {
-                // Forward spatter leaves along the shot, not off the skin's face: the cone's axis is
-                // the projectile's own direction.
-                let forward = BloodWound { normal: out.to_array(), area: exit_wound.area * FORWARD_MIST, ..exit_wound };
-                let mut thrown = Thrown { surfaces: &surfaces, posed: &mut posed, bounds: &mut bounds, identity: &identity, edges: &edges, tick, holes: cloth_holes, opened: &opened, index, refits: &mut refits };
-                throw_spray(&forward, exit_seed, hit.entity, &mut thrown, &mut bodies, meshes, &rigging, dials, &mut commands);
-            }
-            let exit_at = match &drawn {
-                Drawn::Posed(..) => bind_landing(&bind, &exit).map(|(p, _)| (p, Some(SkinAnchor { tri: exit.tri, bary: exit.bary }))),
-                _ => Some((exit.point, None)),
-            };
-            if let (Some(uv), Some((at_local, skin))) = (exit_uv, exit_at) {
-                let site = WoundSite { uv, at_local, skin, wound: exit_wound, bleed: crate::bloodstain::Bleed::new(tick, &exit_wound), cut: None };
-                open_site(&mut commands, hit.entity, site, exit_radius * gore.density(), dials.open_wounds);
-            }
-            wounded.write(Wounded { area: exit_wound.area, ..announce(&hit, exit_world, exit_normal) });
-        }
-
-        // 4. A slash gapes instead of cratering, along the layout above.
+        // 3. A slash gapes instead of cratering, along the layout above.
         if let HitKind::Slash { depth_mm, .. } = hit.kind
             && let Some((p, n_local, along_local, scale)) = layout
         {
@@ -3413,7 +3615,7 @@ fn take_hits(
             });
         }
 
-        // 5. Guts, from a torso that has been opened to the muscle.
+        // 4. Guts, from a torso that has been opened to the muscle.
         if region == Region::Torso
             && dials.strands > 0
             && guts
@@ -3461,7 +3663,7 @@ fn take_hits(
             }
         }
 
-        // 6. Bone.
+        // 5. Bone.
         if let Some(h) = handoff
             && let Some(msg) = BoneExposed::from_handoff(hit.entity, &h)
         {
@@ -4688,6 +4890,113 @@ mod tests {
         assert_eq!(wall_wet, 0.0, "a shot that stopped spattered the wall behind the body");
         assert!(!holed, "a shot that stopped holed the curtain behind the body");
         assert_eq!(normals.len(), 1);
+    }
+
+    /// **A shot that goes through goes through everything of the body on its line.** A forearm box
+    /// held 4 cm in front of a chest box, both skins under one root, a cloth of two sheets between them
+    /// and a wall behind, one shot at the root:
+    /// - through, it goes in and out of the forearm and then in and out of the chest: four `Wounded` in
+    ///   order along the shot, each exit's normal the way the shot went, the forearm's exit on the
+    ///   forearm and not on the chest 4 cm beyond it, and the way into the chest as wide as an exit. Both
+    ///   sheets between the parts are holed, each part keeps two wounds, and the wall is wetted;
+    /// - stopped, it opens the forearm alone and holes and wets nothing behind it;
+    /// - at a tier that draws no blood, it announces the same four wounds, field for field, and opens,
+    ///   holes and wets nothing;
+    /// - the same two boxes as one mesh are gone through the same way;
+    /// - two boxes overlapping as one mesh are one body: in once, out once, nothing in the overlap;
+    /// - a box wound inside out is gone into and out of the right way round.
+    #[test]
+    fn a_shot_through_a_forearm_goes_on_into_the_chest() {
+        let boxed = |size: Vec3, at: Vec3| Cuboid::from_size(size).mesh().build().translated_by(at);
+        let merged = |mut a: Mesh, b: Mesh| {
+            assert!(a.merge(&b).is_ok(), "two meshes would not merge");
+            a
+        };
+        // The forearm spans z 0.14 to 0.22, the chest -0.1 to 0.1.
+        let forearm = || boxed(Vec3::new(0.12, 0.12, 0.08), Vec3::new(0.0, 0.0, 0.18));
+        let chest = || boxed(Vec3::new(0.6, 0.6, 0.2), Vec3::ZERO);
+        // Two sheets between them, one mesh, each sheet on its own half of the atlas.
+        let sheet = |z: f32, u0: f32| {
+            let mut m = Plane3d::new(Vec3::Z, Vec2::splat(0.3)).mesh().build().translated_by(Vec3::new(0.0, 0.0, z));
+            if let Some(VertexAttributeValues::Float32x2(uvs)) = m.attribute_mut(Mesh::ATTRIBUTE_UV_0) {
+                for uv in uvs.iter_mut() {
+                    uv[0] = u0 + uv[0] * 0.5;
+                }
+            }
+            m
+        };
+        // What one shot does: every `Wounded` it announced, as (where, which way, how wide); how many
+        // texels of each sheet are open; how much of the wall is wet; how many wounds each part keeps.
+        let run = |parts: Vec<Mesh>, through: bool, at_root: bool, tier: Option<crate::GoreTier>| {
+            let mut app = headless();
+            if let Some(tier) = tier {
+                app.insert_resource(GorePolicy::for_tier(tier));
+            }
+            let world = app.world_mut();
+            let root = world.spawn((Transform::IDENTITY, GlobalTransform::IDENTITY)).id();
+            let parts: Vec<Entity> = parts
+                .into_iter()
+                .map(|m| {
+                    let m = world.resource_mut::<Assets<Mesh>>().add(m);
+                    world.spawn((Mesh3d(m), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Limb), ChildOf(root))).id()
+                })
+                .collect();
+            let cloth = world.resource_mut::<Assets<Mesh>>().add(merged(sheet(0.125, 0.0), sheet(0.11, 0.5)));
+            let cloth = world.spawn((Mesh3d(cloth), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::cloth().with_canvas(128))).id();
+            let panel = world.resource_mut::<Assets<Mesh>>().add(Plane3d::new(Vec3::Z, Vec2::splat(1.0)).mesh().build());
+            let at_wall = Transform::from_xyz(0.0, 0.0, -1.0);
+            let wall = world.spawn((Mesh3d(panel), at_wall, GlobalTransform::from(at_wall), Gore::wall())).id();
+            app.world_mut().run_schedule(FixedUpdate);
+            let target = if at_root { root } else { parts[0] };
+            let hit = GoreHit::impact(target, Vec3::new(0.02, 0.01, 2.0), Vec3::NEG_Z, 0.01, 5.0);
+            app.world_mut().write_message(if through { hit.through() } else { hit });
+            app.world_mut().run_schedule(FixedUpdate);
+            let w = app.world();
+            let mut cursor = w.resource::<Messages<Wounded>>().get_cursor();
+            let wounded: Vec<(Vec3, Vec3, f32)> = cursor.read(w.resource::<Messages<Wounded>>()).map(|m| (m.at, m.normal, m.area)).collect();
+            let open = |half: u32| {
+                let Some(holes) = w.get::<ClothHoles>(cloth) else { return 0 };
+                (0..64u32 * 64).filter(|k| holes.is_open_at(Vec2::new(((k % 64) as f32 + 0.5) / 64.0, ((k / 64) as f32 + 0.5) / 64.0)) && (k % 64 >= 32) == (half == 1)).count()
+            };
+            let wet = w.get::<WetCanvas>(wall).map(|c| c.wetted_area()).unwrap_or(0.0);
+            let kept: Vec<usize> = parts.iter().map(|e| w.get::<Wounds>(*e).map_or(0, |o| o.0.len())).collect();
+            (wounded, [open(0), open(1)], wet, kept)
+        };
+        let check = |wounded: &[(Vec3, Vec3, f32)], expected: &[f32], what: &str| {
+            assert_eq!(wounded.len(), expected.len(), "{what}: {} wounds announced, at {:?}", wounded.len(), wounded.iter().map(|w| w.0.z).collect::<Vec<_>>());
+            for (k, ((at, normal, _), z)) in wounded.iter().zip(expected).enumerate() {
+                assert!((at.z - z).abs() < 0.003, "{what}: wound {k} at z {} where the shot crosses at {z}", at.z);
+                let goes_in = k % 2 == 0;
+                assert!(if goes_in { normal.z > 0.9 } else { normal.z < -0.9 }, "{what}: wound {k}'s normal {normal:?} does not face the way the shot {}", if goes_in { "came" } else { "went" });
+            }
+        };
+        let (wounded, open, wet, kept) = run(vec![forearm(), chest()], true, true, None);
+        check(&wounded, &[0.22, 0.14, 0.1, -0.1], "two parts, through");
+        let stylised = run(vec![forearm(), chest()], true, true, Some(crate::GoreTier::Stylised));
+        assert_eq!(stylised.0, wounded, "a tier that draws no blood announced other wounds than the default tier");
+        assert_eq!((stylised.1, stylised.2, stylised.3), ([0, 0], 0.0, vec![0, 0]), "a tier that draws no blood holed, wetted or opened something");
+        let widen = EXIT_SCALE * EXIT_SCALE;
+        assert!((wounded[1].2 / wounded[0].2 - widen).abs() < 1.0e-3, "the forearm's exit is not an exit's width");
+        assert!((wounded[2].2 / wounded[0].2 - widen).abs() < 1.0e-3, "the way into the chest is not an exit's width");
+        assert!(open[0] > 0 && open[1] > 0, "the sheets between the forearm and the chest were not both holed: {open:?} texels open");
+        assert!(wet > 0.0, "the chest's exit threw nothing on the wall");
+        assert_eq!(kept, vec![2, 2], "the forearm and the chest keep {kept:?} wounds");
+        let (wounded, open, wet, kept) = run(vec![forearm(), chest()], false, true, None);
+        check(&wounded, &[0.22], "two parts, stopped");
+        assert_eq!((open, wet, kept), ([0, 0], 0.0, vec![1, 0]), "a shot the forearm stopped reached past it");
+        let (wounded, ..) = run(vec![merged(forearm(), chest())], true, true, None);
+        check(&wounded, &[0.22, 0.14, 0.1, -0.1], "one mesh, through");
+        let overlapping = merged(boxed(Vec3::new(0.12, 0.12, 0.08), Vec3::new(0.0, 0.0, 0.1)), chest());
+        let (wounded, ..) = run(vec![overlapping], true, false, None);
+        check(&wounded, &[0.14, -0.1], "overlapping shells, through");
+        let mut inside_out = chest();
+        if let Some(Indices::U32(ix)) = inside_out.indices_mut() {
+            for t in ix.as_chunks_mut::<3>().0 {
+                t.swap(1, 2);
+            }
+        }
+        let (wounded, ..) = run(vec![inside_out], true, false, None);
+        check(&wounded, &[0.1, -0.1], "inside out, through");
     }
 
     /// **A blade cuts a slit in the cloth over the skin it opens, along the cut.** A sheet of cloth in

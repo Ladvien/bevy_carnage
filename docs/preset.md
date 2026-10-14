@@ -108,20 +108,29 @@ centre and its blood ran as one smooth column the wound's own width. **Runs need
 skinned mannequin's limbs at the shipped 128 a texel is 7 mm and a cut's three runs blurred into one
 patch; at 256 (`Gore::with_canvas`), 3.6 mm, they come apart, at four times the bytes.
 
-**A shot that goes through** (0.5.30). Whether a projectile leaves a body is the game's ballistics —
-calibre, energy, armour — so the game says so: `GoreHit::impact(..).through()`. The preset finds where
-the ray leaves the part it entered and opens an exit there, `EXIT_SCALE` (1.6) times the entry's
-radius, cut from outside along the way the shot left; the exit bleeds as the entry does, is announced
-as a second `Wounded`, and throws the **forward spatter**: a cone along the shot, `FORWARD_MIST` (4)
-times the blood its area alone would throw, onto whatever is behind. Cloth the shot crosses behind the
-body, the back of a shirt or a curtain, is holed where it last crosses. Without `through()` nothing
-changes: the shot stops in the body and nothing behind it is touched.
+**A shot that goes through** (0.5.30; through the whole body since 0.5.62). Whether a projectile
+leaves a body is the game's ballistics — calibre, energy, armour — so the game says so:
+`GoreHit::impact(..).through()`. The preset walks the shot's line through the body it was sent at —
+every skin under the entity the hit names, or that one mesh — and opens a wound at every way in and
+every way out: a forearm held across the chest is gone into and out of, and then the chest. It counts
+the shot in and out of each mesh by the winding of the triangles it crosses, so where an arm's mesh
+overlaps the torso's at the shoulder the shot is inside the body all through the overlap and opens
+nothing there. An exit is `EXIT_SCALE` (1.6) times the entry's radius, cut from outside along the way
+the shot left, and so is a way back in after the first, the projectile being the one that came out.
+Every wound bleeds and is announced as a `Wounded` of its own, in order along the shot, and each exit
+throws the **forward spatter**: a cone along the shot, `FORWARD_MIST` (4) times the blood its area
+alone would throw, onto whatever is behind — the chest behind the forearm, the wall behind the chest.
+Every cloth the shot crosses is holed at every crossing: the shirt over the wound, the back of a
+sleeve it leaves, the shirt over the chest it goes on into, the back of the shirt, a curtain behind.
+Without `through()` nothing changes: the shot stops in the first part it reaches and nothing behind it
+is touched.
 
 **Walls.** `Gore::wall()` dresses an upright hard surface. The spray's droplets are cast at it as at a
 sheet, but each lands as its own stain from the bloodstain model's impact law: sized by its drop's
 diameter and speed (the spread factor), drawn out to `1/sin θ` by the angle it struck at, and turned so
-its spines point the way it was going, through the triangle's UVs. A body part or a sheet still takes a
-larger blob for each droplet, standing for the many a game cannot afford to cast. A wall is cast at up
+its spines point the way it was going, through the triangle's UVs. A body part takes each droplet the
+same way since 0.5.62; a sheet still takes a larger blob for each, standing for the many a game cannot
+afford to cast. A wall is cast at up
 to 128 droplets a wound, where every other surface takes 24; it is nearly always a few triangles. Give
 a wall a canvas fine enough for the drops, `Gore::wall().with_canvas(512)` for a three-metre wall,
 and mind the bill below.
@@ -208,6 +217,12 @@ records it.
 the windowed demo fires one through the chest.
 
 ![The mannequin walks in front of a plaster wall; a shot through the raised forearm and two through the chest throw a cone of fine spatter onto the wall behind, each drop its own small stain](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_through.gif)
+
+`capture_skinned --guard` stands the body on guard, its right forearm across its chest, and sends
+one shot through the forearm: it goes on into the chest, and when the arm comes down the wound it hid
+is there.
+
+![The mannequin stands with its right forearm held across its chest; one shot goes through the forearm and on into the chest, and as the arm is lowered the chest wound it hid is seen bleeding, the wall behind spattered by the chest's exit](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_guard.gif)
 
 `capture_skinned --blows` lands a second blow on the left shin, and both bruises age.
 
@@ -555,8 +570,11 @@ the player never sees up close, and the wrong one for the one they shoot.
   was. The break itself is exact to the bone; the shape of each piece is the bind pose's.
 - **A hole or a slit does not fray or tear further.** It holds the shape it was cut with. A broken
   body's pieces are skin: the shirt goes with the body it was on.
-- **An exit is on the part that was entered.** A shot through an arm into the chest exits the arm;
-  the chest takes the forward spatter, not a second wound.
+- **A shot goes through one body.** `GoreHit::through()` goes through everything of the body it was
+  sent at and stops there: it is not carried on into a second character behind, since whether it still
+  could is the game's ballistics, and the hit's last `Wounded` is where it left. A part is read as
+  closed — the shot is counted in and out of a mesh by the winding of the triangles it crosses — so a
+  part left open where the shot leaves it opens no exit there.
 - **A droplet flies straight and stops at the first thing it reaches** (0.5.32). A body part, a
   sheet, a wall or the shirt the wound is under catches it, a hole in a cloth lets it through, and a
   droplet something caught does not also land on the floor. The cast is a straight line, so a

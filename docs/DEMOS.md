@@ -545,6 +545,12 @@ The same mannequin in a sleeveless shirt: a seventh skinned mesh named `Shirt`, 
 
 The same mannequin with a plaster wall 1.2 m behind it (`preset_scene::spawn_wall`, `Gore::wall()` at 512 a side), and every shot sent through with `GoreHit::through()`: the forearm at frame 30 and the chest at 120 and 150. Each opens an exit on the far side of the part, wider than the entry, and throws its forward spatter along the shot; on the wall every droplet is its own stain from the bloodstain impact law, so the pattern is a cone of small drops, densest on the shot's line, rather than a few large blobs. The exit wounds are on the back, out of this camera's sight; `--eye 0.6,1.35,-1.0` looks at them. The clip is cut from frames 20–199; `--through` prints its own digest, `0e4493510865f8b6`, and two runs print the same one; their frames match except inside the mist round the forearm and the chest while it hangs after each shot, where 62 of 360 differ by up to 8 code values (measured on `big` at 0.5.55).
 
+### `capture_skinned --guard` — a shot through a forearm into the chest
+
+![The mannequin stands with its right forearm held across its chest; one shot goes through the forearm and on into the chest, and as the arm is lowered the chest wound it hid is seen bleeding, the wall behind spattered by the chest's exit](skinned_guard.gif)
+
+`--guard` stands the mannequin in front of the same wall instead of walking (`mannequin::guard`): the right forearm held level across the chest, clear of it, and lowered to the side from 1.25 s over 0.9 s. At frame 40 one shot, sent through and 14 mm in radius, is aimed at the middle of the forearm; it goes in and out of the forearm, then in and out of the chest behind it, and the chest's exit spatters the wall (0.5.62). While the arm is up the chest wound shows only above it; as the arm comes down it is seen whole, the forearm's forward spatter landed round it, and both wounds bleed down. Before 0.5.62 the same shot stopped at the far side of the forearm and the chest took its forward spatter as blobs at least 2 cm across each: a sheet of blood a hand wide once it had run, with no wound under it. The clip is frames 20–259, cropped to 560×480 from (30, 10); `--guard` prints `5acf242d8eeb9360`, and two runs print it and the same 360 frames. `--eye -0.9,1.35,0.6` looks along the forearm from the elbow, the chest wound behind it; `--eye 0.45,1.45,-1.05` at the back, where the chest's exit bleeds; `--shirt` puts the shirt on, and it is holed where the shot crossed it between the forearm and the chest, with the wound seen through the hole.
+
 ### `capture_skinned --blows` — two bruises on one shin
 
 ![Close on the mannequin's left shin as it walks: one brown bruise mid-shin, then a blow just below the knee raises a paler one above it; both darken as they age, and where they overlap they are darker still](skinned_bruises.gif)
@@ -622,6 +628,12 @@ cargo run --release --example capture_skinned -- --through --out frames-skinned-
 mkdir -p frames-st && for n in $(seq 20 199); do
   cp "frames-skinned-through/frame$(printf %04d "$n").png" "frames-st/frame$(printf %04d $((n - 20))).png"; done
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-st docs/skinned_through.gif ""
+
+# `skinned_guard.gif` is `capture_skinned --guard`, frames 20-259 cropped to 560x480 from (30, 10).
+cargo run --release --example capture_skinned -- --guard --out frames-skinned-guard
+mkdir -p frames-sg && for n in $(seq 20 259); do
+  magick "frames-skinned-guard/frame$(printf %04d "$n").png" -crop 560x480+30+10 +repage "frames-sg/frame$(printf %04d $((n - 20))).png"; done
+WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-sg docs/skinned_guard.gif ""
 
 # `skinned_stroll.gif` is `capture_skinned --stroll`, all 360 frames.
 cargo run --release --example capture_skinned -- --stroll --out frames-skinned-stroll
