@@ -78,8 +78,7 @@ fn setup(
     commands.spawn((
         Camera3d::default(),
         preset_scene::sweep(0.0),
-        AmbientLight { brightness: preset_scene::AMBIENT, ..default() },
-        preset_scene::EXPOSURE,
+        preset_scene::camera_light(&mut images),
         Sweep,
     ));
     preset_scene::spawn(&mut commands, &mut meshes, &mut materials, &mut images);

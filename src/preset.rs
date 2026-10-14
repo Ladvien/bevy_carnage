@@ -2023,7 +2023,7 @@ fn dress(
     let (Some(mut images), Some(standard), Some(mut flesh)) = (images, standard, flesh) else {
         return;
     };
-    if tables.sss == Handle::default() {
+    if tables.luts == Handle::default() {
         // The tables are baked on `Startup`; a `FixedUpdate` before that would dress with nothing.
         return;
     }
@@ -3776,7 +3776,7 @@ mod tests {
             .add_systems(FixedUpdate, scene_gore.before(dress))
             .add_systems(FixedUpdate, (advance_clock, dress, reset_gore, take_hits, throw_bodies, bleed, pour_cut_faces, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
         let images = app.world_mut().resource_mut::<Assets<Image>>().reserve_handle();
-        app.world_mut().resource_mut::<FleshTables>().sss = images;
+        app.world_mut().resource_mut::<FleshTables>().luts = images;
         app
     }
 
@@ -4643,7 +4643,7 @@ mod tests {
             .init_resource::<FlaySettings>()
             .add_systems(FixedUpdate, (advance_clock, dress, take_hits, throw_bodies, bleed, pour_cut_faces, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
         let images = app.world_mut().resource_mut::<Assets<Image>>().reserve_handle();
-        app.world_mut().resource_mut::<FleshTables>().sss = images;
+        app.world_mut().resource_mut::<FleshTables>().luts = images;
         let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(0.4, 0.4, 0.2).mesh().build());
         let material = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial::default());
         let spawn = |app: &mut App| {
@@ -4709,7 +4709,7 @@ mod tests {
             .init_resource::<FlaySettings>()
             .add_systems(FixedUpdate, (advance_clock, dress, take_hits, throw_bodies, bleed, pour_cut_faces, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
         let images = app.world_mut().resource_mut::<Assets<Image>>().reserve_handle();
-        app.world_mut().resource_mut::<FleshTables>().sss = images;
+        app.world_mut().resource_mut::<FleshTables>().luts = images;
         let sphere = app.world_mut().resource_mut::<Assets<Mesh>>().add(Sphere::new(0.3).mesh().uv(16, 8));
         let plane = app.world_mut().resource_mut::<Assets<Mesh>>().add(Plane3d::new(Vec3::Y, Vec2::splat(1.5)).mesh().build());
         let material = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial::default());

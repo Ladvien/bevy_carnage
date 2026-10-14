@@ -430,11 +430,14 @@ the player never sees up close, and the wrong one for the one they shoot.
   only the first `SPRAY_CAST` (24) droplets of a wound are cast at all — 128 when a wall is in
   their path; the rest go to the floors as before. Until 0.5.32 every surface took every droplet
   aimed at it, so a wall behind a shirt was spattered as if the shirt were not there.
-- **Wet blood on a floor reads pale at a grazing angle under a plain `AmbientLight`.** Seen low and
-  from far off, a fresh pool is a pale pink shape with a darker rim, not a red one; from above the
-  same pool is dark red. The likely cause, not yet tested: the film is smoother than the floor, and
-  at a grazing angle its Fresnel reflection of Bevy's uniform ambient, a bright sky from every
-  direction, outweighs its colour. A scene with an environment map would reflect its own sky.
+- **Wet blood needs a room to look wet.** Its look is a clear coat, and a coat shows what it
+  reflects. Under a plain `AmbientLight`, a sky of one brightness from every direction, runs of blood
+  on skin read as paint and a fresh pool seen low and from far off as a pale pink shape with a darker
+  rim. Give the camera an `EnvironmentMapLight` — your level's, or a probe's — and drop the uniform
+  ambient. The preset's clips do since 0.5.54, with a small procedural studio built and prefiltered on
+  the CPU (`examples/common/studio.rs`, so it holds on WebGL2): the runs carry the reflection of a
+  softbox above the camera and the pools mirror a dark wall. A pool at a light's own mirror angle
+  still shows that light, as it should.
 - **A skin's roughness map and a crater's slope give way.** See *What a dressed skin keeps*.
 - **One ageing bruise per mesh entity.** A second blow on the same entity starts a new bruise, and
   the first stops ageing where it was. Wounds have no such limit.

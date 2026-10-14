@@ -40,6 +40,10 @@ pub mod flesh_scene;
 /// body that is not in its bind pose. Behind `flesh` because it wears the preset's `Gore`.
 #[cfg(feature = "flesh")]
 pub mod mannequin;
+/// **A studio to light a scene in**: a procedural environment, prefiltered on the CPU into the two
+/// cubemaps `EnvironmentMapLight` takes, so wet blood has a room to reflect. No compute, so it works
+/// on WebGL2 as well.
+pub mod studio;
 /// **The headless PNG recorder — native only.**
 ///
 /// A recorder writes PNGs to a filesystem and a browser has no filesystem, so "absent in a browser"

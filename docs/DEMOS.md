@@ -505,6 +505,8 @@ change.
 
 **Built with `vfx`, as every committed clip of the preset is, the recorders add `CarnageVfxPlugin`** (0.5.51), so each wound throws its burst the moment it opens: a few droplets that streak off at the measured spatter speeds and leave the frame within two, and a soft puff of mist that grows over the wound and clears in a quarter to half a second, which is what reads as the hit. `capture_skinned` and `capture_preset` print the same digests with the particles as without, and on `big` two runs of `capture_skinned` are byte-identical in all 360 frames with them on screen. Without `vfx` the clips have no particles and the digests are the same.
 
+**Lit by a room, not a uniform sky** (0.5.54). The preset's clips and demos give the camera `preset_scene::camera_light`: a small procedural studio, prefiltered on the CPU into an `EnvironmentMapLight` (`common/studio.rs`) — dark walls, a grey floor, a ceiling panel, a softbox just above the camera — in place of a uniform `AmbientLight`, at a mean radiance (`STUDIO`, 480) that keeps the lit side of the body where it was. A wet film's coat mirrored the uniform ambient as one flat grey; in the room the runs on the chest carry the softbox's reflection. It needed the flesh material to fit an environment map's two cubemaps under WebGL2's sixteen sampled textures, which it does since the same release.
+
 ## `skinned` — the preset on a body that is never in its bind pose
 
 ![A smooth skinned mannequin walks in place with its left arm raised and waving; a shot opens a wound on the raised forearm, a slash opens the right thigh, shots open the chest, and every wound keeps bleeding from the limb it is on, the blood running down the world and pooling on the floor](skinned.gif)

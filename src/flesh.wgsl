@@ -34,10 +34,12 @@ struct FleshParams {
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> flesh: FleshParams;
-@group(#{MATERIAL_BIND_GROUP}) @binding(101) var sss_lut: texture_2d<f32>;
-// One sampler for all five: linear, clamped, level zero — see `FleshExtension`.
+// Both tables in one image (`flesh::luts`): the subsurface table in its top-left corner, the blood
+// table in its last four rows. One image because every texture here counts against the sixteen a stage
+// may sample on WebGL2, and a camera's environment map takes two more.
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var flesh_luts: texture_2d<f32>;
+// One sampler for all four: linear, clamped, level zero — see `FleshExtension`.
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var flesh_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(103) var blood_lut: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(104) var wet_map: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(105) var flay_map: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(106) var dermis_map: texture_2d<f32>;
@@ -50,6 +52,11 @@ const FLAG_WET: u32 = 1u;
 const FLAG_FLAY: u32 = 2u;
 const FLAG_DERMIS: u32 = 4u;
 const SSS_ROWS: f32 = 16.0;
+const SSS_COLS: f32 = 64.0;
+// The packed tables' size, and the row the blood table starts at: `flesh::LUTS_WIDTH`, `LUTS_HEIGHT`.
+const LUTS_W: f32 = 256.0;
+const LUTS_H: f32 = 84.0;
+const BLOOD_ROW0: f32 = 80.0;
 const LAYERS: f32 = 5.0;
 const SSS_MIN_RADIUS_MM: f32 = 0.5;
 const SSS_MAX_RADIUS_MM: f32 = 64.0;
@@ -139,20 +146,32 @@ fn curvature_row(radius_mm: f32) -> f32 {
 }
 
 // Penner's lookup: the diffuse response of `layer` at `ndotl` on a sphere of `radius_mm`.
+// The table is the packed image's top-left corner, each lookup held to its texel centres, as clamping
+// held it when it was an image of its own.
 fn wrap_diffuse(layer: f32, ndotl: f32, radius_mm: f32) -> vec3<f32> {
     let row = layer * SSS_ROWS + curvature_row(radius_mm) + 0.5;
-    let uv = vec2<f32>(ndotl * 0.5 + 0.5, row / (SSS_ROWS * LAYERS));
-    return textureSampleLevel(sss_lut, flesh_sampler, uv, 0.0).rgb;
+    let x = clamp((ndotl * 0.5 + 0.5) * SSS_COLS, 0.5, SSS_COLS - 0.5);
+    let y = clamp(row, 0.5, SSS_ROWS * LAYERS - 0.5);
+    return textureSampleLevel(flesh_luts, flesh_sampler, vec2<f32>(x / LUTS_W, y / LUTS_H), 0.0).rgb;
+}
+
+// One row `r` of the blood table at film fraction `u`, decoded from the sRGB its bytes are written in:
+// the packed image is `Rgba8Unorm`, so the decode an `Rgba8UnormSrgb` image did in hardware is done
+// here.
+fn blood_row(u: f32, r: f32) -> vec3<f32> {
+    let x = clamp(u * LUTS_W, 0.5, LUTS_W - 0.5);
+    let e = textureSampleLevel(flesh_luts, flesh_sampler, vec2<f32>(x / LUTS_W, (BLOOD_ROW0 + r + 0.5) / LUTS_H), 0.0).rgb;
+    return select(pow((e + 0.055) / 1.055, vec3<f32>(2.4)), e / 12.92, e <= vec3<f32>(0.04045));
 }
 
 // The film's reflectance over `base`, from the black/white rows of the blood table, interpolated by
 // the base per channel. Row pairs: arterial (0, 1), venous (2, 3); the saturation dial picks a mix.
 fn blood_over(base: vec3<f32>, depth_mm: f32) -> vec3<f32> {
     let u = clamp(depth_mm / BLOOD_LUT_MAX_MM, 0.0, 1.0);
-    let art_black = textureSampleLevel(blood_lut, flesh_sampler, vec2<f32>(u, 0.125), 0.0).rgb;
-    let art_white = textureSampleLevel(blood_lut, flesh_sampler, vec2<f32>(u, 0.375), 0.0).rgb;
-    let ven_black = textureSampleLevel(blood_lut, flesh_sampler, vec2<f32>(u, 0.625), 0.0).rgb;
-    let ven_white = textureSampleLevel(blood_lut, flesh_sampler, vec2<f32>(u, 0.875), 0.0).rgb;
+    let art_black = blood_row(u, 0.0);
+    let art_white = blood_row(u, 1.0);
+    let ven_black = blood_row(u, 2.0);
+    let ven_white = blood_row(u, 3.0);
     // `wet.w` is SO₂; venous 0.75 → 0, arterial 0.97 → 1.
     let a = clamp((flesh.wet.w - 0.75) / 0.22, 0.0, 1.0);
     let black = mix(ven_black, art_black, a);

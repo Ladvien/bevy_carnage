@@ -103,8 +103,24 @@ pub fn region_of(part: usize) -> Region {
 pub const EXPOSURE: bevy::camera::Exposure = bevy::camera::Exposure { ev100: bevy::camera::Exposure::EV100_BLENDER + 1.8 };
 
 /// **The ambient that goes with [`EXPOSURE`]**: the old 260 raised by the same 3.5, so the side the sun
-/// does not reach renders as it did rather than three and a half times darker.
+/// does not reach renders as it did rather than three and a half times darker. The preset scenes'
+/// cameras no longer use it (see [`camera_light`]); the scenes that keep a uniform ambient do.
 pub const AMBIENT: f32 = 910.0;
+
+/// **The studio's mean radiance**, over every direction, in an ambient's units: tuned so the lit front
+/// of the body renders as it did under [`AMBIENT`]. The room sends more of its light toward what faces
+/// the camera and the ceiling than a uniform sky does, so at the ambient's own 910 the clips came out
+/// a fifth brighter and flatter.
+pub const STUDIO: f32 = 480.0;
+
+/// **What the preset scenes' camera is lit with**: [`EXPOSURE`], and the studio
+/// (`common::studio::environment`) at [`STUDIO`], with no uniform ambient on top. A uniform ambient is
+/// a sky of one brightness from every direction, and a wet film's coat mirrored it: runs of blood read
+/// as paint and a pool at a grazing angle as a pale veil. In a room the runs carry the softbox's
+/// reflection and a pool mirrors a dark wall.
+pub fn camera_light(images: &mut Assets<Image>) -> (AmbientLight, bevy::camera::Exposure, bevy::light::EnvironmentMapLight) {
+    (AmbientLight { brightness: 0.0, ..default() }, EXPOSURE, super::studio::environment(images, STUDIO))
+}
 
 /// **Where the windowed demos' camera stands, `seconds` in**: a slow sweep across the front, never an
 /// orbit.

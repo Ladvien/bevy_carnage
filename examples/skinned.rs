@@ -56,8 +56,7 @@ fn setup(
     commands.spawn((
         Camera3d::default(),
         mannequin::view(),
-        AmbientLight { brightness: preset_scene::AMBIENT, ..default() },
-        preset_scene::EXPOSURE,
+        preset_scene::camera_light(&mut images),
     ));
     let root = mannequin::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes, false);
     commands.entity(root).insert(mannequin::breakable());

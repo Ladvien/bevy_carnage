@@ -1,5 +1,13 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.54`: the flesh material fits a scene with an environment map, on the web** (`AG-127`). The
+# material sampled fifteen textures in its fragment stage, and a camera's `EnvironmentMapLight`
+# adds two, past the sixteen WebGL2 and wgpu's default limits allow: its pipeline failed to build
+# ("count was 17"). The subsurface and blood tables are now one image (`flesh::luts`), their
+# bytes and `the_flesh_tables_are_frozen` unchanged. And the preset's clips are lit by a room: a
+# procedural studio prefiltered on the CPU (`examples/common/studio.rs`) in place of a uniform
+# ambient, so wet blood has something to reflect. Every digest holds.
+#
 # **`0.5.53`: a graze is raw** (`AG-126`). Round every flaymap crater the skin it only grazed was
 # drawn bare, the dermis's pale pink mottled with the fat's cream, and read as a pale halo. A
 # fresh abrasion is raw and moist from the first moment: the graze now wears `GRAZE_FILM` (4 %) of
@@ -309,7 +317,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.53"
+version = "0.5.54"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

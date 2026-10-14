@@ -109,7 +109,11 @@
 //! other module on it.
 //!
 //! The uniform block is sixteen-byte aligned, there are no storage buffers, and the extension adds
-//! five textures and one sampler to `StandardMaterial`'s. The shader reads the metallic-roughness
+//! four textures and one sampler to `StandardMaterial`'s: since 0.5.54 the two tables are one image
+//! ([`luts`]), because with them apart the material used fifteen of the sixteen sampled textures a
+//! stage may have on WebGL2 and under WebGPU's default limits, and a camera with an
+//! `EnvironmentMapLight`, two cubemaps more, failed to build its pipeline (measured: "count was 17").
+//! The shader reads the metallic-roughness
 //! texture through `StandardMaterial`'s own binding and sampler, so reading it again adds no
 //! binding. The wrap term runs over the view's directional lights; point and spot lights get the
 //! ordinary PBR response, and
@@ -244,7 +248,7 @@ impl FleshParams {
     }
 }
 
-/// **The extension**: the dials, the two baked tables, and the optional canvas images.
+/// **The extension**: the dials, the baked tables, and the optional canvas images.
 ///
 /// Bindings start at 100 so they cannot collide with `StandardMaterial`'s. `wet` is the wetmap's
 /// metallic-roughness image, read for the `R`/`A` channels that crate writes and Bevy ignores.
@@ -252,15 +256,16 @@ impl FleshParams {
 pub struct FleshExtension {
     #[uniform(100)]
     pub params: FleshParams,
-    /// [`sss_lut`], from [`FleshTables`].
+    /// [`luts`], from [`FleshTables`]: the subsurface and the blood tables in one image.
+    ///
+    /// **One image, and one sampler for all four textures** (binding 102), because every texture the
+    /// extension adds counts against the sixteen a stage may sample on WebGL2 and under WebGPU's
+    /// default limits, with `StandardMaterial`'s and the view's already counted. With the two tables
+    /// apart the material used fifteen, and a camera with an `EnvironmentMapLight` — two cubemaps
+    /// more — failed to build its pipeline on the web. Packed, it is sixteen with one.
     #[texture(101)]
     #[sampler(102)]
-    pub sss_lut: Handle<Image>,
-    /// [`blood_lut`], from [`FleshTables`]. **One sampler serves all five textures** (binding 102):
-    /// every one of them is read linearly, clamped, at level zero, and WebGL2 caps a stage at
-    /// sixteen samplers with `StandardMaterial`'s and the view's already counted.
-    #[texture(103)]
-    pub blood_lut: Handle<Image>,
+    pub luts: Handle<Image>,
     /// `wetmap`'s roughness image: `R` amount, `A` wetness. Unbound means dry.
     #[texture(104)]
     pub wet: Option<Handle<Image>>,
@@ -313,13 +318,12 @@ impl MaterialExtension for FleshExtension {
     }
 }
 
-/// **The two tables, baked once on `Startup`.**
+/// **The two tables, baked once on `Startup`**, into one image: [`luts`].
 #[derive(Resource, Clone, Debug, Default)]
 pub struct FleshTables {
-    /// The pre-integrated subsurface table, [`SSS_COLS`] × ([`SSS_ROWS`] · 5 layers), linear RGBA.
-    pub sss: Handle<Image>,
-    /// The blood film table, [`BLOOD_COLS`] × 4 rows, sRGB RGBA.
-    pub blood: Handle<Image>,
+    /// [`luts`]: the pre-integrated subsurface table in its top-left corner and the blood film
+    /// table in its last four rows, `Rgba8Unorm`.
+    pub luts: Handle<Image>,
 }
 
 impl FleshTables {
@@ -328,7 +332,7 @@ impl FleshTables {
         params.set_flag(FLAG_WET, false);
         params.set_flag(FLAG_FLAY, false);
         params.set_flag(FLAG_DERMIS, false);
-        FleshExtension { params, sss_lut: self.sss.clone(), blood_lut: self.blood.clone(), wet: None, flay: None, dermis: None }
+        FleshExtension { params, luts: self.luts.clone(), wet: None, flay: None, dermis: None }
     }
 
     /// **A whole [`FleshMaterial`]** over `base`, with the canvases bound and the flags set. The base's
@@ -394,25 +398,15 @@ fn bake_tables(mut tables: ResMut<FleshTables>, images: Option<ResMut<Assets<Ima
         warn!("bevy_carnage::flesh: no Assets<Image>; the flesh tables are not baked");
         return;
     };
-    let extent = Extent3d { width: SSS_COLS, height: SSS_ROWS * Layer::ALL.len() as u32, depth_or_array_layers: 1 };
-    let mut sss = Image::new(
-        extent,
+    let mut image = Image::new(
+        Extent3d { width: LUTS_WIDTH, height: LUTS_HEIGHT, depth_or_array_layers: 1 },
         TextureDimension::D2,
-        sss_lut(),
+        luts(),
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     );
-    sss.sampler = clamped_linear();
-    let mut blood = Image::new(
-        Extent3d { width: BLOOD_COLS, height: 4, depth_or_array_layers: 1 },
-        TextureDimension::D2,
-        blood_lut(),
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    blood.sampler = clamped_linear();
-    tables.sss = images.add(sss);
-    tables.blood = images.add(blood);
+    image.sampler = clamped_linear();
+    tables.luts = images.add(image);
 }
 
 fn clamped_linear() -> ImageSampler {
@@ -581,6 +575,33 @@ pub fn blood_lut() -> Vec<u8> {
     out
 }
 
+/// The width of [`luts`]: the blood table's.
+pub const LUTS_WIDTH: u32 = BLOOD_COLS;
+/// The height of [`luts`]: the subsurface table's rows, then the blood table's four.
+pub const LUTS_HEIGHT: u32 = SSS_ROWS * Layer::ALL.len() as u32 + 4;
+
+/// **Both tables in one image's bytes**, [`LUTS_WIDTH`] × [`LUTS_HEIGHT`], RGBA8, row-major: the
+/// subsurface table ([`sss_lut`]) in the top-left [`SSS_COLS`] columns of its first rows, the rest of
+/// those rows zero, and the blood table ([`blood_lut`]) in the last four rows, byte for byte. The
+/// image is `Rgba8Unorm`, so the blood rows, which are sRGB-encoded, are decoded in the shader, and
+/// the shader holds each lookup to its own table's texel centres, so neither filters into the other
+/// or into the padding.
+pub fn luts() -> Vec<u8> {
+    let (sss, blood) = (sss_lut(), blood_lut());
+    let row = LUTS_WIDTH as usize * 4;
+    let mut out = vec![0; row * LUTS_HEIGHT as usize];
+    for (y, src) in sss.chunks(SSS_COLS as usize * 4).enumerate() {
+        if let Some(dst) = out.get_mut(y * row..y * row + src.len()) {
+            dst.copy_from_slice(src);
+        }
+    }
+    let at = row * (SSS_ROWS as usize * Layer::ALL.len());
+    if let Some(dst) = out.get_mut(at..at + blood.len()) {
+        dst.copy_from_slice(&blood);
+    }
+    out
+}
+
 /// FNV-1a over both tables' bytes — the golden `the_flesh_tables_are_frozen` locks.
 pub fn lut_digest() -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -677,5 +698,23 @@ mod tests {
     #[test]
     fn the_flesh_tables_are_frozen() {
         assert_eq!(lut_digest(), 17_594_585_363_927_039_033);
+    }
+
+    /// **The packed image holds both tables where the shader reads them**: the subsurface table's rows
+    /// in the first [`SSS_COLS`] columns of the top rows, the blood table's four rows last, and zero
+    /// between. The shader's offsets are written against exactly this; a table shifted by one row or
+    /// column would shade every surface with its neighbour's values.
+    #[test]
+    fn the_packed_image_holds_both_tables_where_the_shader_reads_them() {
+        let (packed, sss, blood) = (luts(), sss_lut(), blood_lut());
+        let row = LUTS_WIDTH as usize * 4;
+        let sss_row = SSS_COLS as usize * 4;
+        let sss_rows = SSS_ROWS as usize * Layer::ALL.len();
+        assert_eq!(packed.len(), row * LUTS_HEIGHT as usize);
+        for y in 0..sss_rows {
+            assert_eq!(&packed[y * row..y * row + sss_row], &sss[y * sss_row..(y + 1) * sss_row], "subsurface row {y}");
+            assert!(packed[y * row + sss_row..(y + 1) * row].iter().all(|b| *b == 0), "row {y} is not padded with zero");
+        }
+        assert_eq!(&packed[sss_rows * row..], &blood[..], "the blood table is not the last four rows");
     }
 }
