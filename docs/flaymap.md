@@ -158,7 +158,7 @@ fn on_hit(
 
 ## Three things the caller owns
 
-**The schedule.** `paint_uv` takes the tick *number* and `shade` is called by you. Nothing here reads a clock, virtual or real, because a flaymap that read one could not be a golden. Peel, then `shade` once after the last hit of the tick, and the plugin uploads what changed.
+**The schedule.** `paint_uv` takes the tick *number* and `shade` is called by you. Nothing here reads a clock, virtual or real, because a flaymap that read one could not be a golden. Peel, then `shade` once after the last hit of the tick, and the plugin uploads what changed. Since 0.5.59 `shade` redraws only what was peeled since the last shade, and the normals one texel round it; the first shade, and a shade with another texel size, `tile_mm` or `seed`, redraws every texel. The bytes are those of a full redraw (`shading_what_changed_is_shading_everything`), so shading after every paint costs each paint's footprint rather than the canvas.
 
 **The message.** `BoneExposed` is registered here and written nowhere in this crate: only you know whether the thing you just peeled has a skeleton something else owns.
 

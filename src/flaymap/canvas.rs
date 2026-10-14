@@ -180,6 +180,15 @@ pub struct FlayCanvas {
     /// Whether a paint has already been refused for unusable input, so a caller feeding a NaN in a
     /// loop gets one line rather than one per frame.
     warned_input: bool,
+    /// **The texels whose depth has changed since the last [`shade`](Self::shade)**, as the rectangle
+    /// round them, `[x0, y0, x1, y1]` inclusive, or `None`. A shade redraws these and, for the
+    /// normals, which read their neighbours, one texel round them; everything else already shows the
+    /// depth it holds. Until 0.5.59 every shade redrew every texel, and the preset shades after each
+    /// hit, so a shotgun's twelve pellets redrew a whole canvas twelve times: 2.3 ms of a 3.5 ms tick.
+    stale: Option<[i64; 4]>,
+    /// The texel size, `tile_mm` and `seed` the pixels were last shaded with, as bits, or `None` before
+    /// the first shade: a shade with other settings redraws every texel, since the palette moved.
+    shaded_for: Option<(u32, u32, u32)>,
 }
 
 impl FlayCanvas {
@@ -275,6 +284,8 @@ impl FlayCanvas {
             bone_handed_off: false,
             warned: Vec::new(),
             warned_input: false,
+            stale: None,
+            shaded_for: None,
         }
     }
 
@@ -401,6 +412,8 @@ impl FlayCanvas {
         self.albedo_px.as_chunks_mut::<4>().0.fill(base);
         self.rough_px.as_chunks_mut::<4>().0.fill(rough);
         self.normal_px.as_chunks_mut::<4>().0.fill([128, 128, 255, 255]);
+        // Every pixel is what a shade of an all-zero depth draws, so nothing is stale.
+        self.stale = None;
         self.bone_texels = 0;
         self.bone_handed_off = false;
         self.painted_at = tick;
@@ -500,6 +513,7 @@ impl FlayCanvas {
                 if after != before {
                     *cell = after;
                     changed = true;
+                    self.stale = Some(self.stale.map_or([x, y, x, y], |[x0, y0, x1, y1]| [x0.min(x), y0.min(y), x1.max(x), y1.max(y)]));
                 }
                 if before < cortex && after >= cortex {
                     self.bone_texels = self.bone_texels.saturating_add(1);
@@ -620,13 +634,30 @@ impl FlayCanvas {
     ///
     /// The normal image is rewritten in the same pass. See [`normal`](Self::normal).
     ///
+    /// **It redraws what changed** (0.5.59): the texels peeled since the last shade, and the normals
+    /// one texel round them, which read their neighbours; the first shade, and a shade with another
+    /// texel size, `tile_mm` or `seed`, redraws all of them. Every other pixel already shows the depth
+    /// it holds, so the bytes are exactly those of a redraw of every texel.
+    ///
     /// **Call it after the last paint of a tick and before `Update`**, where the plugin's budget will
-    /// upload it. Calling it per paint is correct and merely wasteful; not calling it at all leaves
-    /// the images showing intact skin over a peeled buffer.
+    /// upload it. Calling it per paint costs the paint's footprint; not calling it at all leaves the
+    /// images showing intact skin over a peeled buffer.
     pub fn shade(&mut self, s: &FlaySettings) {
         let per_texel = UV_SPAN_M * s.scale.mm_per_unit / self.size as f32;
         let mm = if per_texel.is_finite() { per_texel } else { 0.0 };
         let size = self.size as usize;
+        let n = size as i64;
+        let key = (mm.to_bits(), s.tile_mm.to_bits(), s.seed);
+        let [x0, y0, x1, y1] = if self.shaded_for == Some(key) {
+            match self.stale.take() {
+                Some(r) => r,
+                None => return,
+            }
+        } else {
+            self.stale = None;
+            [0, 0, n - 1, n - 1]
+        };
+        self.shaded_for = Some(key);
         let detail = {
             let t = ((2.0 * GRAIN_MM - mm) / GRAIN_MM).clamp(0.0, 1.0);
             t * t * (3.0 - 2.0 * t)
@@ -643,13 +674,9 @@ impl FlayCanvas {
         let (base_rgba, base_rough) = (self.base_rgba, self.base_rough);
         let tile = (size as f32 * mm / RAGGED_CELL_MM).max(1.0);
         let mut changed = false;
-        for (i, (a, r)) in self
-            .albedo_px
-            .chunks_exact_mut(4)
-            .zip(self.rough_px.chunks_exact_mut(4))
-            .enumerate()
-        {
-            let Some(&d) = depth.get(i) else {
+        for (y, x) in (y0..=y1).flat_map(|y| (x0..=x1).map(move |x| (y, x))) {
+            let i = (y * n + x) as usize;
+            let (Some(&d), Some(a), Some(r)) = (depth.get(i), self.albedo_px.get_mut(i * 4..i * 4 + 4), self.rough_px.get_mut(i * 4..i * 4 + 4)) else {
                 continue;
             };
             let (want_a, want_r) = if d == 0 {
@@ -707,15 +734,17 @@ impl FlayCanvas {
             }
         }
         // The slope of the peeled surface. `h = -depth`, so with glTF's `+Y` up the image (towards
-        // row 0) the normal is `(-dh/du, dh/dv, 1)` over twice a texel's millimetres.
-        let n = size as i64;
+        // row 0) the normal is `(-dh/du, dh/dv, 1)` over twice a texel's millimetres. One texel wider
+        // than the colours, since a normal reads the depth either side of it.
         let two_mm = (2.0 * mm).max(1.0e-3);
         let at = |x: i64, y: i64| -> f32 {
             let (x, y) = (x.clamp(0, n - 1), y.clamp(0, n - 1));
             depth.get((y * n + x) as usize).map_or(0.0, |&d| d as f32 / HMM_PER_MM)
         };
-        for (i, px) in self.normal_px.chunks_exact_mut(4).enumerate() {
-            let (x, y) = ((i % size) as i64, (i / size) as i64);
+        let (nx0, ny0, nx1, ny1) = ((x0 - 1).max(0), (y0 - 1).max(0), (x1 + 1).min(n - 1), (y1 + 1).min(n - 1));
+        for (y, x) in (ny0..=ny1).flat_map(|y| (nx0..=nx1).map(move |x| (y, x))) {
+            let i = (y * n + x) as usize;
+            let Some(px) = self.normal_px.get_mut(i * 4..i * 4 + 4) else { continue };
             let dx = (at(x + 1, y) - at(x - 1, y)) / two_mm;
             let dy = -(at(x, y + 1) - at(x, y - 1)) / two_mm;
             let want = if dx == 0.0 && dy == 0.0 {
@@ -983,6 +1012,35 @@ mod tests {
                 .paint_world(&mesh, &xf, Vec3::new(9.0, 9.0, 1.0), -Vec3::Z, 0.2, 30.0, 1)
                 .is_none()
         );
+    }
+
+    /// **Shading what changed is shading everything, to the byte.** Two canvases take the same
+    /// craters — overlapping, at an edge, deep enough to reach bone — each followed by a shade; one
+    /// shades as it does, the other is made to redraw every texel every time. Their three images and
+    /// their dirty ticks agree after every shade, through a change of palette and back, and a clear.
+    #[test]
+    fn shading_what_changed_is_shading_everything() {
+        let (_ia, mut fast) = scratch(48);
+        let (_ib, mut full) = scratch(48);
+        let s = FlaySettings::default();
+        let other = FlaySettings { seed: 7, tile_mm: 3.0, ..FlaySettings::default() };
+        let hits = [(0.3, 0.4, 0.1, 6.0), (0.35, 0.42, 0.08, 30.0), (0.02, 0.97, 0.12, 9.0), (0.8, 0.2, 0.05, 2.0), (0.5, 0.5, 0.3, 40.0), (0.52, 0.48, 0.04, 3.0)];
+        let both = |k: u32, uv: Vec2, r: f32, d: f32, settings: &FlaySettings, fast: &mut FlayCanvas, full: &mut FlayCanvas| {
+            fast.paint_uv(uv, r, d, k);
+            full.paint_uv(uv, r, d, k);
+            fast.shade(settings);
+            full.shaded_for = None;
+            full.shade(settings);
+            assert_eq!((&fast.albedo_px, &fast.rough_px), (&full.albedo_px, &full.rough_px), "hit {k}: the colours parted");
+            assert_eq!(fast.normal_px, full.normal_px, "hit {k}: the normals parted");
+            assert_eq!(fast.dirty_since, full.dirty_since, "hit {k}");
+        };
+        for (k, &(u, v, r, d)) in hits.iter().enumerate() {
+            both(k as u32, Vec2::new(u, v), r, d, if k == 3 { &other } else { &s }, &mut fast, &mut full);
+        }
+        fast.clear(9);
+        full.clear(9);
+        both(10, Vec2::new(0.6, 0.6), 0.1, 8.0, &s, &mut fast, &mut full);
     }
 
     #[test]

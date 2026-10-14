@@ -478,6 +478,14 @@ characters and twelve 4.6 to 4.2, at forty and twelve 15.2 to 14.6. The bytes ar
 `the_live_tiles_change_nothing_but_the_cost` ticks one canvas this way and another over every texel and
 requires them equal on every tick.
 
+**Since 0.5.59 a flaymap redraws only where it was peeled.** The preset shades a skin's flaymap
+after every hit, and every shade redrew the whole canvas, so a shotgun's twelve pellets redrew it
+twelve times: timed stage by stage on `big`, 2.3 ms of a 3.5 ms `take_hits` on one character. A
+shade now redraws the texels peeled since the last and the normals one texel round them, to the same
+bytes. `hit_cost_by_scene_size`, interleaved with 0.5.58: twelve hits on one character 3.69 to
+1.29 ms a tick, on ten 4.02 to 1.66, on forty 14.6 to 12.1, and one hit on one character 0.61 to
+0.46. What is left at forty is casting the spray at the other characters' parts, 9.6 ms of it.
+
 ## What it costs in memory
 
 Every dressed surface owns canvases, and a canvas is a few bytes a texel: the table is what one costs,
