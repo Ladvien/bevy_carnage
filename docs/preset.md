@@ -135,6 +135,16 @@ to 128 droplets a wound, where every other surface takes 24; it is nearly always
 a wall a canvas fine enough for the drops, `Gore::wall().with_canvas(512)` for a three-metre wall,
 and mind the bill below.
 
+**A drop lies flat** (0.5.63). The flesh material lifts a film of blood by its depth so a pool's edge
+catches the light as a meniscus does (0.5.47), and it lifted a drop a few texels across the same way:
+all edge and no interior, a dome, so a wall's spatter read as red beads stuck on. A drop of blood that struck a wall has spread to a tenth of a millimetre deep and centimetres
+across. The shader now compares the blood four texels around a fragment with its own and draws a film
+whose surround holds under a quarter of it with 0.15 of the relief, all of it from 0.6 up; a ratio, so a
+wide film keeps its relief however thin. Four more taps of the wet map per wet fragment. The same spatter
+on the `--through` wall, square on and at a slant, before and after:
+
+![Blood spatter on a plaster wall seen close, square on and at a slant: at 0.5.62 every drop is a shaded dome, like a red bead stuck on; at 0.5.63 the same drops are flat stains with a crisp edge](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/small_films.png)
+
 ## What a dressed skin keeps
 
 Since 0.5.15 a skin keeps the material it was authored with: its colour factor, its

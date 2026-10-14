@@ -43,6 +43,15 @@
 //! level in the hollow and a weave holds its blood between the yarns, so neither is lifted; the
 //! relief fades out where a canvas texel is under a pixel. Wet films are at roughness `0.3`.
 //!
+//! **A film a few texels across lies nearly flat** (0.5.63). The relief stands for a meniscus at
+//! the edge of a film wider than many texels; a drop a few texels across has no interior for that
+//! edge to bound, and lifted whole it was a dome: a wall's spatter read as red beads stuck on, though a
+//! drop spread on a wall is a tenth of a millimetre deep and centimetres across. Four taps of the wet
+//! map at the corners of a square `FILM_SPAN_TEXELS` (4) texels out compare the blood around a
+//! fragment with its own; where the surround holds under `FILM_SPAN_LOW` (0.25) of it the film is
+//! drawn with `FILM_SMALL_RELIEF` (0.15) of the relief, rising to all of it at `FILM_SPAN_HIGH`
+//! (0.6). A ratio and not an amount, so a wide film keeps its relief however thin it is. Own numbers.
+//!
 //! **Blood on cloth.** Where the surface under the blood is a fabric rather than skin, the film
 //! colour is composited on the GPU instead: [`blood_lut`] tabulates the Kubelka–Munk film
 //! reflectance from `crate::bloodstain::spectral` over a black and over a white substrate, and the shader

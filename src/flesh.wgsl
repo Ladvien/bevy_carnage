@@ -74,6 +74,20 @@ const WET_EDGE: f32 = 0.04;
 // 12 mm texels tilts its edge 10° and catches no light. This crate's own number.
 const FILM_RELIEF: f32 = 6.0;
 
+// **How much of `FILM_RELIEF` a film a few texels across is drawn with**: 0.15, where the canvas
+// `FILM_SPAN_TEXELS` around a fragment holds under `FILM_SPAN_LOW` of the blood the fragment does,
+// rising to all of it at `FILM_SPAN_HIGH`. The relief stands for a meniscus narrower than a texel at the
+// edge of a film wider than many; a drop a few texels across has no interior for that edge to bound,
+// so lifted it was all edge — a dome — and a wall's spatter read as red beads stuck on. A drop of blood
+// spread on a wall is a tenth of a millimetre deep and centimetres across. Measured against the
+// fragment's own blood, not as an amount, so a wide film keeps its relief however thin it is. The four
+// taps are the canvas itself, bilinear, at the corners of a square `2 · FILM_SPAN_TEXELS` on a side.
+// This crate's own numbers.
+const FILM_SMALL_RELIEF: f32 = 0.15;
+const FILM_SPAN_TEXELS: f32 = 4.0;
+const FILM_SPAN_LOW: f32 = 0.25;
+const FILM_SPAN_HIGH: f32 = 0.6;
+
 // **The steepest a film's surface is drawn**, as the cosine of its tilt from what it lies on: 25°.
 // Without a cap the relief that lifts a floor's 12 mm texels stood a skin's 3.6 mm ones on end; at 35°
 // the gaps between a wound's runs, and between the clots in a crater seen close, shaded as dark
@@ -287,7 +301,16 @@ fn fragment(
             let uv_y = dpdy(in.uv);
             let px_per_texel = 1.0 / max(max(length(uv_x * size), length(uv_y * size)), 1.0e-6);
             let lift = flesh.wet.z / max(flesh.sss.y, 1.0e-6) * FILM_RELIEF * smoothstep(0.35, 1.0, px_per_texel);
-            film_dh = vec2<f32>(dot(slope, uv_x), dot(slope, uv_y)) * lift;
+            // A film only a few texels across lies nearly flat: see `FILM_SMALL_RELIEF`.
+            let reach = FILM_SPAN_TEXELS / size;
+            let around = 0.25 * (
+                textureSample(wet_map, flesh_sampler, in.uv + reach).r
+                + textureSample(wet_map, flesh_sampler, in.uv - reach).r
+                + textureSample(wet_map, flesh_sampler, in.uv + vec2<f32>(reach.x, -reach.y)).r
+                + textureSample(wet_map, flesh_sampler, in.uv + vec2<f32>(-reach.x, reach.y)).r
+            );
+            let span = mix(FILM_SMALL_RELIEF, 1.0, smoothstep(FILM_SPAN_LOW, FILM_SPAN_HIGH, around / max(w.r, 0.05)));
+            film_dh = vec2<f32>(dot(slope, uv_x), dot(slope, uv_y)) * lift * span;
         }
 #endif
     }
