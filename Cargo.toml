@@ -1,5 +1,11 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.53`: a graze is raw** (`AG-126`). Round every flaymap crater the skin it only grazed was
+# drawn bare, the dermis's pale pink mottled with the fat's cream, and read as a pale halo. A
+# fresh abrasion is raw and moist from the first moment: the graze now wears `GRAZE_FILM` (4 %) of
+# the cut film, ramped in over the skin's depth so its edge fades into the skin. Shader only;
+# every digest holds; WebGL2 checked again.
+#
 # **`0.5.52`: a crater is lit through its mouth** (`AG-125`). The flesh material lit a flaymap crater
 # as if it were open skin, so a wound pooled with blood was one red to its middle however deep it
 # went. Each texel below the skin now finds the crater's walls in the flaymap's own depth, eight
@@ -303,7 +309,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.52"
+version = "0.5.53"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

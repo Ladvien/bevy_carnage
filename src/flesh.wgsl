@@ -73,6 +73,17 @@ const FILM_RELIEF: f32 = 6.0;
 // crevices. This crate's own number.
 const FILM_MAX_TILT_COS: f32 = 0.906;
 
+// **The share of `FleshParams::cut`'s film a crater's graze wears**: 0.04, reached over the first
+// `GRAZE_RAMP` (6 %) of the layer span below the skin, about the skin's own thickness. A fresh
+// abrasion is raw and moist — the papillary dermis bleeds and weeps from the first moment — so skin a
+// crater only grazed is reddened by a thin film of its own ooze and shines a little; the ramp lets the
+// shallowest scuff at the graze's edge fade into the skin rather than stop at the edge of the canvas's
+// peeled mask. Bare, as until 0.5.53, the graze was the dermis's pale pink mottled with cream where the
+// fat came through, and round every crater it read as a pale halo; at 0.08 with no ramp it was a hard
+// red disc. The fact is forensic; the numbers are this crate's own.
+const GRAZE_FILM: f32 = 0.04;
+const GRAZE_RAMP: f32 = 0.06;
+
 // The cubic B-spline weights of the four texels around a sample at fraction `v` between the middle two.
 fn bspline(v: f32) -> vec4<f32> {
     let n = vec4<f32>(1.0, 2.0, 3.0, 4.0) - v;
@@ -320,8 +331,8 @@ fn fragment(
     // A cut face, and a crater's walls where the skin is peeled. Thickest where the vessels are, in
     // the muscle, by the tissue's own depth below the skin (`UV_1.x` on a cap, the flaymap's depth on
     // a canvas). A cap keeps a quarter of it over the fat at its rim, so a piece reads as meat with a
-    // paler edge and the bands still show; a crater's rim keeps none, because there the skin is only
-    // grazed: the abrasion stays the dermis's pink, the fat under it reddens, and the deep wound is
+    // paler edge and the bands still show; a crater's graze keeps `GRAZE_FILM` of it, the ooze of a
+    // fresh abrasion, so the dermis reads raw and the fat under it reddens, and the deep wound is
     // dark with blood, where bare it was a ring of yellow fat. Its liquid shines. A value noise over
     // `UV_1` was tried first, for patches, and on the preset's pieces it drew stripes across each
     // face, not patches.
@@ -336,11 +347,12 @@ fn fragment(
 #endif
     if mode == MODE_CANVAS {
         exposed = peeled;
+        rim = GRAZE_FILM * smoothstep(0.0, GRAZE_RAMP, depth_frac);
     }
     if flesh.cut.x > 0.0 && exposed > 0.0 {
         let thick = smoothstep(0.08, 0.5, depth_frac);
         let film_mm = flesh.cut.x * mix(rim, 1.0, thick);
-        // How wet it shines: a half where a cap's rim film lies, none on a graze, all of it deep.
+        // How wet it shines: a half where a cap's rim film lies, a little on a graze, all of it deep.
         let shine = mix(2.0 * rim, 1.0, thick) * exposed;
         let tissue = pbr_input.material.base_color.rgb;
         pbr_input.material.base_color = vec4<f32>(mix(tissue, blood_over(tissue, film_mm), exposed), pbr_input.material.base_color.a);

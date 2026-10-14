@@ -63,6 +63,10 @@
 //! a quarter of it over the fat at the rim, graded by the tissue's own depth below the skin, with the
 //! film's clear coat. Off by default; the preset's broken pieces wear it since 0.5.38, where a bare fat
 //! band read as cheese, and its skins' craters since 0.5.42, where a crater was a ring of bare fat.
+//! A crater's graze wears 4 % of the film (`GRAZE_FILM` in the shader, since 0.5.53), ramped in over
+//! the first 6 % of the layer span, about the skin's own depth: the ooze of a fresh abrasion, which is
+//! raw and moist from the first moment. Bare, the graze was pale pink mottled with the fat's cream,
+//! and round every crater it read as a pale halo.
 //!
 //! **A crater is lit through its mouth** (0.5.52). In [`FleshMode::Canvas`], a texel below the skin
 //! looks out over the flaymap's own depth in eight directions, to 1, 3, 7 and 15 texels, for the
