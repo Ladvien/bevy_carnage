@@ -130,6 +130,13 @@ pub struct EffectTtl(pub u32);
 /// `bloodstain`'s spray model uses the arterial saturation.
 const DROPLET_FILM: Film = Film { thickness_mm: 0.4, so2: crate::bloodstain::SO2_ARTERIAL, substrate: 0.2 };
 
+/// **How much of a droplet's flight it is drawn along**, seconds: a ninetieth. A drop is drawn its
+/// width plus its speed times this, along its velocity, so at the 8 to 40 m/s it leaves a wound at it
+/// is a streak of 9 to 44 cm, which drag shortens to a dash of a few centimetres as it slows to its
+/// fall. A sixtieth, the time a film camera's shutter is open, drew the fastest as needles half a metre
+/// long across the frame. This crate's own number.
+pub const DROPLET_STREAK_S: f32 = 1.0 / 90.0;
+
 /// **The film a puff of mist is.** The fine fraction is droplets a few tens of micrometres across, a
 /// lens a twentieth of a millimetre thick that lets most of what is behind it through, so the cloud is
 /// paler than the spray — the same model, at the thickness of what it is made of.
@@ -184,7 +191,8 @@ struct BloodEffect {
     lifetime: [f32; 2],
     /// Drag multiplier over the settings' own dial.
     drag_scale: f32,
-    /// Billboard size, metres.
+    /// Billboard size, metres: a droplet's width, which its speed draws out (see
+    /// [`DROPLET_STREAK_S`]), or a puff's diameter.
     size: f32,
     /// How big a particle is at the end of its life, as a multiple of its start: `0` dwindles to
     /// nothing, as a droplet that thins in flight does; above `1` it spreads, as a cloud does.
@@ -254,18 +262,21 @@ impl BloodEffect {
         // `size = F32_0 * (1 + (grow - 1) * age/lifetime)` clamped at zero, so a droplet (`grow` 0)
         // dwindles instead of blinking out and a puff (`grow` above 1) spreads, each keeping its own
         // scale while doing it.
-        let update_size = SetAttributeModifier::new(
-            Attribute::SIZE,
-            writer
-                .attr(Attribute::F32_0)
-                .mul(
-                    writer
-                        .lit(1.0)
-                        .add(writer.lit(self.grow - 1.0).mul(writer.attr(Attribute::AGE).div(writer.attr(Attribute::LIFETIME))))
-                        .max(writer.lit(0.0)),
-                )
-                .expr(),
-        );
+        let shrink = writer
+            .lit(1.0)
+            .add(writer.lit(self.grow - 1.0).mul(writer.attr(Attribute::AGE).div(writer.attr(Attribute::LIFETIME))))
+            .max(writer.lit(0.0));
+        let width = writer.attr(Attribute::F32_0).mul(shrink.clone());
+        let update_size = if self.soft {
+            SetAttributeModifier::new(Attribute::SIZE, width.expr())
+        } else {
+            // **A drop is as long as the way it travels while the eye takes it in**: its width, and
+            // along its velocity [`DROPLET_STREAK_S`] of its flight more, dwindling as the drop does.
+            // A drop drawn as wide as it is long read as a red disc hanging in the air however fast it
+            // flew; drawn out, a spray is fast at the wound and slows to round drops as drag takes it.
+            let streak = writer.attr(Attribute::VELOCITY).length().mul(writer.lit(DROPLET_STREAK_S)).mul(shrink);
+            SetAttributeModifier::new(Attribute::SIZE2, width.clone().add(streak).vec2(width).expr())
+        };
         let texture_slot = writer.lit(0u32).expr();
 
         // The kill volume is generous rather than tight: it exists so a droplet that escapes the
@@ -359,11 +370,13 @@ pub fn spatter_burst(s: &CarnageSettings, palette: Palette) -> EffectAsset {
         // **Tuned, not measured.** At `drag = drag * 2.6` a droplet's speed e-folds in about a
         // quarter of a second, so it visibly decelerates and then falls at the terminal speed
         // `gravity/drag` instead of flying flat; the longer lifetime is what lets that fall be seen
-        // rather than the droplet dying at the top of its arc; and the larger billboard is what
-        // makes it read as a cohesive drop rather than as dust.
+        // rather than the droplet dying at the top of its arc. The size is a streak's width, 5 to 19
+        // mm ([`DROPLET_STREAK_S`] gives its length): until 0.5.64 a drop was a disc 14 to 47 mm
+        // across, which had to be that wide to read as a drop rather than as dust, and in the two
+        // frames a spray is in a body-sized view read as red polka dots.
         lifetime: [0.55, 1.30],
         drag_scale: 2.6,
-        size: 0.030,
+        size: 0.012,
         grow: 0.0,
         soft: false,
         opacity: 1.0,
@@ -427,7 +440,7 @@ pub fn arterial_spurt(s: &CarnageSettings, palette: Palette) -> EffectAsset {
         // is meant to carry further than an impact spray.
         lifetime: [0.60, 1.40],
         drag_scale: 1.8,
-        size: 0.034,
+        size: 0.014,
         grow: 0.0,
         soft: false,
         opacity: 1.0,

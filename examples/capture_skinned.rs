@@ -21,6 +21,10 @@
 //! `--guard` stands the body on guard in front of the wall instead of walking, the right forearm held
 //! across the chest, and takes one shot through it at frame 40: it goes in and out of the forearm and
 //! on into the chest, and once the arm is lowered the wound it hid is seen, its forward spatter round it.
+//! `--slow N` runs the clock at `1/N` speed — every frame a `60 N`-th of a second, so a fixed tick
+//! every `N` frames — which is how the spray a hit throws, gone from a body-sized view within two
+//! frames at full speed, is seen leaving it. It prints its own digest: the same ticks fall on other
+//! frames.
 //!
 //! Writes `frame0000.png …` and prints one digest line; two runs must print the same line.
 //!
@@ -81,6 +85,7 @@ fn main() {
         None if guard => Transform::from_xyz(-0.5, 1.46, 1.5).looking_at(at, Vec3::Y),
         None => mannequin::view(),
     };
+    let slow = common::arg("--slow").and_then(|n| n.parse::<u32>().ok()).unwrap_or(1).max(1);
     let Some(mut rec) = Recorder::new_with(800, 500, camera, &out, |app| {
         // **The clock is the frame, not the wall**, for the reason `capture_preset` gives: one sixtieth
         // per update and a 60 Hz fixed step is one tick per frame, and the animation reads the same
@@ -89,7 +94,7 @@ fn main() {
         #[cfg(feature = "vfx")]
         app.add_plugins(bevy_carnage::CarnageVfxPlugin);
         app.add_plugins(GorePlugin)
-            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / (60.0 * slow as f64))))
             .insert_resource(Time::<Fixed>::from_hz(60.0))
             .add_systems(Startup, setup);
         if flag("--stroll") {

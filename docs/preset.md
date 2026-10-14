@@ -335,6 +335,14 @@ droplet tens of micrometres across do, and hangs there. So each gunshot puffs `M
 soft discs per droplet of its spray, which grow to three times their size and fade over a quarter to
 half a second, in the colour the film model gives blood as thin as they are.
 
+**A droplet in flight is a streak** (0.5.64). Each is drawn along its velocity, its width plus
+`DROPLET_STREAK_S` (1/90 s) of its flight: 9 to 44 cm at the speeds it leaves the wound at, shortening
+as drag slows it to its fall, 5 to 19 mm wide. Drawn as a disc as wide as it was long, 14 to 47 mm
+across, the spray read as red dots hanging round the wound. `capture_skinned --guard --slow 4` is a hit
+at a quarter speed:
+
+![Slowed four times: one shot through the forearm held across the mannequin's chest throws a fan of thin red streaks from both wounds, which slow and shorten as they fly, and a soft red mist hangs where the shot went in](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_spray.gif)
+
 **It follows the player's setting.** Where `GorePolicy::draws_blood` is false the same bursts are
 thrown in `CarnageSettings::substitute_srgb` instead (`CarnageEffects::substitute`): the same tick,
 place, direction and number, a yellow flash where the blood would have been. Before 0.5.51 the
@@ -585,6 +593,11 @@ the player never sees up close, and the wrong one for the one they shoot.
   could is the game's ballistics, and the hit's last `Wounded` is where it left. A part is read as
   closed — the shot is counted in and out of a mesh by the winding of the triangles it crosses — so a
   part left open where the shot leaves it opens no exit there.
+- **A stain lands the tick its wound opens.** The spray's stains are painted as the wound is, while
+  the particles that stand for the same droplets are still leaving it, so a wall 1.2 m behind a body is
+  spattered two to nine ticks before the spray could reach it. At full speed that is within the
+  frames a spray takes to cross the view; slowed four times (`capture_skinned --guard --slow 4`) the
+  wall's drops are there before the streaks.
 - **A droplet flies straight and stops at the first thing it reaches** (0.5.32). A body part, a
   sheet, a wall or the shirt the wound is under catches it, a hole in a cloth lets it through, and a
   droplet something caught does not also land on the floor. The cast is a straight line, so a
