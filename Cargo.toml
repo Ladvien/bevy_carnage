@@ -1,5 +1,13 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.50`: a slash lies on the skin and opens into it** (`AG-123`). A slash's path was a straight
+# line through the hit in the plane of the skin there, so across a curved limb its ends, and the
+# wound bed built along it, stood off the skin: on the mannequin's thigh a pale plank across the leg.
+# The path is now walked on the skin from the hit. And the bed's walls were lit as open skin, so a
+# narrow cut read as a pale ridge; its vertex colour now carries the light that reaches it down the
+# trough, `(1 + sin α)/2` at a lip and `sin² α` at the floor. The skinned clips' digests move with
+# the torn mesh their blood runs over.
+#
 # **`0.5.49`: a slash's wound bed rides a skinned limb** (`AG-122`). The bed under a laceration is a
 # mesh of its own, and on a skinned skin it had no joints and no `SkinnedMesh`, so it was drawn in
 # the bind pose: once the limb moved, it stood off the body as a pale fin across the cut. Each bed
@@ -279,7 +287,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.49"
+version = "0.5.50"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

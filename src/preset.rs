@@ -480,6 +480,32 @@ fn face_uv(mesh: &Mesh, tri: [u32; 3], v: Vec3) -> Option<(Vec2, Vec3)> {
     Some(((t1 - t0) * a + (t2 - t0) * b, normal))
 }
 
+/// **Where a ray crosses a triangle**: `(t, u, v)`, its distance along `d` in lengths of `d` and the
+/// barycentric weights of the second and third corners, by Möller & Trumbore (1997). `None` for a
+/// miss, a ray along the face, or a crossing at or behind the origin.
+fn crossing(origin: Vec3, d: Vec3, [pa, pb, pc]: [Vec3; 3]) -> Option<(f32, f32, f32)> {
+    let e1 = pb - pa;
+    let e2 = pc - pa;
+    let h = d.cross(e2);
+    let det = e1.dot(h);
+    if det.abs() < 1.0e-9 {
+        return None;
+    }
+    let inv_det = 1.0 / det;
+    let s_vec = origin - pa;
+    let u = inv_det * s_vec.dot(h);
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = s_vec.cross(e1);
+    let v = inv_det * d.dot(q);
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = inv_det * e2.dot(q);
+    (t > 0.0).then_some((t, u, v))
+}
+
 /// The UV a world ray lands on, by the same Möller–Trumbore walk the canvases use — the preset needs
 /// it for the injuries that live in texture space (a bruise, a burn) rather than on a ray.
 fn ray_hit(mesh: &Mesh, xf: &GlobalTransform, from: Vec3, dir: Vec3) -> Option<Landing> {
@@ -508,26 +534,8 @@ fn ray_hit(mesh: &Mesh, xf: &GlobalTransform, from: Vec3, dir: Vec3) -> Option<L
         i += 3;
         let (Some(pa), Some(pb), Some(pc)) = (positions.get(a), positions.get(b), positions.get(c)) else { continue };
         let (pa, pb, pc) = (Vec3::from(*pa), Vec3::from(*pb), Vec3::from(*pc));
-        let e1 = pb - pa;
-        let e2 = pc - pa;
-        let h = d.cross(e2);
-        let det = e1.dot(h);
-        if det.abs() < 1.0e-9 {
-            continue;
-        }
-        let inv_det = 1.0 / det;
-        let s_vec = origin - pa;
-        let u = inv_det * s_vec.dot(h);
-        if !(0.0..=1.0).contains(&u) {
-            continue;
-        }
-        let q = s_vec.cross(e1);
-        let v = inv_det * d.dot(q);
-        if v < 0.0 || u + v > 1.0 {
-            continue;
-        }
-        let t = inv_det * e2.dot(q);
-        if t <= 0.0 || best.is_some_and(|(bt, _)| bt <= t) {
+        let Some((t, u, v)) = crossing(origin, d, [pa, pb, pc]) else { continue };
+        if best.is_some_and(|(bt, _)| bt <= t) {
             continue;
         }
         let (Some(ua), Some(ub), Some(uc)) = (uvs.get(a), uvs.get(b), uvs.get(c)) else { continue };
@@ -537,7 +545,7 @@ fn ray_hit(mesh: &Mesh, xf: &GlobalTransform, from: Vec3, dir: Vec3) -> Option<L
             Landing {
                 uv,
                 point: origin + d * t,
-                normal: e1.cross(e2).normalize_or_zero(),
+                normal: (pb - pa).cross(pc - pa).normalize_or_zero(),
                 tri: [a as u32, b as u32, c as u32],
                 bary: Vec3::new(1.0 - u - v, u, v),
                 t,
@@ -545,6 +553,81 @@ fn ray_hit(mesh: &Mesh, xf: &GlobalTransform, from: Vec3, dir: Vec3) -> Option<L
         ));
     }
     best.map(|(_, landing)| landing)
+}
+
+/// **How many steps a slash's path takes each way from the hit**, each that fraction of the blade's
+/// half-length. On the skinned mannequin's thigh, 8 cm in radius, a 7 cm half-blade steps 9 mm and the
+/// skin falls half a millimetre below each step, which the next step's ray takes back up.
+const SLASH_STEPS: u32 = 8;
+
+/// **A slash's path, laid on the skin it cuts**, in the mesh's own space, from the blade's middle at
+/// `at` on a face whose normal is `normal`, `half` either way along `along`.
+///
+/// A blade drawn across a limb follows the limb. A straight line through the hit in the plane of the
+/// skin there leaves it, and the wound bed [`tear`](crate::laceration::tear) builds along the path
+/// leaves with it: the mannequin's thigh slash runs 5.6 cm of its 7 cm half-length round a thigh 8 cm
+/// in radius, so its ends stood `√(r² + t²) − r`, near two centimetres, off the skin, and the bed was
+/// a pale plank laid across the leg. So the path is walked out from the hit both ways in
+/// [`SLASH_STEPS`] steps, each along the skin at the last point and brought back onto it by a ray down
+/// that point's normal, landing only on a face that faces out the way the skin there does. A step
+/// whose ray finds no such face within a step of the tangent ends the walk on that side: the blade
+/// has run off what it can reach.
+fn slash_path(mesh: &Mesh, at: Vec3, normal: Vec3, along: Vec3, half: f32) -> Vec<Vec3> {
+    let step = half / SLASH_STEPS as f32;
+    let near = triangles_near(mesh, at, half + 2.0 * step);
+    let walk = |sign: f32| {
+        let mut points = Vec::with_capacity(SLASH_STEPS as usize);
+        let (mut p, mut n, mut heading) = (at, normal, along * sign);
+        for _ in 0..SLASH_STEPS {
+            let ahead = (heading - n * heading.dot(n)).normalize_or_zero();
+            if ahead == Vec3::ZERO {
+                break;
+            }
+            let from = p + ahead * step + n * step;
+            let mut best: Option<(f32, Vec3)> = None;
+            for tri in &near {
+                let face = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize_or_zero();
+                if face.dot(n) > 0.0
+                    && let Some((t, _, _)) = crossing(from, -n, *tri)
+                    && t <= 2.0 * step
+                    && best.is_none_or(|(bt, _)| t < bt)
+                {
+                    best = Some((t, face));
+                }
+            }
+            let Some((t, face)) = best else { break };
+            p = from - n * t;
+            n = face;
+            heading = ahead;
+            points.push(p);
+        }
+        points
+    };
+    let (behind, ahead) = (walk(-1.0), walk(1.0));
+    behind.into_iter().rev().chain(core::iter::once(at)).chain(ahead).collect()
+}
+
+/// The triangles of `mesh` whose bounding boxes come within `reach` of `p` on every axis, as corners.
+fn triangles_near(mesh: &Mesh, p: Vec3, reach: f32) -> Vec<[Vec3; 3]> {
+    let Ok(Some(VertexAttributeValues::Float32x3(positions))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_POSITION) else {
+        return Vec::new();
+    };
+    let (lo, hi) = (p - Vec3::splat(reach), p + Vec3::splat(reach));
+    let corner = |i: usize| positions.get(i).copied().map(Vec3::from);
+    let mut near = Vec::new();
+    let mut take = |[a, b, c]: [usize; 3]| {
+        let (Some(a), Some(b), Some(c)) = (corner(a), corner(b), corner(c)) else { return };
+        if a.min(b).min(c).cmple(hi).all() && a.max(b).max(c).cmpge(lo).all() {
+            near.push([a, b, c]);
+        }
+    };
+    match mesh.try_indices_option() {
+        Ok(Some(Indices::U32(ix))) => ix.as_chunks::<3>().0.iter().for_each(|t| take(t.map(|i| i as usize))),
+        Ok(Some(Indices::U16(ix))) => ix.as_chunks::<3>().0.iter().for_each(|t| take(t.map(usize::from))),
+        Ok(None) => (0..positions.len() / 3).for_each(|t| take([3 * t, 3 * t + 1, 3 * t + 2])),
+        Err(_) => {}
+    }
+    near
 }
 
 /// **A mesh's atlas density, UV units per metre**: the square root of its total UV area over its
@@ -2711,7 +2794,7 @@ fn take_hits(
             let torn = meshes.add(bind.clone());
             commands.entity(hit.entity).try_insert(Mesh3d(torn));
             commands.entity(hit.entity).try_insert(Laceration {
-                path: vec![p - along_local * half, p, p + along_local * half],
+                path: slash_path(&bind, p, n_local, along_local, half),
                 normal: n_local,
                 // `SLASH_OPEN_M` in the world, in the asset's own units, under the tension it opens at.
                 gape: Gape { width_max: SLASH_OPEN_M / (scale * tension.skin.max(1.0e-6)), ..Gape::default() },
@@ -4233,11 +4316,38 @@ mod tests {
         app.world_mut().write_message(GoreHit::slash(body, Vec3::new(1.0, 0.7, 2.0), Vec3::NEG_Z, Vec3::Y, 0.1, 4.0));
         app.world_mut().run_schedule(FixedUpdate);
         let Some(cut) = app.world().get::<Laceration>(body) else { panic!("a slash laid no laceration") };
-        let [from, at, to] = [cut.path[0], cut.path[1], cut.path[2]];
+        let (Some(&from), Some(&at), Some(&to)) = (cut.path.first(), cut.path.get(cut.path.len() / 2), cut.path.last()) else {
+            panic!("the cut has no path")
+        };
         assert!(at.distance(Vec3::new(1.7, 0.0, 0.2)) < 0.03, "the cut's middle is at {at:?} in the bind pose");
         let along = (to - from).normalize_or_zero();
         assert!(along.dot(Vec3::X) > 0.99, "the cut runs {along:?}; up the bent forearm is along +X in the bind pose");
         assert!(((to - from).length() - 0.2).abs() < 0.02, "the cut is {} m long, the slash's 0.2", (to - from).length());
+    }
+
+    /// **A slash across a limb lies on its skin.** A blade drawn round a curved surface follows it, and
+    /// the wound bed is built along the path. Laid as a straight line through the hit in the plane of
+    /// the skin there, a 0.3 m slash across a sphere of radius 0.3 had its ends 35 mm off the sphere,
+    /// and its bed with them. Walked on the skin, every point of the path is on the sphere's facets —
+    /// a 24 × 12 UV sphere's sit up to about 5 mm inside it — and the path is as long as the blade.
+    #[test]
+    fn a_slash_across_a_limb_lies_on_its_skin() {
+        let mut app = headless();
+        let sphere = app.world_mut().resource_mut::<Assets<Mesh>>().add(Sphere::new(0.3).mesh().uv(24, 12));
+        let body = app.world_mut().spawn((Mesh3d(sphere), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Limb))).id();
+        app.world_mut().run_schedule(FixedUpdate);
+        app.world_mut().write_message(GoreHit::slash(body, Vec3::new(0.0, 0.05, 2.0), Vec3::NEG_Z, Vec3::X, 0.15, 8.0));
+        app.world_mut().run_schedule(FixedUpdate);
+        let Some(cut) = app.world().get::<Laceration>(body) else { panic!("a slash laid no laceration") };
+        for p in &cut.path {
+            let r = p.length();
+            assert!((0.292..=0.3001).contains(&r), "a point of the cut is {} mm off the sphere: {p:?}", (r - 0.3) * 1000.0);
+        }
+        let length: f32 = cut.path.windows(2).map(|w| w[1].distance(w[0])).sum();
+        assert!((length - 0.3).abs() < 0.015, "the cut is {length} m long on the skin, the blade's 0.3");
+        let ends = cut.path.first().zip(cut.path.last()).map(|(a, b)| (a.x, b.x));
+        // 0.15 m of arc either way on a 0.3 m sphere is half a radian: `0.3 · sin 0.5` along x.
+        assert!(ends.is_some_and(|(a, b)| a < -0.13 && b > 0.13), "the cut does not run round the sphere along x: ends at {ends:?}");
     }
 
     /// **Blood runs downhill in the world on a skinned limb, whichever way its atlas is laid out.** The

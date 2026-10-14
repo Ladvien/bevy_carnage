@@ -695,6 +695,33 @@ struct BedVert {
     across: f32,
     /// The joint indices and weights it is skinned by, when the skin is skinned.
     bind: Option<([u16; 4], [f32; 4])>,
+    /// How much of the light outside reaches it down the trough: [`groove_light`].
+    light: f32,
+}
+
+/// **How much light reaches a V-shaped trough's lip and its floor**, as fractions of what a surface
+/// open to the room gets: the trough `w` wide either side of its axis and `d` deep.
+///
+/// In a section across the cut, a point on a wall sees out of the trough only through its mouth; the
+/// rest of its view is the other wall. Under light that arrives evenly from every direction — the
+/// ambient, and a fair stand-in for a key light whose direction the trough does not know — the share
+/// a point receives is the cosine-weighted fraction of its view through the mouth, which in a
+/// section is `(sin φ₂ − sin φ₁) / 2` for the directions `φ₁..φ₂` from its normal (Hottel's
+/// crossed-strings result for a strip). With `sin α = w / √(w² + d²)`, a lip sees out over
+/// `[−α, 90°]`, so `(1 + sin α) / 2`; the floor, where the walls meet, over `[90° − 2α, 90°]`, so
+/// `sin² α`. A geometric closed form, not a tuning. It leaves out the light the walls bounce to each
+/// other, which a wall wet with blood returns little of.
+///
+/// A trough with no depth is open: `(1, 1)`.
+fn groove_light(w: f32, d: f32) -> (f32, f32) {
+    let reach = (w * w + d * d).sqrt();
+    // False for a NaN as well as for no depth.
+    let hollow = reach > 0.0 && d > 0.0;
+    if !hollow {
+        return (1.0, 1.0);
+    }
+    let sin_a = (w.max(0.0) / reach).min(1.0);
+    ((1.0 + sin_a) * 0.5, sin_a * sin_a)
 }
 
 /// The trough behind the hole: two walls meeting at a floor, in 2 mm pieces along each segment,
@@ -752,10 +779,11 @@ fn bed_mesh(
             let hl = lip(half, inv_influence, along, 1.0, seed, scale);
             let hr = lip(half, inv_influence, along, -1.0, seed, scale);
             let (left, right) = (surface + side * hl, surface - side * hr);
+            let (lit_lip, lit_floor) = groove_light(0.5 * (hl + hr), depth * open);
             [
-                BedVert { p: left, surface, along, across: hl, bind: bind(left) },
-                BedVert { p: right, surface, along, across: -hr, bind: bind(right) },
-                BedVert { p: surface - n * depth * open, surface, along, across: 0.0, bind: bind(surface) },
+                BedVert { p: left, surface, along, across: hl, bind: bind(left), light: lit_lip },
+                BedVert { p: right, surface, along, across: -hr, bind: bind(right), light: lit_lip },
+                BedVert { p: surface - n * depth * open, surface, along, across: 0.0, bind: bind(surface), light: lit_floor },
             ]
         };
         let mut near_end = section(start);
@@ -860,7 +888,9 @@ impl Bed {
         // to about 23 mm they read as where the blood happened to run.
         let streak = wander(v.along * 0.35, self.seed, scale) / RAIL_WANDER;
         let wet = ((BED_WET_LIP + (BED_WET_FLOOR - BED_WET_LIP) * down) * (0.55 + 0.9 * streak)).clamp(0.0, 1.0);
-        self.color.push([1.0 + (BED_BLOOD[0] - 1.0) * wet, 1.0 + (BED_BLOOD[1] - 1.0) * wet, 1.0 + (BED_BLOOD[2] - 1.0) * wet, 1.0]);
+        // **And it lies in a trough**, lit only through its mouth: darker toward the floor.
+        let tint = |blood: f32| (1.0 + (blood - 1.0) * wet) * v.light;
+        self.color.push([tint(BED_BLOOD[0]), tint(BED_BLOOD[1]), tint(BED_BLOOD[2]), 1.0]);
         if let Some((joints, weights)) = v.bind {
             self.joints.push(joints);
             self.weights.push(weights);

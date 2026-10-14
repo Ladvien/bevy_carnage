@@ -159,6 +159,9 @@ renderer asks for. Nothing is asked of the game. Put `Gore` on the skinned mesh 
   normal, the direction of travel and the length are carried back through the pose at the triangle
   that was hit. Its wound bed is skinned by the joints of the skin around it (0.5.49), so it rides
   the limb with the lips; before, it stayed in the bind pose and stood off a limb that had moved.
+  Its path is walked on the skin from the hit (0.5.50), eight steps of the blade's half-length each
+  way, so a cut round a limb follows the limb; laid as a straight line in the plane of the skin at
+  the hit, its ends and its bed stood off a curved thigh.
 - **A bruise and a burn live in UV space**, and so ride the limb with no extra work. A burn is
   drawn as Jackson's three zones as far in as its degree reached (0.5.43, `burn_zone`): a third
   degree is a dark eschar in a pale ring of stasis in a red flare out to `BURN_FLARE` times

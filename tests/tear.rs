@@ -192,6 +192,44 @@ fn the_bed_floor_sits_at_the_authored_depth() {
     assert_eq!(layer, bevy_carnage::cross_section::Layer::Fat, "6 mm into a limb is subcutaneous fat");
 }
 
+/// **A trough is lit through its mouth.** A bed's colour is the blood it is wet with times the light
+/// that reaches it down the trough. Two cuts alike but for their depth lay the same vertices with the
+/// same blood, so the deeper one must be darker at every vertex below the skin and no lighter at any
+/// lip. Until 0.5.50 a bed was lit as if it were open skin, and a slit read as a pale ridge.
+#[test]
+fn a_deeper_trough_is_darker_below_the_skin() {
+    let patch = skin_patch(CELLS, SIZE);
+    let layers = Layers::for_region(Region::Limb);
+    let scale = Scale::default();
+    let bed = |bed_depth_mm: f32| {
+        let shape = TearShape { half_width: CELL * 1.2, influence: 0.15, bed_depth_mm };
+        let torn = tear(&patch, &middle_row(), Vec3::Y, &shape, Region::Limb, &layers, &scale).expect("the tear must produce a bed");
+        let colour = match torn.bed.try_attribute_option(Mesh::ATTRIBUTE_COLOR) {
+            Ok(Some(VertexAttributeValues::Float32x4(c))) => c.clone(),
+            _ => Vec::new(),
+        };
+        let uv0 = match torn.bed.try_attribute_option(Mesh::ATTRIBUTE_UV_0) {
+            Ok(Some(VertexAttributeValues::Float32x2(u))) => u.clone(),
+            _ => Vec::new(),
+        };
+        (positions(&torn.bed), colour, uv0)
+    };
+    let (_, shallow, uv) = bed(6.0);
+    let (pos, deep, uv_deep) = bed(120.0);
+    assert!(!shallow.is_empty() && shallow.len() == deep.len() && uv == uv_deep, "two cuts alike but for depth must lay the same vertices");
+    let (mut below, mut lips) = (0, 0);
+    for ((p, d), s) in pos.iter().zip(&deep).zip(&shallow) {
+        if p.y < -1.0e-6 {
+            below += 1;
+            assert!(d[0] < s[0] && d[1] < s[1] && d[2] < s[2], "a vertex {} mm down is no darker than its twin 6 mm deep: {d:?} against {s:?}", -p.y * 1000.0);
+        } else {
+            lips += 1;
+            assert!(d[0] <= s[0] && d[1] <= s[1] && d[2] <= s[2], "a deeper trough's lip is lighter: {d:?} against {s:?}");
+        }
+    }
+    assert!(below > 0 && lips > 0, "the bed must have both a floor and lips, got {below}/{lips}");
+}
+
 /// **Every face of the bed is wound the way its normal says.** A wound bed is looked at from
 /// inside the trough with back-face culling on, so a triangle wound against its authored normal is
 /// not a shading artefact — it is invisible. The end caps shipped that way in 0.1.0 and nothing here
