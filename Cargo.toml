@@ -1,5 +1,11 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.60`: a cast tests the triangles it can reach** (`AG-133`). The preset walked every triangle
+# of a mesh for every ray. A rigid surface's mesh now carries a bounding-volume hierarchy, built the
+# tick it is dressed and kept while the mesh is unchanged, and a cast through it lands exactly where
+# the walk did, to the bit. One hit on a 16,128-triangle part 1.53 to 0.59 ms a tick, twelve on forty
+# characters 12.1 to 9.3. Every frame of the skinned and tier clips is unchanged.
+#
 # **`0.5.59`: a shotgun on one character costs a third of what it did** (`AG-132`). The preset shades
 # a skin's flaymap after every hit, and `FlayCanvas::shade` redrew the whole canvas each time: 2.3 ms
 # of a twelve-pellet tick's 3.5. It now redraws the texels peeled since the last shade and the normals
@@ -352,7 +358,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.59"
+version = "0.5.60"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

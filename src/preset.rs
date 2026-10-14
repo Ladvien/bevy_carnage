@@ -559,21 +559,122 @@ fn ray_hit(mesh: &Mesh, xf: &GlobalTransform, from: Vec3, dir: Vec3) -> Option<L
         if best.is_some_and(|(bt, _)| bt <= t) {
             continue;
         }
-        let (Some(ua), Some(ub), Some(uc)) = (uvs.get(a), uvs.get(b), uvs.get(c)) else { continue };
-        let uv = Vec2::from(*ua) * (1.0 - u - v) + Vec2::from(*ub) * u + Vec2::from(*uc) * v;
-        best = Some((
-            t,
-            Landing {
-                uv,
-                point: origin + d * t,
-                normal: (pb - pa).cross(pc - pa).normalize_or_zero(),
-                tri: [a as u32, b as u32, c as u32],
-                bary: Vec3::new(1.0 - u - v, u, v),
-                t,
-            },
-        ));
+        let Some(landing) = land(origin, d, (t, u, v), [a, b, c], positions, uvs) else { continue };
+        best = Some((t, landing));
     }
     best.map(|(_, landing)| landing)
+}
+
+/// The landing a crossing `(t, u, v)` of triangle `[a, b, c]` makes, mesh-local. `None` when a
+/// corner has no position or no UV, which is a triangle a cast passes over.
+fn land(origin: Vec3, d: Vec3, (t, u, v): (f32, f32, f32), [a, b, c]: [usize; 3], positions: &[[f32; 3]], uvs: &[[f32; 2]]) -> Option<Landing> {
+    let (pa, pb, pc) = (Vec3::from(*positions.get(a)?), Vec3::from(*positions.get(b)?), Vec3::from(*positions.get(c)?));
+    let (ua, ub, uc) = (Vec2::from(*uvs.get(a)?), Vec2::from(*uvs.get(b)?), Vec2::from(*uvs.get(c)?));
+    Some(Landing {
+        uv: ua * (1.0 - u - v) + ub * u + uc * v,
+        point: origin + d * t,
+        normal: (pb - pa).cross(pc - pa).normalize_or_zero(),
+        tri: [a as u32, b as u32, c as u32],
+        bary: Vec3::new(1.0 - u - v, u, v),
+        t,
+    })
+}
+
+/// **[`ray_hit`], through `index` when there is one**: the same landing, to the bit, from the few
+/// triangles whose boxes the ray enters instead of all of them. See [`crate::bvh`].
+fn ray_cast(mesh: &Mesh, index: Option<&crate::bvh::Bvh>, xf: &GlobalTransform, from: Vec3, dir: Vec3) -> Option<Landing> {
+    let Some(index) = index else { return ray_hit(mesh, xf, from, dir) };
+    let inv = xf.affine().inverse();
+    let origin = inv.transform_point3(from);
+    let d = inv.transform_vector3(dir);
+    let Ok(Some(VertexAttributeValues::Float32x3(positions))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_POSITION) else {
+        return None;
+    };
+    let Ok(Some(VertexAttributeValues::Float32x2(uvs))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_UV_0) else {
+        return None;
+    };
+    let (t, u, v, tri) = index.nearest(positions, origin, d, crossing)?;
+    land(origin, d, (t, u, v), tri.corners.map(|c| c as usize), positions, uvs)
+}
+
+/// **The triangles a cast at `mesh` considers**, in index order with their ordinals — every triangle
+/// whose corners all have a position and a UV, which are the ones [`ray_hit`] does not pass over —
+/// and the positions they index. `None` for a mesh with no `Float32x3` positions, no `Float32x2`
+/// `UV_0`, or indices that cannot be read.
+fn castable(mesh: &Mesh) -> Option<(&[[f32; 3]], Vec<crate::bvh::Tri>)> {
+    let Ok(Some(VertexAttributeValues::Float32x3(positions))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_POSITION) else {
+        return None;
+    };
+    let Ok(Some(VertexAttributeValues::Float32x2(uvs))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_UV_0) else {
+        return None;
+    };
+    let ok = |c: [u32; 3]| c.iter().all(|&i| (i as usize) < positions.len() && (i as usize) < uvs.len());
+    let tri = |k: usize, corners: [u32; 3]| ok(corners).then_some(crate::bvh::Tri { corners, ordinal: k as u32 });
+    let tris = match mesh.try_indices_option().ok()? {
+        Some(Indices::U32(ix)) => ix.as_chunks::<3>().0.iter().enumerate().filter_map(|(k, t)| tri(k, *t)).collect(),
+        Some(Indices::U16(ix)) => ix.as_chunks::<3>().0.iter().enumerate().filter_map(|(k, t)| tri(k, t.map(u32::from))).collect(),
+        None => (0..positions.len() / 3).filter_map(|k| tri(k, [3 * k as u32, 3 * k as u32 + 1, 3 * k as u32 + 2])).collect(),
+    };
+    Some((positions, tris))
+}
+
+/// **What a mesh's hierarchy was built from**: its vertex count, its index count, and a hash of the
+/// bits of up to 32 of its positions spread through the buffer — so a mesh rewritten under the same
+/// asset, which Bevy reports as modified anyway, is indexed again even where the report is missed.
+type MeshStamp = (usize, usize, u64);
+
+fn mesh_stamp(mesh: &Mesh) -> Option<MeshStamp> {
+    let Ok(Some(VertexAttributeValues::Float32x3(positions))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_POSITION) else {
+        return None;
+    };
+    let indices = mesh.try_indices_option().ok()?.map_or(0, |ix| ix.len());
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let step = (positions.len() / 32).max(1);
+    for p in positions.iter().step_by(step) {
+        for c in p {
+            for b in c.to_bits().to_le_bytes() {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+    }
+    Some((positions.len(), indices, h))
+}
+
+/// **The rigid meshes hits are cast at, indexed** ([`crate::bvh`]), kept across ticks by asset and
+/// built again when its [`MeshStamp`] moves or Bevy reports the asset modified. A skinned surface is
+/// cast at its pose, a new mesh each batch, and walks its triangles.
+#[derive(Default)]
+struct MeshIndex {
+    built: std::collections::HashMap<AssetId<Mesh>, (MeshStamp, crate::bvh::Bvh)>,
+}
+
+impl MeshIndex {
+    /// Index `mesh` under `id`, unless it already is as it is now. A mesh that cannot be cast at gets
+    /// an empty index, which lands nothing, as walking it does, and is not built again each tick.
+    fn ensure(&mut self, id: AssetId<Mesh>, mesh: &Mesh) {
+        let stamp = mesh_stamp(mesh).unwrap_or((0, 0, 0));
+        if self.built.get(&id).is_some_and(|(s, _)| *s == stamp) {
+            return;
+        }
+        let index = match castable(mesh) {
+            Some((positions, tris)) => crate::bvh::Bvh::build(positions, tris),
+            None => crate::bvh::Bvh::build(&[], Vec::new()),
+        };
+        self.built.insert(id, (stamp, index));
+    }
+
+    fn get(&self, id: AssetId<Mesh>) -> Option<&crate::bvh::Bvh> {
+        self.built.get(&id).map(|(_, b)| b)
+    }
+}
+
+/// The index of `surface`'s mesh, when it is cast at rigidly: a surface with no skin, or one whose
+/// mesh has no joints to pose it by.
+fn rigid_index<'a>(index: &'a MeshIndex, surface: &Surface, asset: &Mesh) -> Option<&'a crate::bvh::Bvh> {
+    match surface.skin.as_ref().filter(|_| Rig::of(asset).is_some()) {
+        None => index.get(surface.mesh.id()),
+        Some(_) => None,
+    }
 }
 
 /// **How many steps a slash's path takes each way from the hit**, each that fraction of the blade's
@@ -863,6 +964,10 @@ struct Bounds {
     min: Vec3,
     max: Vec3,
     to_local: bevy::math::Affine3A,
+    /// The padded box as world space holds it, axis-aligned there: a slab test against it needs no
+    /// transform, and a ray that misses it misses the box.
+    world_min: Vec3,
+    world_max: Vec3,
 }
 
 impl Bounds {
@@ -884,7 +989,45 @@ impl Bounds {
         // A box must never be a hair smaller than the triangles in it, or a cull loses blood.
         let pad = Vec3::splat(1.0e-4) + (max - min) * 1.0e-4;
         let to_local = xf.affine().inverse();
-        (min.is_finite() && max.is_finite() && to_local.is_finite()).then_some(Self { min: min - pad, max: max + pad, to_local })
+        let (min, max) = (min - pad, max + pad);
+        // The world box round the placed one's corners, padded again for the corners' own rounding.
+        let (mut world_min, mut world_max) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+        for k in 0..8 {
+            let corner = Vec3::new(if k & 1 == 0 { min.x } else { max.x }, if k & 2 == 0 { min.y } else { max.y }, if k & 4 == 0 { min.z } else { max.z });
+            let w = xf.affine().transform_point3(corner);
+            world_min = world_min.min(w);
+            world_max = world_max.max(w);
+        }
+        let world_pad = Vec3::splat(1.0e-4) + (world_max - world_min) * 1.0e-4 + world_min.abs().max(world_max.abs()) * 1.0e-6;
+        let (world_min, world_max) = (world_min - world_pad, world_max + world_pad);
+        (min.is_finite() && max.is_finite() && to_local.is_finite() && world_min.is_finite() && world_max.is_finite())
+            .then_some(Self { min, max, to_local, world_min, world_max })
+    }
+
+    /// Whether the ray from `from` along `dir` can reach the world box ahead of its origin. `false` is
+    /// exact — the placed box lies inside it — and `true` is "test the placed box". A ray that cannot
+    /// be tested passes.
+    fn may_reach(&self, from: Vec3, dir: Vec3) -> bool {
+        let (mut near, mut far) = (0.0f32, f32::INFINITY);
+        for axis in 0..3 {
+            let (o, d, lo, hi) = (from[axis], dir[axis], self.world_min[axis], self.world_max[axis]);
+            if !(o.is_finite() && d.is_finite()) {
+                return true;
+            }
+            if d == 0.0 {
+                if o < lo || o > hi {
+                    return false;
+                }
+                continue;
+            }
+            let (a, b) = ((lo - o) / d, (hi - o) / d);
+            near = near.max(a.min(b));
+            far = far.min(a.max(b));
+            if near > far {
+                return false;
+            }
+        }
+        true
     }
 
     /// **Whether the ray from `from` along `dir` can enter the box ahead of its origin**: the slab
@@ -906,12 +1049,15 @@ impl Bounds {
     ///
     /// [`reached_by`]: Self::reached_by
     fn entry(&self, from: Vec3, dir: Vec3) -> Option<f32> {
+        if !self.may_reach(from, dir) {
+            return None;
+        }
         let origin = self.to_local.transform_point3(from);
         let d = self.to_local.transform_vector3(dir);
         if !(origin.is_finite() && d.is_finite()) {
             return Some(0.0);
         }
-        self.span(from, dir).map(|(enters, _)| enters)
+        self.local_span(origin, d).map(|(enters, _)| enters)
     }
 
     /// **Where the ray from `from` along `dir` is inside the box**, as `(enters, leaves)` in multiples
@@ -923,6 +1069,11 @@ impl Bounds {
         if !(origin.is_finite() && d.is_finite()) {
             return None;
         }
+        self.local_span(origin, d)
+    }
+
+    /// [`span`](Self::span) for a ray already in the box's space.
+    fn local_span(&self, origin: Vec3, d: Vec3) -> Option<(f32, f32)> {
         let (mut near, mut far) = (0.0f32, f32::INFINITY);
         for axis in 0..3 {
             if d[axis].abs() < 1.0e-12 {
@@ -945,13 +1096,13 @@ impl Bounds {
 /// **Where a ray leaves a mesh**: its last crossing, found as the first crossing of the same line
 /// cast back from just past the mesh's box. `t` is in the forward ray's measure, so it compares with
 /// a [`ray_hit`] on the same ray. `None` when the ray never reaches the mesh.
-fn ray_exit(mesh: &Mesh, xf: &GlobalTransform, from: Vec3, dir: Vec3) -> Option<Landing> {
+fn ray_exit(mesh: &Mesh, index: Option<&crate::bvh::Bvh>, xf: &GlobalTransform, from: Vec3, dir: Vec3) -> Option<Landing> {
     let (_, leaves) = Bounds::of(mesh, xf)?.span(from, dir)?;
     let beyond = leaves + 1.0e-3 * (1.0 + leaves.abs());
     if !beyond.is_finite() {
         return None;
     }
-    let back = ray_hit(mesh, xf, from + dir * beyond, -dir)?;
+    let back = ray_cast(mesh, index, xf, from + dir * beyond, -dir)?;
     Some(Landing { t: beyond - back.t, ..back })
 }
 
@@ -1004,6 +1155,7 @@ fn nearest_skin(
     posed: &mut std::collections::HashMap<Entity, Option<Mesh>>,
     bounds: &mut std::collections::HashMap<Entity, Option<Bounds>>,
     identity: &GlobalTransform,
+    index: &MeshIndex,
 ) -> Option<Entity> {
     let mut best: Option<(f32, Entity)> = None;
     for surface in surfaces {
@@ -1016,7 +1168,7 @@ fn nearest_skin(
         if bound.as_ref().is_some_and(|b| !b.reached_by(hit.from, hit.dir)) {
             continue;
         }
-        let Some(landing) = ray_hit(mesh, xf, hit.from, hit.dir) else { continue };
+        let Some(landing) = ray_cast(mesh, rigid_index(index, surface, asset), xf, hit.from, hit.dir) else { continue };
         if best.is_none_or(|(t, entity)| landing.t < t || (landing.t == t && surface.entity < entity)) {
             best = Some((landing.t, surface.entity));
         }
@@ -2356,6 +2508,9 @@ struct HitContext<'w, 's> {
     policy: Option<Res<'w, GorePolicy>>,
     /// The material every spill's strands share, and the `mm_per_unit` bits it was made under.
     gut_look: Local<'s, Option<(u32, Handle<FleshMaterial>)>>,
+    /// The rigid meshes hits are cast at, indexed across ticks, and what Bevy reports changing them.
+    index: Local<'s, MeshIndex>,
+    mesh_events: MessageReader<'w, 's, AssetEvent<Mesh>>,
 }
 
 /// What [`throw_spray`] needs from the batch it is in: the surfaces, the poses and boxes cached across
@@ -2371,6 +2526,8 @@ struct Thrown<'a, 'w, 's> {
     holes: &'a Query<'w, 's, &'static ClothHoles>,
     /// `(cloth, UV, radius in UV)` of every hole opened earlier in this batch.
     opened: &'a [(Entity, Vec2, f32)],
+    /// The rigid meshes, indexed.
+    index: &'a MeshIndex,
 }
 
 /// **What a wound throws lands on what it reaches first.** Each droplet is cast straight at every
@@ -2394,7 +2551,8 @@ fn throw_spray(
     dials: &GoreDials,
     commands: &mut Commands,
 ) {
-    let Thrown { surfaces, posed, bounds, identity, edges, tick, holes, opened } = thrown;
+    let Thrown { surfaces, posed, bounds, identity, edges, tick, holes, opened, index } = thrown;
+    let index: &MeshIndex = index;
     let (edges, tick, identity) = (&**edges, *tick, &**identity);
     let at_world = Vec3::from_array(wound.at);
     let droplets = crate::bloodstain::patterns::impact_spatter(wound, &dials.blood);
@@ -2413,7 +2571,7 @@ fn throw_spray(
         .map(|s| {
             let asset = meshes.get(&s.mesh)?;
             let (m, xf) = drawn_now(s, asset, posed, identity)?;
-            Some((*s, m, xf, bounds.get(&s.entity).copied().flatten()))
+            Some((*s, m, xf, bounds.get(&s.entity).copied().flatten(), rigid_index(index, s, asset)))
         })
         .collect();
     let walls = drawn.iter().flatten().any(|(s, ..)| s.gore.kind == GoreKind::Wall);
@@ -2425,7 +2583,7 @@ fn throw_spray(
         let dir = Vec3::from_array(d.dir);
         // Past the ordinary cap a droplet is cast only toward a wall, which is what the wider cap is for.
         let toward_wall = || {
-            drawn.iter().flatten().any(|(s, _, _, b)| s.gore.kind == GoreKind::Wall && b.as_ref().is_none_or(|b| b.reached_by(at_world, dir)))
+            drawn.iter().flatten().any(|(s, _, _, b, _)| s.gore.kind == GoreKind::Wall && b.as_ref().is_none_or(|b| b.reached_by(at_world, dir)))
         };
         if i >= SPRAY_CAST && !toward_wall() {
             continue;
@@ -2438,7 +2596,7 @@ fn throw_spray(
         if let Some(c) = caught.get_mut(i) {
             *c = true;
         }
-        let Some(Some((s, m, xf, _))) = drawn.get(k) else { continue };
+        let Some(Some((s, m, xf, _, _))) = drawn.get(k) else { continue };
         let Ok((_, _, _, _, _, Some(mut wet))) = bodies.get_mut(s.entity) else { continue };
         let texels = wet.size();
         let shape = match s.gore.kind {
@@ -2540,7 +2698,7 @@ struct SubjectLookup<'w, 's> {
 }
 
 /// Something a ray can be cast at — `T` says which — as drawn now, and its box.
-type Castable<'a, T> = (T, &'a Mesh, &'a GlobalTransform, Option<Bounds>);
+type Castable<'a, T> = (T, &'a Mesh, &'a GlobalTransform, Option<Bounds>, Option<&'a crate::bvh::Bvh>);
 
 /// One surface a droplet can be cast at: itself, as drawn now, and its box.
 type Candidate<'a> = Castable<'a, &'a Surface>;
@@ -2563,7 +2721,7 @@ fn nearest_landing<T>(
 ) -> Option<(usize, Landing)> {
     order.clear();
     order.extend(drawn.iter().enumerate().filter_map(|(k, entry)| {
-        let (_, _, _, b) = entry.as_ref()?;
+        let (_, _, _, b, _) = entry.as_ref()?;
         match b {
             Some(b) => b.entry(from, dir).map(|t| (t, k)),
             None => Some((0.0, k)),
@@ -2575,8 +2733,8 @@ fn nearest_landing<T>(
         if best.as_ref().is_some_and(|(_, near)| near.t < enters) {
             break;
         }
-        let Some(Some((s, m, xf, _))) = drawn.get(k) else { continue };
-        let Some(l) = ray_hit(m, xf, from, dir) else { continue };
+        let Some(Some((s, m, xf, _, index))) = drawn.get(k) else { continue };
+        let Some(l) = ray_cast(m, *index, xf, from, dir) else { continue };
         if best.as_ref().is_some_and(|(bk, near)| near.t < l.t || (near.t == l.t && *bk < k)) {
             continue;
         }
@@ -2615,7 +2773,16 @@ fn take_hits(
         fractured,
         policy,
         gut_look,
+        index,
+        mesh_events,
     } = &mut cx;
+    // A mesh Bevy reports changed is indexed again when it is next cast at; read every tick, hits or
+    // none, so no report is missed.
+    for event in mesh_events.read() {
+        if let AssetEvent::Modified { id } | AssetEvent::Removed { id } | AssetEvent::Unused { id } = event {
+            index.built.remove(id);
+        }
+    }
     let SubjectLookup { parents, subjects, breakables, dressed, holes: cloth_holes } = &lookup;
     let tick = clock.0;
     // What the player's settings allow, read once per batch. A tier that does not draw blood draws
@@ -2627,6 +2794,16 @@ fn take_hits(
     // Every hit of the tick, in one pass. A hit that reaches bone queues the subject's despawn, and a
     // later hit in the same batch on a sibling part still passes the query — so every insert below
     // is a `try_insert`, which tolerates a despawn queued ahead of it where `insert` panics.
+    // Each rigid surface's mesh indexed the first tick it is there, so the build is paid when it is
+    // dressed rather than when it is first shot: 3 ms for sixteen thousand triangles on `big`.
+    for (_, _, mesh, _, skin) in bodies_index.iter() {
+        if index.get(mesh.0.id()).is_none()
+            && let Some(asset) = meshes.get(&mesh.0)
+            && skin.filter(|_| Rig::of(asset).is_some()).is_none()
+        {
+            index.ensure(mesh.0.id(), asset);
+        }
+    }
     let hits: Vec<GoreHit> = hits.read().copied().collect();
     if hits.is_empty() {
         return;
@@ -2637,6 +2814,16 @@ fn take_hits(
         .iter()
         .map(|(entity, gore, mesh, xf, skin)| Surface { entity, mesh: mesh.0.clone(), xf: *xf, gore: *gore, skin: skin.cloned() })
         .collect();
+    // Every rigid surface's mesh indexed before the batch casts at it: built once and kept while the
+    // mesh stays as it was, so a crowd sharing one mesh builds one.
+    for surface in &surfaces {
+        if let Some(asset) = meshes.get(&surface.mesh)
+            && surface.skin.as_ref().filter(|_| Rig::of(asset).is_some()).is_none()
+        {
+            index.ensure(surface.mesh.id(), asset);
+        }
+    }
+    let index: &MeshIndex = index;
     // A skinned surface is posed once per batch, the first time a droplet is cast at it: a pose is a
     // pass over every vertex, and a batch of shots at one body would otherwise pose it once per shot.
     let mut posed: std::collections::HashMap<Entity, Option<Mesh>> = std::collections::HashMap::new();
@@ -2651,7 +2838,7 @@ fn take_hits(
         let hit = if bodies.contains(hit.entity) {
             hit
         } else {
-            let Some(entity) = nearest_skin(&hit, &surfaces, parents, meshes, &rigging, &mut posed, &mut bounds, &identity) else {
+            let Some(entity) = nearest_skin(&hit, &surfaces, parents, meshes, &rigging, &mut posed, &mut bounds, &identity, index) else {
                 continue;
             };
             GoreHit { entity, ..hit }
@@ -2668,6 +2855,8 @@ fn take_hits(
         // own transform plays no part in drawing it; the pose is what the player is aiming at. A rigid
         // mesh is the asset placed by its transform.
         let drawn = Drawn::of(&bind, skin.as_ref(), &rigging);
+        // The struck mesh's index, when it is cast at rigidly.
+        let struck_index = matches!(drawn, Drawn::Rigid).then(|| index.get(drawn_mesh.id())).flatten();
         let (mesh, xf): (&Mesh, &GlobalTransform) = match &drawn {
             Drawn::Rigid => (&bind, xf),
             Drawn::Posed(posed, _) => (posed.as_ref(), &identity),
@@ -2690,7 +2879,7 @@ fn take_hits(
         // `Wounded`, at the same point, with the same normal and area. Nothing is painted, torn or
         // thrown, and the game puts whatever it wants at that point in blood's place.
         if !draws_blood && matches!(hit.kind, HitKind::Impact { .. } | HitKind::Slash { .. }) {
-            let (at_world, normal_world) = match ray_hit(mesh, xf, hit.from, hit.dir) {
+            let (at_world, normal_world) = match ray_cast(mesh, struck_index, xf, hit.from, hit.dir) {
                 Some(l) => (xf.transform_point(l.point), xf.affine().transform_vector3(l.normal).normalize_or_zero()),
                 None => (hit.from, -hit.dir.normalize_or_zero()),
             };
@@ -2724,7 +2913,7 @@ fn take_hits(
         }
         // Where the ray lands, for every kind of hit — a slash and a blow never peel, so they have no
         // handoff to read a point from.
-        let landed = ray_hit(mesh, xf, hit.from, hit.dir);
+        let landed = ray_cast(mesh, struck_index, xf, hit.from, hit.dir);
         let site_uv = landed.map(|l| l.uv);
 
         // A blow: a bruise starts under the skin, pooled to the blow's radius.
@@ -2875,7 +3064,7 @@ fn take_hits(
                         }
                     }
                     _ => {
-                        let behind = if hit.through { ray_exit(cloth_mesh, cloth_xf, hit.from, hit.dir).filter(|c| c.t > skin_landing.t) } else { None };
+                        let behind = if hit.through { ray_exit(cloth_mesh, None, cloth_xf, hit.from, hit.dir).filter(|c| c.t > skin_landing.t) } else { None };
                         let radius_uv = hit.radius_m * surface.gore.density() / crate::flaymap::UV_SPAN_M;
                         holes.extend([front.map(|c| (c.uv, radius_uv)), behind.map(|c| (c.uv, radius_uv * EXIT_SCALE))].into_iter().flatten());
                         // What a droplet can fly through this batch, before the queued hole is cut: the
@@ -2900,7 +3089,7 @@ fn take_hits(
             }
         }
         if spray {
-            let mut thrown = Thrown { surfaces: &surfaces, posed: &mut posed, bounds: &mut bounds, identity: &identity, edges: &edges, tick, holes: cloth_holes, opened: &opened };
+            let mut thrown = Thrown { surfaces: &surfaces, posed: &mut posed, bounds: &mut bounds, identity: &identity, edges: &edges, tick, holes: cloth_holes, opened: &opened, index };
             throw_spray(&wound, seed, hit.entity, &mut thrown, &mut bodies, meshes, &rigging, dials, &mut commands);
         }
         // The wound bleeds from where it opened on the skin: beside the ones it already has, or in
@@ -2927,7 +3116,7 @@ fn take_hits(
         if hit.through
             && let HitKind::Impact { depth_mm } = hit.kind
             && let Some(entry) = landed
-            && let Some(exit) = ray_exit(mesh, xf, hit.from, hit.dir).filter(|e| e.t > entry.t)
+            && let Some(exit) = ray_exit(mesh, struck_index, xf, hit.from, hit.dir).filter(|e| e.t > entry.t)
         {
             let out = hit.dir.normalize_or_zero();
             let exit_world = xf.transform_point(exit.point);
@@ -2969,7 +3158,7 @@ fn take_hits(
                 // Forward spatter leaves along the shot, not off the skin's face: the cone's axis is
                 // the projectile's own direction.
                 let forward = BloodWound { normal: out.to_array(), area: exit_wound.area * FORWARD_MIST, ..exit_wound };
-                let mut thrown = Thrown { surfaces: &surfaces, posed: &mut posed, bounds: &mut bounds, identity: &identity, edges: &edges, tick, holes: cloth_holes, opened: &opened };
+                let mut thrown = Thrown { surfaces: &surfaces, posed: &mut posed, bounds: &mut bounds, identity: &identity, edges: &edges, tick, holes: cloth_holes, opened: &opened, index };
                 throw_spray(&forward, exit_seed, hit.entity, &mut thrown, &mut bodies, meshes, &rigging, dials, &mut commands);
             }
             let exit_at = match &drawn {
@@ -5349,7 +5538,8 @@ mod tests {
     /// let a droplet through half their atlas as a cloth's hole would — and four thousand
     /// deterministic rays: `nearest_landing` and a cast at every surface in list order agree on the
     /// surface and the landing for every ray. Some rays land behind a nearer surface's box, so the
-    /// early stop is exercised, and some pass through the hole to what lies behind.
+    /// early stop is exercised, and some pass through the hole to what lies behind. Every other
+    /// surface is cast at through its index, and the reference walks every triangle.
     #[test]
     fn nearest_box_first_lands_where_casting_at_everything_would() {
         let shapes = [
@@ -5368,12 +5558,13 @@ mod tests {
                 )
             })
             .collect();
+        let indexed: Vec<crate::bvh::Bvh> = shapes.iter().filter_map(|m| castable(m).map(|(p, t)| crate::bvh::Bvh::build(p, t))).collect();
         let drawn: Vec<Option<Castable<'_, usize>>> = xfs
             .iter()
             .enumerate()
             .map(|(k, xf)| {
                 let mesh = &shapes[k % shapes.len()];
-                Some((k, mesh, xf, if k == 5 { None } else { Bounds::of(mesh, xf) }))
+                Some((k, mesh, xf, if k == 5 { None } else { Bounds::of(mesh, xf) }, indexed.get(k % shapes.len()).filter(|_| k % 2 == 0)))
             })
             .collect();
         let hole = |k: &usize, l: &Landing| *k % 4 == 3 && l.uv.x < 0.5;
@@ -5388,7 +5579,7 @@ mod tests {
             let mut every: Option<(usize, Landing)> = None;
             let mut hits = 0;
             for (k, entry) in drawn.iter().enumerate() {
-                let Some((tag, m, xf, _)) = entry else { continue };
+                let Some((tag, m, xf, _, _)) = entry else { continue };
                 let Some(l) = ray_hit(m, xf, from, dir) else { continue };
                 hits += 1;
                 if hole(tag, &l) {
@@ -5408,6 +5599,67 @@ mod tests {
             );
         }
         assert!(behind > 500 && through > 50, "{behind} rays crossed two surfaces and {through} went through the hole: too few to test");
+    }
+
+    /// **An indexed cast lands where walking every triangle does, to the bit.** Spheres, an axis-aligned
+    /// box, a torus, and a soup of random triangles with duplicates — two triangles on one place, so a
+    /// crossing ties and the index buffer's order must decide — indexed and not, placed and turned,
+    /// and thousands of rays at each: random, aimed at a vertex where triangles meet, along an axis,
+    /// and from inside. `ray_cast` through the index and `ray_hit` walking every triangle return the
+    /// same landing, every field bit for bit, or both none.
+    #[test]
+    fn an_indexed_cast_lands_where_walking_every_triangle_does() {
+        let r = |k: u32| crate::hash_f32(k.wrapping_mul(0x9E37_79B9).wrapping_add(0x85EB_CA6B));
+        let soup = |indexed: bool| {
+            let mut positions: Vec<[f32; 3]> = (0..300u32).map(|k| [r(3 * k) - 0.5, r(3 * k + 1) - 0.5, r(3 * k + 2) - 0.5]).collect();
+            let mut uvs: Vec<[f32; 2]> = (0..300u32).map(|k| [r(1000 + k), r(2000 + k)]).collect();
+            let mut indices: Vec<u32> = (0..300u32).map(|k| (r(5000 + k) * 299.0) as u32).collect();
+            // Every tenth triangle again, later in the buffer: the same crossing at the same distance.
+            let again: Vec<u32> = indices.chunks(3).step_by(10).flatten().copied().collect();
+            indices.extend(again);
+            let mut mesh = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default());
+            if !indexed {
+                positions = indices.iter().map(|&i| positions[i as usize]).collect();
+                uvs = indices.iter().map(|&i| uvs[i as usize]).collect();
+            }
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+            if indexed {
+                mesh.insert_indices(Indices::U32(indices));
+            }
+            mesh
+        };
+        let meshes = [Sphere::new(0.4).mesh().uv(32, 16), Cuboid::new(0.6, 0.3, 0.5).mesh().build(), Torus::new(0.2, 0.4).mesh().build(), soup(true), soup(false)];
+        let (mut landed, mut tied) = (0, 0);
+        for (m, mesh) in meshes.iter().enumerate() {
+            let Some((positions, tris)) = castable(mesh) else { panic!("mesh {m} cannot be cast at") };
+            let index = crate::bvh::Bvh::build(positions, tris);
+            let corners: Vec<Vec3> = positions.iter().map(|p| Vec3::from(*p)).collect();
+            for (x, xf) in [GlobalTransform::IDENTITY, GlobalTransform::from(Transform::from_xyz(0.3, -0.2, 0.1).with_rotation(Quat::from_rotation_y(0.7)).with_scale(Vec3::splat(1.7)))].iter().enumerate() {
+                for i in 0..2500u32 {
+                    let q = |k: u32| crate::hash_f32(i.wrapping_mul(7919).wrapping_add(k.wrapping_mul(104_729)).wrapping_add((m as u32) << 20).wrapping_add((x as u32) << 28));
+                    let from = Vec3::new(q(1), q(2), q(3)) * 3.0 - Vec3::splat(1.5);
+                    let at = |p: Vec3| xf.transform_point(p);
+                    let dir = match i % 5 {
+                        // At a vertex, where several triangles meet.
+                        0 | 1 => at(corners[(q(4) * (corners.len() - 1) as f32) as usize]) - from,
+                        // Along an axis.
+                        2 => [Vec3::X, Vec3::NEG_Y, Vec3::Z][(i / 5 % 3) as usize],
+                        // From inside, anywhere.
+                        3 => Vec3::new(q(5), q(6), q(7)) * 2.0 - Vec3::ONE,
+                        _ => at(Vec3::new(q(8), q(9), q(10)) * 0.8 - Vec3::splat(0.4)) - from,
+                    };
+                    let from = if i % 5 == 3 { at(Vec3::new(q(11), q(12), q(13)) * 0.4 - Vec3::splat(0.2)) } else { from };
+                    let bits = |l: Landing| (l.t.to_bits(), l.uv.to_array().map(f32::to_bits), l.tri, l.bary.to_array().map(f32::to_bits), l.point.to_array().map(f32::to_bits), l.normal.to_array().map(f32::to_bits));
+                    let walked = ray_hit(mesh, xf, from, dir).map(bits);
+                    let indexed = ray_cast(mesh, Some(&index), xf, from, dir).map(bits);
+                    assert_eq!(indexed, walked, "mesh {m}, transform {x}, ray {i} from {from:?} along {dir:?}");
+                    landed += usize::from(walked.is_some());
+                    tied += usize::from(walked.is_some() && m >= 3 && i % 5 < 2);
+                }
+            }
+        }
+        assert!(landed > 5000 && tied > 50, "{landed} rays landed and {tied} were aimed at the soup's vertices: too few to test");
     }
 
     /// **A measurement, not a test**: milliseconds one `FixedUpdate` costs when it takes one hit, and

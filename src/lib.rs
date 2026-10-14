@@ -5,6 +5,9 @@ mod audit;
 mod bake;
 mod bond;
 mod bore;
+/// A hierarchy over a mesh's triangles, for the preset's casts. Behind `flesh` with the preset.
+#[cfg(feature = "flesh")]
+mod bvh;
 #[cfg(feature = "vfx")]
 mod decal;
 mod feel;

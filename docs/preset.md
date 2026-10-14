@@ -484,7 +484,22 @@ twelve times: timed stage by stage on `big`, 2.3 ms of a 3.5 ms `take_hits` on o
 shade now redraws the texels peeled since the last and the normals one texel round them, to the same
 bytes. `hit_cost_by_scene_size`, interleaved with 0.5.58: twelve hits on one character 3.69 to
 1.29 ms a tick, on ten 4.02 to 1.66, on forty 14.6 to 12.1, and one hit on one character 0.61 to
-0.46. What is left at forty is casting the spray at the other characters' parts, 9.6 ms of it.
+0.46. What is left at forty is the spray at the other characters' parts, 9.6 ms of it.
+
+**Since 0.5.60 a rigid mesh is cast at through an index.** Every cast walked every triangle of the
+mesh: twelve hits at forty characters tested 368,000 triangles a tick, and one hit on a part of
+16,128 triangles walked it at least twice. A rigid surface's mesh now carries a bounding-volume
+hierarchy over its triangles, built the first tick it is dressed and kept while the mesh stays as it
+was, and a cast tests only the triangles whose boxes it enters. It lands where walking every
+triangle lands, every field to the bit, ties included (`an_indexed_cast_lands_where_walking_every_triangle_does`),
+and every frame of the skinned clip, the stroll, the break and the three tiers is byte-identical. A
+skinned surface is cast at its pose, a new mesh each batch, and still walks it. Each surface's box
+also carries its world-space box, which a droplet tests first without a transform. On `big`,
+interleaved with 0.5.59: one hit on one character 0.50 to 0.31 ms a tick, one on a character of
+16,128-triangle parts 1.53 to 0.59, twelve on it 4.65 to 3.48, twelve on forty characters 12.1 to
+9.3. Building the index for a 16,128-triangle mesh took 3 ms, on the tick it was dressed. What is
+left at forty is not casting — 0.12 ms of the spray — but the stains the droplets leave on the other
+bodies, 6.1 ms: each is rasterised at the edge's supersampling.
 
 ## What it costs in memory
 
