@@ -390,7 +390,8 @@ anything a few texels across. On the demos' 3 m slab at the shipped 256 (11.7 mm
 read as a heel and a ball, two drops; at 512 (5.9 mm), as `capture_skinned --stroll` dresses it, the
 whole outline reads, seen from above and from the walker's side, on 30 cm tiles. Raise `GoreDials::floor_canvas`, or
 `Gore::with_canvas` on the floor, for the floors your characters walk on; the cost is the floor's
-texels, a tick of the rectangle its blood spans while any of it is wet.
+texels in memory, and a tick of the blood on it, the texels round each pool and print rather than
+the floor between them, while any of it is wet (0.5.58).
 
 ![The mannequin walks across a tiled floor through a spill of blood and out the other side, leaving a line of bloody boot prints, left and right, each paler and more broken than the last](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_stroll.gif)
 
@@ -465,6 +466,17 @@ so the bytes are the same in any order — and on the same quiet M4 Pro `tick_ca
 0.86 ms at forty characters and from 1.04 to 0.45 at ten. Where Bevy's `multi_threaded` feature is
 off, as on the web, it is the loop it was, and a game that dresses only the characters near the
 player pays for those.
+
+**Since 0.5.58 a canvas ticks the blood on it, not the rectangle round it.** Each 32-texel tile keeps
+the rectangle round its own blood, and the passes and their snapshot cover those grown by the two
+texels a tick can move blood, where they covered the one rectangle round all of it and copied the
+whole canvas twice a tick. A 1024 floor with a pool in each of two opposite corners ticked every
+texel between them, 25.5 ms a tick; it ticks 0.46 now. Measured on `big` in release, interleaved
+with 0.5.57: one blob on a 1024 canvas 0.34 to 0.23 ms a tick, a trail of twelve 1.59 to 0.29, and
+`hit_cost_by_scene_size`, a whole `FixedUpdate`, at one character and one hit 0.82 to 0.62 ms, at ten
+characters and twelve 4.6 to 4.2, at forty and twelve 15.2 to 14.6. The bytes are the same:
+`the_live_tiles_change_nothing_but_the_cost` ticks one canvas this way and another over every texel and
+requires them equal on every tick.
 
 ## What it costs in memory
 
