@@ -187,6 +187,25 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut
 /// its fill. Split out of [`spawn`] so another body can stand in the same light, on the same floor,
 /// beside the same sheet — which is how `skinned` and `capture_skinned` are lit.
 pub fn spawn_set(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
+    // The slab, at a concrete's albedo. It was 0.34 0.33 0.32, about 9 % — dark asphalt — which only
+    // read as pale because `EXPOSURE` was not set; exposed for the light, blood needs a lighter
+    // surface than that to read against.
+    let slab = (
+        Mesh3d(meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(1.5)).mesh().build())),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.55, 0.54, 0.52),
+            perceptual_roughness: 0.9,
+            ..default()
+        })),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        Gore::floor().with_uv_per_metre(1.0 / 3.0),
+        Slab,
+    );
+    spawn_set_on(commands, meshes, materials, slab);
+}
+
+/// [`spawn_set`] with another floor in the slab's place: the sheet and the lights, and `slab`.
+pub fn spawn_set_on(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, slab: impl Bundle) {
     // A sheet to the right, hanging in the spray.
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::new(Vec3::Z, Vec2::new(0.28, 0.45)).mesh().build())),
@@ -204,20 +223,7 @@ pub fn spawn_set(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: 
         Sheet,
     ));
 
-    // The slab, at a concrete's albedo. It was 0.34 0.33 0.32, about 9 % — dark asphalt — which only
-    // read as pale because `EXPOSURE` was not set; exposed for the light, blood needs a lighter
-    // surface than that to read against.
-    commands.spawn((
-        Mesh3d(meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(1.5)).mesh().build())),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.55, 0.54, 0.52),
-            perceptual_roughness: 0.9,
-            ..default()
-        })),
-        Transform::from_xyz(0.0, 0.0, 0.0),
-        Gore::floor().with_uv_per_metre(1.0 / 3.0),
-        Slab,
-    ));
+    commands.spawn(slab);
 
     commands.spawn((
         DirectionalLight { illuminance: 11_000.0, shadow_maps_enabled: true, ..default() },
@@ -234,6 +240,120 @@ pub fn spawn_set(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: 
         Transform::from_xyz(1.5, 2.5, -3.0).looking_at(Vec3::new(0.0, 0.8, 0.0), Vec3::Y),
         Sun,
     ));
+}
+
+/// **A tiled floor, as a level's is**: the slab's 3 m, its `UV_0` repeating a sheet of sixteen
+/// ceramic tiles two and a half times each way, so the tiles are 30 cm, and dressed with
+/// `Gore::projected` — its UVs run to 2.5, which the canvas cannot hold — at 512 a side, 5.9 mm a
+/// texel, so a footprint's heel, waist and forefoot read.
+pub fn tiled_slab(meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> impl Bundle {
+    let mut mesh = Plane3d::new(Vec3::Y, Vec2::splat(1.5)).mesh().build();
+    if let Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)) = mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0) {
+        uvs.iter_mut().for_each(|uv| *uv = [uv[0] * 2.5, uv[1] * 2.5]);
+    }
+    (
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color_texture: Some(tile_texture(images)),
+            perceptual_roughness: 0.6,
+            ..default()
+        })),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        Gore::floor().projected().with_canvas(512),
+        Slab,
+    )
+}
+
+/// **Sixteen ceramic tiles and their grout**, 256² and seamless when repeated: each tile 64 texels, a
+/// pale warm grey a few per cent lighter or darker than its neighbours and faintly mottled, its edge a
+/// shade darker, in grout two texels wide. Mipmapped in linear light to a single texel, and
+/// anisotropically filtered, because a floor seen low squeezes a tile into a few pixels and an
+/// unfiltered grout line crawls.
+fn tile_texture(images: &mut Assets<Image>) -> Handle<Image> {
+    const SIZE: u32 = 256;
+    const TILE: u32 = 64;
+    let mut linear = Vec::with_capacity((SIZE * SIZE * 3) as usize);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let (tx, ty) = (x / TILE, y / TILE);
+            let (ix, iy) = (x % TILE, y % TILE);
+            let tint = 1.0 + 0.07 * (hash(tx as i32, ty as i32, 21) - 0.5);
+            // Mottled over the whole sheet, so it repeats seamlessly with it: the lattice wraps at 16.
+            let (u, v) = (x as f32 / SIZE as f32 * 16.0, y as f32 / SIZE as f32 * 16.0);
+            let mottle = 1.0 + 0.05 * (wrapped_noise(u, v, 16, 22) - 0.5);
+            let from_edge = ix.min(TILE - 1 - ix).min(iy).min(TILE - 1 - iy);
+            let colour = if from_edge < 1 {
+                [0.30, 0.29, 0.27]
+            } else {
+                let lip = if from_edge < 3 { 0.93 } else { 1.0 };
+                [0.62, 0.60, 0.56].map(|c| c * tint * mottle * lip)
+            };
+            linear.extend(colour.map(|c: f32| srgb_to_linear(c.clamp(0.0, 1.0))));
+        }
+    }
+    // The chain, every level a box filter of the one above, in linear light.
+    let mut data: Vec<u8> = Vec::new();
+    let (mut level, mut edge, mut levels) = (linear, SIZE, 0u32);
+    loop {
+        for rgb in level.chunks_exact(3) {
+            data.extend(rgb.iter().map(|c| (linear_to_srgb(*c) * 255.0).round() as u8));
+            data.push(255);
+        }
+        levels += 1;
+        if edge == 1 {
+            break;
+        }
+        let half = edge / 2;
+        let mut next = Vec::with_capacity((half * half * 3) as usize);
+        for y in 0..half {
+            for x in 0..half {
+                for c in 0..3 {
+                    let at = |dx: u32, dy: u32| level[(((2 * y + dy) * edge + 2 * x + dx) * 3 + c) as usize];
+                    next.push(0.25 * (at(0, 0) + at(1, 0) + at(0, 1) + at(1, 1)));
+                }
+            }
+        }
+        level = next;
+        edge = half;
+    }
+    let mut image = Image::new_uninit(
+        Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.data = Some(data);
+    image.texture_descriptor.mip_level_count = levels;
+    image.sampler = bevy::image::ImageSampler::Descriptor(bevy::image::ImageSamplerDescriptor {
+        address_mode_u: bevy::image::ImageAddressMode::Repeat,
+        address_mode_v: bevy::image::ImageAddressMode::Repeat,
+        mag_filter: bevy::image::ImageFilterMode::Linear,
+        min_filter: bevy::image::ImageFilterMode::Linear,
+        mipmap_filter: bevy::image::ImageFilterMode::Linear,
+        anisotropy_clamp: 16,
+        ..default()
+    });
+    images.add(image)
+}
+
+/// Value noise in `[0, 1]` whose lattice wraps every `period` cells, so a texture of it tiles.
+fn wrapped_noise(x: f32, y: f32, period: i32, seed: u32) -> f32 {
+    let (ix, iy) = (x.floor() as i32, y.floor() as i32);
+    let (fx, fy) = (x - x.floor(), y - y.floor());
+    let (sx, sy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
+    let h = |i: i32, j: i32| hash(i.rem_euclid(period), j.rem_euclid(period), seed);
+    let top = h(ix, iy) + (h(ix + 1, iy) - h(ix, iy)) * sx;
+    let bottom = h(ix, iy + 1) + (h(ix + 1, iy + 1) - h(ix, iy + 1)) * sx;
+    top + (bottom - top) * sy
+}
+
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
+fn linear_to_srgb(c: f32) -> f32 {
+    let c = c.clamp(0.0, 1.0);
+    if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
 }
 
 /// The wall behind the body: what [`spawn_wall`] puts up.

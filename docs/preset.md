@@ -13,7 +13,7 @@ a plausible-looking result that is quietly wrong.
 |---|---|---|
 | 1 | **Run `FixedUpdate` at `GoreDials::hz`.** Bevy's default fixed step is 64 Hz and the preset's `hz` is 60: `app.insert_resource(Time::<Fixed>::from_hz(60.0))`, or set `GoreDials::hz` to your step. Since 0.5.26 the preset says so, once, in the log on its first tick, when the step it finds is not `hz`. | The preset ticks once per `FixedUpdate`. Bleeds, bruise ageing, drying and the cloth's wicking are measured in ticks of `hz`, so a mismatch runs every one of them fast or slow: at Bevy's 64 Hz, 6.7 per cent fast. |
 | 2 | **Put `Gore` on the entity that holds the `Mesh3d`**, not on the scene root, or put a `GoreScene` on the root and let it do that for you (below). A glTF scene's meshes sit under node entities. | `Gore` dresses the mesh on its own entity. `GoreHit::entity` may be that entity or any ancestor of it (see 7). |
-| 3 | **Give every dressed mesh a `UV_0` that covers it once, inside `[0, 1]`.** No mirrored or overlapping islands on skin. | The canvases live in UV space. The flaymap refuses a UV outside the unit square with one warning; the wetmap clamps it to the edge. A mirrored island paints a wound on both limbs it maps. |
+| 3 | **Give every dressed mesh a `UV_0` that covers it once, inside `[0, 1]`.** No mirrored or overlapping islands on skin. **A floor or a wall whose `UV_0` tiles its texture**, as a level's does, is dressed with `Gore::projected()` instead (0.5.57). | The canvases live in UV space. The flaymap refuses a UV outside the unit square with one warning; the wetmap clamps it to the edge, so on a tiled floor every drop lands on the canvas's border — since 0.5.57 the preset says so, once, when it dresses one. A mirrored island paints a wound on both limbs it maps. |
 | 4 | **Let the preset measure how big the atlas is, or say so: `Gore::with_uv_per_metre`.** Unstated, it is measured when the mesh is dressed: the square root of the mesh's UV area over its world area, at its world scale, stored back in `Gore::uv_per_metre`. State it when that average is wrong where the wounds land, as on an atlas that packs the face far denser than the body. | Hit radii are in metres and canvases are in UV, so the density converts one to the other. Before 0.5.18 an unstated density was `1.0`, and on a densely packed atlas a 3 cm wound was a dot. |
 | 5 | **Say which way blood runs: `Gore::with_gravity_uv`.** `(0, 1)`, the default, is down on a glTF atlas whose islands stand upright. | A wrong sign is invisible in a still and obvious in motion: the drips climb. Bevy's own primitives disagree: a `Cuboid`'s front face wants `(0, -1)`, and a `Sphere::mesh().uv(..)` must be turned pole-up first. |
 | 6 | **State the scale once: `GoreDials::mm_per_unit`.** `1000` for a game in metres. A game in centimetres also sets `CrossSectionSettings::scale` and `FlaySettings::scale` to match, before adding the plugin. | Tissue depths are millimetres, and the cut faces, the flaymap's grain and the preset each convert from mesh units. |
@@ -320,6 +320,34 @@ the clips are recorded on, two runs of `capture_skinned` with them on are byte-i
 frames, and two of `capture_skinned --through` differ inside the mist round each shot, by up to 8
 code values; on Apple silicon `capture_carnage`'s were not ([`DEMOS.md`](DEMOS.md)).
 
+## Floors and walls whose UVs tile
+
+A level's floor repeats its texture: its `UV_0` runs from 0 to 20 so a 15 cm tile shows 133 times
+across 20 m. That cannot hold blood, because a canvas covers `[0, 1]` once and the wetmap clamps every
+UV outside it to the edge. Dress such a surface with `Gore::projected()` (0.5.57):
+
+```rust,ignore
+commands.entity(level_floor).insert(Gore::floor().projected().with_canvas(1024));
+```
+
+The preset gives the entity a copy of its mesh whose `UV_0` is the mesh seen square-on from the side
+it mostly faces — from above for a floor, from the front for a wall, `+v` down a wall so blood runs
+down it — scaled into `[0, 1]` without stretching, and whose `UV_1` is the tiling it had. The surface's
+own textures (base colour, emissive, metallic-roughness, normal and occlusion) read `UV_1`, so its tiles
+stay exactly as they were; every canvas reads the projection, and `Gore::uv_per_metre` is set from it.
+The entity's `Mesh3d` is the copy from then on: a mesh other entities share is not touched, and a
+collider built from the handle you spawned keeps it.
+
+It is refused, with one warning, on a mesh that already has a `UV_1` — it may be a lightmap's, which
+the copy would overwrite — and on a skin or a cloth, whose canvases follow the body's own atlas. A
+surface folded over itself (a floor slab's top and bottom faces) gets one canvas for both; only the
+side a camera sees shows it. **One canvas covers the whole mesh**, so its texel is the mesh's extent
+over the canvas edge: a 3 m floor at 512 is 5.9 mm a texel, a 20 m one at 1024 is 2 cm — fine for
+pools, too coarse for a footprint's outline; split a large floor into pieces near where blood lands.
+
+`capture_skinned --stroll` stands on such a floor: 3 m of 30 cm ceramic tiles, its UVs running to 2.5,
+dressed `projected` at 512.
+
 ## Footprints
 
 A foot put down in wet blood picks some of it up, and a foot carrying blood leaves a print where it
@@ -360,11 +388,11 @@ it, wipes its `Tread`.
 forefoot are a few centimetres each, and the shader reads the canvas through a B-spline that rounds
 anything a few texels across. On the demos' 3 m slab at the shipped 256 (11.7 mm a texel), a print
 read as a heel and a ball, two drops; at 512 (5.9 mm), as `capture_skinned --stroll` dresses it, the
-whole outline reads, seen from above and from the walker's side. Raise `GoreDials::floor_canvas`, or
+whole outline reads, seen from above and from the walker's side, on 30 cm tiles. Raise `GoreDials::floor_canvas`, or
 `Gore::with_canvas` on the floor, for the floors your characters walk on; the cost is the floor's
 texels, a tick of the rectangle its blood spans while any of it is wet.
 
-![The mannequin walks across the floor through a spill of blood and out the other side, leaving a line of bloody boot prints, left and right, each paler and more broken than the last](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_stroll.gif)
+![The mannequin walks across a tiled floor through a spill of blood and out the other side, leaving a line of bloody boot prints, left and right, each paler and more broken than the last](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_stroll.gif)
 
 ## Healing, respawning and pooling
 

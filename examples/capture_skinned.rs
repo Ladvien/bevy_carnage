@@ -15,9 +15,9 @@
 //! hits at all. `--reset-at N` sends a `GoreReset` for the body and every dressed surface on frame
 //! `N`: once the canvases have uploaded, every frame after is the quiet run's, and so is the digest.
 //! `--blows` adds a second blow to the left shin, lower down, at frame 60: two bruises on one limb,
-//! both ageing. `--stroll` takes no hits: the body walks along the floor instead of in place, through
-//! a spill of blood painted on the floor ahead of it at frame 0, and every foot it puts down is sent
-//! as a `GoreStep` — so it walks out of the spill leaving prints that fade, seen from the side.
+//! both ageing. `--stroll` takes no hits: the body walks along a tiled floor instead of in place,
+//! through a spill of blood painted on the floor ahead of it at frame 0, and every foot it puts down is
+//! sent as a `GoreStep` — so it walks out of the spill leaving prints that fade, seen from above.
 //!
 //! Writes `frame0000.png …` and prints one digest line; two runs must print the same line.
 //!
@@ -76,13 +76,6 @@ fn main() {
         // burst of blood in the air; the digest cannot see it.
         #[cfg(feature = "vfx")]
         app.add_plugins(bevy_carnage::CarnageVfxPlugin);
-        // **A stroll's floor is 512 a side**, 5.9 mm a texel on the 3 m slab, where 256 ships: a print's
-        // heel, its arch's gap and its forefoot are a few centimetres each, and at 11.7 mm a texel the
-        // smoothing the shader reads the canvas with rounds them into one blob. A showcase's choice,
-        // as the mannequin's 256-texel skin is.
-        if flag("--stroll") {
-            app.insert_resource(bevy_carnage::preset::GoreDials { floor_canvas: 512, ..default() });
-        }
         app.add_plugins(GorePlugin)
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
             .insert_resource(Time::<Fixed>::from_hz(60.0))
@@ -217,7 +210,17 @@ fn setup(
     if breaking() {
         commands.entity(root).insert(mannequin::breakable());
     }
-    preset_scene::spawn_set(&mut commands, &mut meshes, &mut materials);
+    // **A stroll is on a tiled floor**, as a level's is: its UVs repeat the tiles, so it is dressed
+    // `Gore::projected`, and at 512 a side, 5.9 mm a texel on the 3 m slab, where 256 ships — a print's
+    // heel, waist and forefoot are a few centimetres each, and at 11.7 mm a texel the smoothing the
+    // shader reads the canvas with rounds them into two drops. A showcase's choice, as the mannequin's
+    // 256-texel skin is.
+    if flag("--stroll") {
+        let slab = preset_scene::tiled_slab(&mut meshes, &mut materials, &mut images);
+        preset_scene::spawn_set_on(&mut commands, &mut meshes, &mut materials, slab);
+    } else {
+        preset_scene::spawn_set(&mut commands, &mut meshes, &mut materials);
+    }
     if flag("--through") {
         preset_scene::spawn_wall(&mut commands, &mut meshes, &mut materials);
     }

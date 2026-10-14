@@ -52,7 +52,7 @@
 //! [`GoreSystems`] and drives the clock itself.
 
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
-use bevy::mesh::{Indices, VertexAttributeValues};
+use bevy::mesh::{Indices, UvChannel, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::transform::helper::TransformHelper;
 use crate::cross_section::{CrossSectionPlugin, CrossSectionSettings, Layers, Region};
@@ -99,6 +99,9 @@ pub struct Gore {
     /// bill: a head, a hand or a distant character does not need the 128 a torso's wounds read at, and
     /// 64 costs a quarter. See [`Gore::with_canvas`] and *What it costs* in `docs/preset.md`.
     pub canvas: Option<u32>,
+    /// **Lay a floor's or a wall's canvas over it from its broadest side**, rather than by its own
+    /// `UV_0` — see [`Gore::projected`]. `false` by default.
+    pub projected: bool,
 }
 
 /// The four surfaces the preset knows how to dress.
@@ -119,26 +122,44 @@ pub enum GoreKind {
 impl Gore {
     /// A body part of `region`.
     pub fn skin(region: Region) -> Self {
-        Self { kind: GoreKind::Skin(region), gravity_uv: Vec2::new(0.0, 1.0), uv_per_metre: None, canvas: None }
+        Self { kind: GoreKind::Skin(region), gravity_uv: Vec2::new(0.0, 1.0), uv_per_metre: None, canvas: None, projected: false }
     }
     /// A fabric surface.
     pub fn cloth() -> Self {
-        Self { kind: GoreKind::Cloth, gravity_uv: Vec2::new(0.0, 1.0), uv_per_metre: None, canvas: None }
+        Self { kind: GoreKind::Cloth, gravity_uv: Vec2::new(0.0, 1.0), uv_per_metre: None, canvas: None, projected: false }
     }
     /// A floor. Blood pools rather than runs, so its UV gravity is zero.
     pub fn floor() -> Self {
-        Self { kind: GoreKind::Floor, gravity_uv: Vec2::ZERO, uv_per_metre: None, canvas: None }
+        Self { kind: GoreKind::Floor, gravity_uv: Vec2::ZERO, uv_per_metre: None, canvas: None, projected: false }
     }
     /// A wall or any upright hard surface — see [`GoreKind::Wall`]. Blood runs down its atlas's `+v`,
     /// as on cloth; a wall whose UVs run the other way states it with [`Gore::with_gravity_uv`].
     pub fn wall() -> Self {
-        Self { kind: GoreKind::Wall, gravity_uv: Vec2::new(0.0, 1.0), uv_per_metre: None, canvas: None }
+        Self { kind: GoreKind::Wall, gravity_uv: Vec2::new(0.0, 1.0), uv_per_metre: None, canvas: None, projected: false }
     }
     /// The same surface with its canvases `texels` on an edge instead of the preset's dial — see
     /// [`Gore::canvas`]. Read when the mesh is dressed; a surface already dressed keeps its canvases.
     /// Zero leaves the preset's own.
     pub fn with_canvas(mut self, texels: u32) -> Self {
         self.canvas = (texels > 0).then_some(texels);
+        self
+    }
+    /// **The same floor or wall with its canvas laid over it from its broadest side**, for a mesh
+    /// whose `UV_0` tiles a texture — a level's floor, whose UVs run from 0 to 20 so a 15 cm tile
+    /// repeats — and so cannot hold blood: the wetmap clamps a UV outside `[0, 1]` to the canvas's edge.
+    ///
+    /// When it is dressed the preset gives the entity a copy of its mesh whose `UV_0` is the mesh seen
+    /// square-on from the side it mostly faces — from above for a floor, from the front for a wall,
+    /// `+v` down a wall — scaled to fit `[0, 1]` without stretching, and whose `UV_1` is the `UV_0` it
+    /// had; the surface's own textures read `UV_1`, so its tiles stay as they were, and every canvas
+    /// reads the projection. The density is the projection's, so [`Gore::uv_per_metre`] is set from it.
+    /// The entity's `Mesh3d` is that copy from then on; a mesh another entity shares is not touched.
+    ///
+    /// Refused, with one warning, on a mesh that already has a `UV_1` — it may be a lightmap's, and
+    /// the projection would overwrite it — and on a skin or a cloth, whose canvases must follow the
+    /// body's own atlas.
+    pub fn projected(mut self) -> Self {
+        self.projected = true;
         self
     }
     /// The canvas edge to dress this surface with.
@@ -628,6 +649,66 @@ fn triangles_near(mesh: &Mesh, p: Vec3, reach: f32) -> Vec<[Vec3; 3]> {
         Err(_) => {}
     }
     near
+}
+
+/// **A floor's or a wall's mesh with its canvas laid over it from its broadest side** (see
+/// [`Gore::projected`]): a copy whose `UV_0` is the projection and whose `UV_1` is the `UV_0` it had,
+/// and the two mesh-space vectors one canvas edge long along the projection's `u` and `v`. The side it
+/// faces most is the axis its triangles' areas project onto most; `u` and `v` are `x` and `z` seen from
+/// `y`, and the horizontal axis and `−y` seen from `x` or `z`, so `+v` runs down a wall.
+fn projected(mesh: &Mesh) -> Result<(Mesh, [Vec3; 2]), &'static str> {
+    if mesh.contains_attribute(Mesh::ATTRIBUTE_UV_1) {
+        return Err("it already has a UV_1, which may be a lightmap's, and the projection would overwrite it");
+    }
+    let Ok(Some(VertexAttributeValues::Float32x3(positions))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_POSITION) else {
+        return Err("it has no Float32x3 positions");
+    };
+    let mut facing = Vec3::ZERO;
+    let mut triangle = |[a, b, c]: [usize; 3]| {
+        if let (Some(pa), Some(pb), Some(pc)) = (positions.get(a), positions.get(b), positions.get(c)) {
+            let (pa, pb, pc) = (Vec3::from(*pa), Vec3::from(*pb), Vec3::from(*pc));
+            facing += (pb - pa).cross(pc - pa).abs();
+        }
+    };
+    match mesh.try_indices_option() {
+        Ok(Some(Indices::U32(ix))) => ix.as_chunks::<3>().0.iter().for_each(|t| triangle(t.map(|i| i as usize))),
+        Ok(Some(Indices::U16(ix))) => ix.as_chunks::<3>().0.iter().for_each(|t| triangle(t.map(usize::from))),
+        Ok(None) => (0..positions.len() / 3).for_each(|t| triangle([3 * t, 3 * t + 1, 3 * t + 2])),
+        Err(_) => return Err("its indices cannot be read"),
+    }
+    let (u, v) = if facing.y >= facing.x && facing.y >= facing.z {
+        (Vec3::X, Vec3::Z)
+    } else if facing.z >= facing.x {
+        (Vec3::X, Vec3::NEG_Y)
+    } else {
+        (Vec3::Z, Vec3::NEG_Y)
+    };
+    let (mut lo, mut hi) = (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY));
+    for p in positions {
+        let at = Vec2::new(Vec3::from(*p).dot(u), Vec3::from(*p).dot(v));
+        lo = lo.min(at);
+        hi = hi.max(at);
+    }
+    let edge = (hi - lo).max_element();
+    if !(edge.is_finite() && edge > 0.0) {
+        return Err("it has no extent to lay a canvas over");
+    }
+    let uvs: Vec<[f32; 2]> = positions.iter().map(|p| ((Vec2::new(Vec3::from(*p).dot(u), Vec3::from(*p).dot(v)) - lo) / edge).to_array()).collect();
+    let mut copy = mesh.clone();
+    if let Ok(Some(own)) = mesh.try_attribute_option(Mesh::ATTRIBUTE_UV_0) {
+        copy.insert_attribute(Mesh::ATTRIBUTE_UV_1, own.clone());
+    }
+    copy.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    Ok((copy, [u * edge, v * edge]))
+}
+
+/// Whether any of a mesh's `UV_0` lies outside `[0, 1]` by more than a rounding error: a UV layout
+/// that tiles a texture rather than covering the mesh once.
+fn tiles(mesh: &Mesh) -> bool {
+    match mesh.try_attribute_option(Mesh::ATTRIBUTE_UV_0) {
+        Ok(Some(VertexAttributeValues::Float32x2(uvs))) => uvs.iter().flatten().any(|c| !(-1.0e-3..=1.0 + 1.0e-3).contains(c)),
+        _ => false,
+    }
 }
 
 /// **A mesh's atlas density, UV units per metre**: the square root of its total UV area over its
@@ -2110,6 +2191,34 @@ fn dress(
     let mut meshes = meshes;
     let scale = settings.as_ref().map(|s| s.scale).unwrap_or_default();
     for (entity, mut gore, mesh3d, material, skin) in &mut undressed {
+        // A floor or a wall laid over from its broadest side is dressed on a copy of its mesh: see
+        // `Gore::projected`. The density is the projection's.
+        let mut laid: Option<Handle<Mesh>> = None;
+        if matches!(gore.kind, GoreKind::Floor | GoreKind::Wall)
+            && let Some(meshes) = meshes.as_mut()
+        {
+            let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
+            if gore.projected {
+                match projected(mesh) {
+                    Ok((copy, [u, v])) => {
+                        let xf = transforms.compute_global_transform(entity).unwrap_or_default();
+                        let edge_m = 0.5 * (xf.affine().transform_vector3(u).length() + xf.affine().transform_vector3(v).length()) * dials.mm_per_unit / 1000.0;
+                        if edge_m.is_finite() && edge_m > 0.0 {
+                            gore.uv_per_metre = Some(1.0 / edge_m);
+                        }
+                        laid = Some(meshes.add(copy));
+                    }
+                    Err(why) => bevy::log::warn_once!("gore: a projected floor or wall is dressed by its own UV_0 instead, because {why}"),
+                }
+            } else if tiles(mesh) {
+                bevy::log::warn_once!(
+                    "gore: a floor's or a wall's UV_0 runs outside [0, 1], so it tiles its texture, and blood on it lands \
+                     clamped at its canvas's edge; dress it with Gore::projected()"
+                );
+            }
+        } else if gore.projected {
+            bevy::log::warn_once!("gore: Gore::projected is for a floor or a wall; a skin or a cloth is dressed by its own UV_0");
+        }
         if let (GoreKind::Skin(_), Some(meshes)) = (gore.kind, meshes.as_mut()) {
             match meshes.get(&mesh3d.0).map(|m| m.contains_attribute(Mesh::ATTRIBUTE_TANGENT)) {
                 None => continue,
@@ -2154,7 +2263,16 @@ fn dress(
                 ),
             }
         }
-        let base = material.and_then(|m| standard.get(&m.0).cloned()).unwrap_or_default();
+        let mut base = material.and_then(|m| standard.get(&m.0).cloned()).unwrap_or_default();
+        if let Some(laid) = laid {
+            // Its own textures keep the UVs they were authored on, now the copy's `UV_1`.
+            base.base_color_channel = UvChannel::Uv1;
+            base.emissive_channel = UvChannel::Uv1;
+            base.metallic_roughness_channel = UvChannel::Uv1;
+            base.normal_map_channel = UvChannel::Uv1;
+            base.occlusion_channel = UvChannel::Uv1;
+            commands.entity(entity).insert(Mesh3d(laid));
+        }
         let base_srgb = base.base_color.to_srgba();
         let base_srgb = [base_srgb.red, base_srgb.green, base_srgb.blue];
         let rough = base.perceptual_roughness;
@@ -4827,6 +4945,79 @@ mod tests {
         let (c, a) = burn_zone(Degree::First, 0.0);
         assert!(red(c) && a > 0.5, "a first-degree burn is {c:?} at {a}, not reddened");
         assert_eq!(burn_zone(Degree::None, 0.0).1, 0.0, "a burn of no degree shows");
+    }
+
+    /// **A projected wall's canvas runs down it.** A 3 m by 2.4 m wall facing +z is laid over square-on:
+    /// `u` along it from its left edge, `v` from its top edge down, both over its longer side, so blood
+    /// that runs down the canvas's `+v` (`Gore::wall`'s default) runs down the wall.
+    #[test]
+    fn a_projected_wall_runs_its_canvas_down_the_wall() {
+        let wall = Plane3d::new(Vec3::Z, Vec2::new(1.5, 1.2)).mesh().build();
+        let Ok((laid, [u, v])) = projected(&wall) else { panic!("a plain wall was refused") };
+        assert!(u.distance(Vec3::X * 3.0) < 1.0e-5 && v.distance(Vec3::NEG_Y * 3.0) < 1.0e-5, "laid along {u} and {v}");
+        let (Some(VertexAttributeValues::Float32x3(at)), Some(VertexAttributeValues::Float32x2(uv))) =
+            (laid.attribute(Mesh::ATTRIBUTE_POSITION), laid.attribute(Mesh::ATTRIBUTE_UV_0))
+        else {
+            panic!("the laid wall lost its positions or its UVs")
+        };
+        for (p, t) in at.iter().zip(uv) {
+            assert!((t[0] - (p[0] + 1.5) / 3.0).abs() < 1.0e-6 && (t[1] - (1.2 - p[1]) / 3.0).abs() < 1.0e-6, "{p:?} laid at {t:?}");
+        }
+    }
+
+    /// **A floor whose UVs tile takes blood where it falls, once it is projected.** A 3 m floor whose
+    /// `UV_0` repeats its texture four times, dressed with `Gore::projected`, and a bloody sole put
+    /// down at x = −1 and x = +1 on z = 0: each print lands in its own patch of the canvas, a sixth of
+    /// the way in from either side and halfway down, and nowhere else. Dressed by its own `UV_0`, the canvas would have clamped
+    /// both. The entity draws a copy of its mesh whose `UV_1` is the tiling it had, its own textures
+    /// read `UV_1`, and the density is the projection's: one canvas over three metres.
+    #[test]
+    fn a_projected_floor_whose_uvs_tile_takes_blood_where_it_falls() {
+        let mut app = headless();
+        let mut plane = Plane3d::new(Vec3::Y, Vec2::splat(1.5)).mesh().build();
+        if let Some(VertexAttributeValues::Float32x2(uvs)) = plane.attribute_mut(Mesh::ATTRIBUTE_UV_0) {
+            uvs.iter_mut().for_each(|uv| *uv = [uv[0] * 4.0, uv[1] * 4.0]);
+        }
+        let tiling = plane.attribute(Mesh::ATTRIBUTE_UV_0).cloned();
+        let own = app.world_mut().resource_mut::<Assets<Mesh>>().add(plane);
+        let material = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial::default());
+        let floor = app
+            .world_mut()
+            .spawn((Mesh3d(own.clone()), MeshMaterial3d(material), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::floor().projected()))
+            .id();
+        let foot = app.world_mut().spawn(Tread { load: 1.0 }).id();
+        app.world_mut().run_schedule(FixedUpdate);
+        let laid = app.world().get::<Mesh3d>(floor).map(|m| m.0.clone());
+        assert!(laid.as_ref().is_some_and(|h| *h != own), "a projected floor drew its own mesh");
+        let second = laid.and_then(|h| app.world().resource::<Assets<Mesh>>().get(&h).and_then(|m| m.attribute(Mesh::ATTRIBUTE_UV_1).cloned()));
+        assert!(second.is_some() && second.map(|a| a.get_bytes().to_vec()) == tiling.map(|a| a.get_bytes().to_vec()), "the copy's UV_1 is not the tiling the floor had");
+        let channel = app
+            .world()
+            .get::<MeshMaterial3d<FleshMaterial>>(floor)
+            .and_then(|m| app.world().resource::<Assets<FleshMaterial>>().get(&m.0))
+            .map(|m| m.base.base_color_channel.clone());
+        assert_eq!(channel, Some(UvChannel::Uv1), "the floor's own texture no longer reads the tiling");
+        let density = app.world().get::<Gore>(floor).and_then(|g| g.uv_per_metre).unwrap_or(0.0);
+        assert!((density - 1.0 / 3.0).abs() < 1.0e-4, "the projected density is {density}, not a third of a UV per metre");
+        for x in [-1.0, 1.0] {
+            app.world_mut().write_message(GoreStep::new(foot, Vec3::new(x, 0.0, 0.0), Vec3::Z));
+            app.world_mut().run_schedule(FixedUpdate);
+        }
+        let Some(wet) = app.world().get::<WetCanvas>(floor) else { panic!("the floor has no wetmap") };
+        let n = wet.size();
+        let (mut left, mut right, mut elsewhere) = (0u32, 0u32, 0u32);
+        for ty in 0..n {
+            for tx in 0..n {
+                let (u, v, a) = ((tx as f32 + 0.5) / n as f32, (ty as f32 + 0.5) / n as f32, u32::from(wet.amount_at(tx, ty)));
+                let mid = (0.4..0.6).contains(&v);
+                match u {
+                    u if mid && (0.1..0.24).contains(&u) => left += a,
+                    u if mid && (0.76..0.9).contains(&u) => right += a,
+                    _ => elsewhere += a,
+                }
+            }
+        }
+        assert!(left > 0 && right > 0 && elsewhere == 0, "the prints landed at ({left}, {right}) and {elsewhere} elsewhere");
     }
 
     /// **A sole walks the blood it stood in off in fading prints.** A 3 m floor holds a wet pool at
