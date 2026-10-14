@@ -4,7 +4,8 @@
 //! cargo run --release -p bevy_carnage --example capture_skinned -- --out frames-skinned
 //! ```
 //!
-//! `--eye x,y,z` renders from another camera position, aimed at the same point. It changes no digest.
+//! `--eye x,y,z` renders from another camera position, aimed at the chest or at `--at x,y,z`. Neither
+//! changes a digest.
 //! `--break` makes the body breakable and takes a heavy shot to the chest at frame 200: it breaks where
 //! its skeleton is, mid-walk with the arm raised, and its pieces fall to the floor. `--shirt` dresses
 //! the body in a sleeveless shirt: the two chest shots hole it and the wound is seen through the hole,
@@ -48,11 +49,18 @@ const FRAMES: u32 = 360;
 
 fn main() {
     let out = common::arg("--out").unwrap_or_else(|| "frames-skinned".to_string());
-    // `--eye x,y,z` looks at the body from somewhere else: the digest does not depend on it, so it
-    // is how a render is checked from an angle the committed clip does not use.
-    let camera = match common::arg("--eye").map(|e| e.split(',').filter_map(|v| v.trim().parse::<f32>().ok()).collect::<Vec<_>>()) {
-        Some(v) if v.len() == 3 => Transform::from_xyz(v[0], v[1], v[2]).looking_at(Vec3::new(0.12, 0.93, 0.1), Vec3::Y),
-        _ => mannequin::view(),
+    // `--eye x,y,z` looks at the body from somewhere else, and `--at x,y,z` at another point than
+    // the chest: the digest depends on neither, so they are how a render is checked from an angle,
+    // or as close, as the committed clip does not use.
+    let point = |name: &str| {
+        common::arg(name)
+            .map(|e| e.split(',').filter_map(|v| v.trim().parse::<f32>().ok()).collect::<Vec<_>>())
+            .and_then(|v| (v.len() == 3).then(|| Vec3::new(v[0], v[1], v[2])))
+    };
+    let at = point("--at").unwrap_or(Vec3::new(0.12, 0.93, 0.1));
+    let camera = match point("--eye") {
+        Some(eye) => Transform::from_translation(eye).looking_at(at, Vec3::Y),
+        None => mannequin::view(),
     };
     let Some(mut rec) = Recorder::new_with(800, 500, camera, &out, |app| {
         // **The clock is the frame, not the wall**, for the reason `capture_preset` gives: one sixtieth

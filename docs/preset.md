@@ -157,7 +157,8 @@ renderer asks for. Nothing is asked of the game. Put `Gore` on the skinned mesh 
   since 0.5.40 a run follows that direction rather than the texture axis nearest it.
 - **A slash is laid out on the bind pose**, which is what the laceration tears: the point, the face
   normal, the direction of travel and the length are carried back through the pose at the triangle
-  that was hit.
+  that was hit. Its wound bed is skinned by the joints of the skin around it (0.5.49), so it rides
+  the limb with the lips; before, it stayed in the bind pose and stood off a limb that had moved.
 - **A bruise and a burn live in UV space**, and so ride the limb with no extra work. A burn is
   drawn as Jackson's three zones as far in as its degree reached (0.5.43, `burn_zone`): a third
   degree is a dark eschar in a pale ring of stasis in a red flare out to `BURN_FLARE` times

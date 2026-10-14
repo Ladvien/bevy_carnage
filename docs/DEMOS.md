@@ -521,7 +521,7 @@ Run it and you aim it yourself: `1` a shot to the raised forearm, `2` a slash ac
 
 **The mannequin is dressed by one `GoreScene` on its root**, from the `Name` each part carries (`Torso`, `ArmL`, ...), not by a `Gore` on each part, as a glTF character would be. Its digest is the hand-dressed clip's, and 351 of the 360 frames are byte-identical to it; the other nine differ by one pixel, at the same two walk-cycle phases.
 
-`--eye x,y,z` renders the clip from another camera position, aimed at the same point, and changes no digest. It is how a render is checked from an angle the committed clip does not use: from `-0.9,1.3,3.0` the floor's pools once clipped to white (`AG-096`), and until 0.5.47 the pool by the sheet still lit up whole there as a pale sticker; with the film's relief it shows a glint in dark red.
+`--eye x,y,z` renders the clip from another camera position, aimed at the chest or at `--at x,y,z`, and changes no digest. It is how a render is checked from an angle, or as close, as the committed clip does not use: from `-0.9,1.3,3.0` the floor's pools once clipped to white (`AG-096`), and until 0.5.47 the pool by the sheet still lit up whole there as a pale sticker; with the film's relief it shows a glint in dark red. `--eye -0.02,0.82,0.55 --at -0.095,0.72,0.05` is half a metre from the slash on the thigh: until 0.5.49 its wound bed stayed in the bind pose there, a pale fin standing off the leg across the cut once it stepped.
 
 ### `capture_skinned --break` — a body that breaks where its skeleton is
 

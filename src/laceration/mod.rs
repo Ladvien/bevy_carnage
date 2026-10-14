@@ -12,16 +12,18 @@ pub use tear::{BED_BLOOD, GAPE_TAPER, RAIL_WANDER, TearShape, Torn, WANDER_MM, d
 pub use crate::cross_section::{Layers, Region, Scale};
 
 use bevy::app::{App, Plugin, Update};
+use bevy::camera::visibility::{DynamicSkinnedMeshBounds, NoFrustumCulling};
 use bevy::asset::{Assets, Handle};
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::hierarchy::ChildOf;
-use bevy::ecs::query::With;
+use bevy::ecs::query::{Has, With};
 use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::{IntoScheduleConfigs, SystemSet};
 use bevy::ecs::system::{Commands, Query, Res, ResMut};
 use bevy::log::warn_once;
 use bevy::math::Vec3;
+use bevy::mesh::skinning::SkinnedMesh;
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::pbr::MeshMaterial3d;
 use crate::cross_section::{CrossSectionAtlas, CrossSectionSettings};
@@ -149,6 +151,11 @@ fn advance_clock(clock: Option<ResMut<LacerationClock>>) {
 /// skin goes back into the entity's own mesh handle; the bed goes into a child entity's, spawned on
 /// the first tear and reused after.
 ///
+/// **The bed is drawn as its skin is.** On a skinned entity it gets the same [`SkinnedMesh`], and
+/// [`tear`] has bound its vertices to the skin's joints, so it bends with the limb; it is culled the
+/// way the skin is, by [`NoFrustumCulling`] or by [`DynamicSkinnedMeshBounds`] over bounds `tear`
+/// made for it. A bed in a skinned limb without them is drawn in the bind pose, off the body.
+///
 /// Every resource is optional. `LacerationClock` this plugin owns, but the other three belong to
 /// plugins this crate does not add — and `CrossSectionSettings` being absent is a *supported*
 /// configuration, not an error: the bed then uses [`Layers::for_region`] and [`Scale::default`],
@@ -161,14 +168,14 @@ fn retear_lacerations(
     settings: Option<Res<CrossSectionSettings>>,
     atlas: Option<Res<CrossSectionAtlas>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
-    mut lacerations: Query<(Entity, &mut Laceration, &Mesh3d)>,
+    mut lacerations: Query<(Entity, &mut Laceration, &Mesh3d, Skinning)>,
     beds: Query<&Mesh3d, With<LacerationBed>>,
     mut commands: Commands,
 ) {
     let (Some(clock), Some(mut meshes)) = (clock, meshes) else {
         return;
     };
-    for (entity, mut lac, drawn) in &mut lacerations {
+    for (entity, mut lac, drawn, (skinned, uncullable, dynamic)) in &mut lacerations {
         let ticks = clock.0.saturating_sub(lac.opened_at);
         let width = gape(ticks, &lac.gape, &lac.tension, tear_direction(&lac.path));
         if (width - lac.last_gape).abs() <= GAPE_EPSILON {
@@ -223,9 +230,21 @@ fn retear_lacerations(
                 if let Some(material) = atlas.as_ref().and_then(|a| a.material(lac.region)) {
                     bed.insert(MeshMaterial3d(material));
                 }
+                if let Some(skin) = skinned {
+                    bed.insert(skin.clone());
+                }
+                if uncullable {
+                    bed.insert(NoFrustumCulling);
+                }
+                if dynamic {
+                    bed.insert(DynamicSkinnedMeshBounds);
+                }
                 lac.bed = Some(bed.id());
             }
         }
         lac.last_gape = width;
     }
 }
+
+/// How a laceration's skin is drawn, which its bed copies: its skeleton, and how it is culled.
+type Skinning = (Option<&'static SkinnedMesh>, Has<NoFrustumCulling>, Has<DynamicSkinnedMeshBounds>);

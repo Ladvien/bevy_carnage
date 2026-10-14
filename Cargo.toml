@@ -1,5 +1,11 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.49`: a slash's wound bed rides a skinned limb** (`AG-122`). The bed under a laceration is a
+# mesh of its own, and on a skinned skin it had no joints and no `SkinnedMesh`, so it was drawn in
+# the bind pose: once the limb moved, it stood off the body as a pale fin across the cut. Each bed
+# vertex now takes the joints of the torn skin's vertex nearest it, the bed gets bounds when its skin
+# has them, and the plugin spawns it with the skin's `SkinnedMesh` and its culling component.
+#
 # **`0.5.48`: a character can be healed** (`AG-121`). A game that respawned or pooled a dressed
 # character had to despawn it and dress it again, every canvas and image rebuilt. `GoreReset` heals one
 # in place: its canvases cleared and re-uploaded, its bleeding, bruises and soaks stopped, a slashed
@@ -273,7 +279,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.48"
+version = "0.5.49"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
@@ -298,6 +304,7 @@ bevy = { version = "0.19.0", default-features = false, features = [
     "bevy_pbr",     # StandardMaterial / MeshMaterial3d — the detached part keeps its own material
     "bevy_image",   # Image — the wetmap, flaymap and cross-section strip are CPU-authored images
     "bevy_render",  # render_resource::{Extent3d, TextureDimension, TextureFormat} for those images
+    "bevy_camera",  # NoFrustumCulling, DynamicSkinnedMeshBounds — a wound bed is culled as its skin is
     # `WorldAsset` — the scene handle a subject is keyed by. It lives in
     # `bevy_world_serialization`, NOT `bevy_scene`, and naming the wrong one here still built for a
     # long time: `cargo test` pulls the dev-dependency full umbrella, which enables everything, so the

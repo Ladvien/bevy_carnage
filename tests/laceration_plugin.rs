@@ -9,10 +9,12 @@
 
 use bevy::app::{App, TaskPoolPlugin};
 use bevy::asset::{AssetPlugin, Assets};
+use bevy::camera::visibility::DynamicSkinnedMeshBounds;
 use bevy::ecs::change_detection::DetectChanges;
 use bevy::ecs::hierarchy::Children;
-use bevy::math::Vec3;
-use bevy::mesh::{Indices, Mesh, Mesh3d, MeshPlugin};
+use bevy::math::{Mat4, Vec3};
+use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
+use bevy::mesh::{Indices, Mesh, Mesh3d, MeshPlugin, VertexAttributeValues};
 use bevy_carnage::laceration::{
     Gape, Laceration, LacerationBed, LacerationClock, LacerationPlugin, Region, Tension, skin_patch,
 };
@@ -175,4 +177,79 @@ fn a_laceration_that_draws_its_own_source_is_refused_rather_than_destroying_it()
         triangles(meshes.get(&shared).expect("the shared mesh must survive"))
     };
     assert_eq!(still, intact, "the intact mesh was cut into; the guard did not hold");
+}
+
+/// **A skinned skin lays a skinned bed.** A patch whose half at `x < 0` is weighted to one joint and
+/// whose other half to a second is cut across both: the bed carries the skin's `SkinnedMesh` and its
+/// `DynamicSkinnedMeshBounds`, every bed vertex is bound to the joint of the half it lies in, and the
+/// bed mesh has the bounds Bevy culls a skinned mesh by. A bed that was not would be drawn in the bind
+/// pose, standing off a limb that had moved.
+#[test]
+fn a_skinned_skin_lays_a_bed_bound_to_its_joints() {
+    let mut app = headless_app();
+    let mut patch = skin_patch(20, 1.0);
+    let joint_of = |x: f32| u16::from(x >= 0.0);
+    let joints: Vec<[u16; 4]> = match patch.attribute(Mesh::ATTRIBUTE_POSITION) {
+        Some(VertexAttributeValues::Float32x3(pos)) => pos.iter().map(|p| [joint_of(p[0]), 0, 0, 0]).collect(),
+        _ => panic!("the patch has Float32x3 positions"),
+    };
+    let weights = vec![[1.0f32, 0.0, 0.0, 0.0]; joints.len()];
+    patch.insert_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, VertexAttributeValues::Uint16x4(joints));
+    patch.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, weights);
+    patch.generate_skinned_mesh_bounds().expect("the patch is skinned");
+    let (drawn, source) = {
+        let mut meshes = app.world_mut().resource_mut::<Assets<Mesh>>();
+        (meshes.add(patch.clone()), meshes.add(patch))
+    };
+    let inverse_bindposes =
+        app.world_mut().resource_mut::<Assets<SkinnedMeshInverseBindposes>>().add(SkinnedMeshInverseBindposes::from(vec![Mat4::IDENTITY; 2]));
+    let bones = vec![app.world_mut().spawn_empty().id(), app.world_mut().spawn_empty().id()];
+    let subject = app
+        .world_mut()
+        .spawn((
+            Mesh3d(drawn),
+            SkinnedMesh { inverse_bindposes, joints: bones.clone() },
+            DynamicSkinnedMeshBounds,
+            Laceration {
+                path: vec![Vec3::new(-0.4, 0.0, 0.0), Vec3::new(0.4, 0.0, 0.0)],
+                normal: Vec3::Y,
+                gape: Gape { width_max: 0.2, open_ticks: 60 },
+                tension: Tension { skin: 1.0, langer: Some([0.0, 0.0, 1.0]) },
+                influence: 0.15,
+                bed_depth_mm: 6.0,
+                region: Region::Limb,
+                opened_at: 0,
+                source,
+                ..Default::default()
+            },
+        ))
+        .id();
+    for _ in 0..80 {
+        app.update();
+    }
+
+    let bed = app.world().get::<Laceration>(subject).and_then(|lac| lac.bed).expect("the plugin must have spawned a bed");
+    assert_eq!(app.world().get::<SkinnedMesh>(bed).map(|s| s.joints.clone()), Some(bones), "the bed is not skinned by its skin's joints");
+    assert!(app.world().get::<DynamicSkinnedMeshBounds>(bed).is_some(), "the bed is not culled the way its skin is");
+    let handle = app.world().get::<Mesh3d>(bed).expect("the bed needs a Mesh3d").0.clone();
+    let meshes = app.world().resource::<Assets<Mesh>>();
+    let mesh = meshes.get(&handle).expect("the bed's mesh must exist");
+    assert!(mesh.skinned_mesh_bounds().is_some(), "the bed has no skinned bounds to be culled by");
+    let (Some(VertexAttributeValues::Float32x3(pos)), Some(VertexAttributeValues::Uint16x4(bound)), Some(VertexAttributeValues::Float32x4(weights))) = (
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION),
+        mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX),
+        mesh.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT),
+    ) else {
+        panic!("the bed carries no joint indices or weights");
+    };
+    assert!(triangles(mesh) > 0 && bound.len() == pos.len() && weights.len() == pos.len(), "one binding per bed vertex");
+    // A cell is 0.05 wide: a bed vertex within one of the seam may be nearest either half.
+    let (mut left, mut right) = (0, 0);
+    for (p, j) in pos.iter().zip(bound) {
+        if p[0].abs() > 0.06 {
+            assert_eq!(j[0], joint_of(p[0]), "a bed vertex at x = {} is bound to the other half's joint", p[0]);
+            if p[0] < 0.0 { left += 1 } else { right += 1 }
+        }
+    }
+    assert!(left > 0 && right > 0, "the cut did not lay bed on both halves ({left} left, {right} right)");
 }

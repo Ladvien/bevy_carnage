@@ -56,6 +56,11 @@
 //! The cost is that vertices inside the gap can end up referenced by nothing, which wastes a few
 //! bytes of vertex buffer and nothing else.
 //!
+//! **The bed of a skinned skin is skinned too.** It is a new mesh, so it has no joints of its own;
+//! each of its vertices takes the joint indices and weights of the skin vertex nearest it, so the bed
+//! bends with the limb the way the lips beside it do. Without them a skinned limb's bed stayed where
+//! the mesh was authored, in the bind pose, and once the limb moved it stood off the body as a fin.
+//!
 //! # Where the numbers come from
 //!
 //! [`RAIL_WANDER`], [`WANDER_MM`], [`GAPE_TAPER`] and [`BED_BLOOD`] are **this crate's own** — no
@@ -328,6 +333,16 @@ pub fn tear(
         out.push(p.to_array());
     }
 
+    // **The bed is bound to the skin it lies in**, when that skin is skinned, and bounded as it is.
+    let binding = Binding::of(mesh, &out, &near, shape.influence);
+    let mut bed = bed_mesh(&segs, n, shape, inv_influence, reach, seed, layers, &scale, binding.as_ref());
+    if binding.is_some()
+        && mesh.skinned_mesh_bounds().is_some()
+        && let Err(e) = bed.generate_skinned_mesh_bounds()
+    {
+        warn_once!("laceration: cannot bound the skinned wound bed ({e}); it may be culled where it is drawn");
+    }
+
     // The skin is the input with two buffers rewritten, so every other attribute — normals, `UV_0`,
     // joint indices, joint weights, vertex colours, anything custom — arrives untouched by
     // construction rather than by a copy this crate has to remember to make.
@@ -339,8 +354,61 @@ pub fn tear(
         skin.try_insert_indices(Indices::U32(kept)).ok()?;
     }
 
-    let bed = bed_mesh(&segs, n, shape, inv_influence, reach, seed, layers, &scale);
     Some(Torn { skin, bed, removed_faces: removed, displaced_vertices: moved })
+}
+
+/// **The skin a bed is bound to**, when it is skinned: the torn skin's positions and its joint
+/// indices and weights, which a bed vertex takes from the skin vertex nearest it.
+struct Binding<'a> {
+    /// The skin's positions after the tear: the lips the bed meets.
+    skin: &'a [[f32; 3]],
+    joints: &'a [[u16; 4]],
+    weights: &'a [[f32; 4]],
+    /// The vertices searched: those within the influence radius of the cut, which the lips and the
+    /// bulge behind them are made of — or all of them, on a mesh too coarse to have one there.
+    search: Vec<usize>,
+}
+
+impl<'a> Binding<'a> {
+    /// The binding of a mesh that carries both joint attributes, one per vertex; `None` for one that
+    /// is not skinned.
+    fn of(mesh: &'a Mesh, skin: &'a [[f32; 3]], near: &[Option<Near>], influence: f32) -> Option<Self> {
+        let Ok(Some(VertexAttributeValues::Uint16x4(joints))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_JOINT_INDEX) else {
+            return None;
+        };
+        let Ok(Some(VertexAttributeValues::Float32x4(weights))) = mesh.try_attribute_option(Mesh::ATTRIBUTE_JOINT_WEIGHT) else {
+            return None;
+        };
+        if joints.len() != skin.len() || weights.len() != skin.len() {
+            warn_once!(
+                "laceration: the mesh has {} positions but {} joint indices and {} weights; its wound bed is drawn unbound",
+                skin.len(),
+                joints.len(),
+                weights.len()
+            );
+            return None;
+        }
+        let close = |i: &usize| near.get(*i).and_then(|n| n.as_ref()).is_some_and(|n| n.dist < influence);
+        let mut search: Vec<usize> = (0..skin.len()).filter(close).collect();
+        if search.is_empty() {
+            search = (0..skin.len()).collect();
+        }
+        Some(Binding { skin, joints, weights, search })
+    }
+
+    /// The joints and weights of the skin vertex nearest `p`; a tie goes to the lower index.
+    fn nearest(&self, p: Vec3) -> Option<([u16; 4], [f32; 4])> {
+        let mut best: Option<(f32, usize)> = None;
+        for &i in &self.search {
+            let Some(q) = self.skin.get(i) else { continue };
+            let d = p.distance_squared(Vec3::from_array(*q));
+            if best.is_none_or(|(b, _)| d < b) {
+                best = Some((d, i));
+            }
+        }
+        let (_, i) = best?;
+        Some((*self.joints.get(i)?, *self.weights.get(i)?))
+    }
 }
 
 /// **FNV-1a over a mesh's position bit patterns.** The determinism oracle: two runs of the same tear
@@ -625,6 +693,8 @@ struct BedVert {
     /// Signed lateral offset in mesh units: `+half` on one lip, `-half` on the other, `0` on the
     /// floor.
     across: f32,
+    /// The joint indices and weights it is skinned by, when the skin is skinned.
+    bind: Option<([u16; 4], [f32; 4])>,
 }
 
 /// The trough behind the hole: two walls meeting at a floor, in 2 mm pieces along each segment,
@@ -639,14 +709,28 @@ struct BedVert {
 /// **Normals face into the gap**, and the winding is chosen to match rather than corrected
 /// afterwards — a wound bed is seen from outside the body, so the walls a viewer sees are the ones
 /// whose fronts point at each other.
+///
+/// **Bound to `binding`**, when there is one: a rail takes the joints of the skin vertex nearest it,
+/// which is on the lip it meets, and the floor those of the skin vertex nearest the surface above it.
 #[allow(clippy::too_many_arguments)]
-fn bed_mesh(segs: &[Seg], n: Vec3, shape: &TearShape, inv_influence: f32, reach: [f32; 2], seed: u32, layers: &Layers, scale: &Scale) -> Mesh {
+fn bed_mesh(
+    segs: &[Seg],
+    n: Vec3,
+    shape: &TearShape,
+    inv_influence: f32,
+    reach: [f32; 2],
+    seed: u32,
+    layers: &Layers,
+    scale: &Scale,
+    binding: Option<&Binding>,
+) -> Mesh {
     let depth = (shape.bed_depth_mm / scale.mm_per_unit).max(0.0);
     let total = segs.last().map_or(0.0, |s| s.along + s.len);
     // A quarter of the wander's sample spacing, so the walls follow the smoothstep between samples
     // instead of cutting straight across the ragged lip they are meant to meet.
     let step = (WANDER_MM * 0.25 / scale.mm_per_unit).max(1.0e-6);
-    let mut b = Bed { deepest: depth, seed: seed ^ 0x0B10_0D5E, ..Bed::default() };
+    let mut b = Bed { deepest: depth, seed: seed ^ 0x0B10_0D5E, skinned: binding.is_some(), ..Bed::default() };
+    let bind = |p: Vec3| binding.and_then(|b| b.nearest(p));
     let last = segs.len().saturating_sub(1);
     // The previous segment's far section and its `side`, for the wedge on the outside of a bend.
     let mut previous: Option<([BedVert; 3], Vec3)> = None;
@@ -667,10 +751,11 @@ fn bed_mesh(segs: &[Seg], n: Vec3, shape: &TearShape, inv_influence: f32, reach:
             let half = shape.half_width * open;
             let hl = lip(half, inv_influence, along, 1.0, seed, scale);
             let hr = lip(half, inv_influence, along, -1.0, seed, scale);
+            let (left, right) = (surface + side * hl, surface - side * hr);
             [
-                BedVert { p: surface + side * hl, surface, along, across: hl },
-                BedVert { p: surface - side * hr, surface, along, across: -hr },
-                BedVert { p: surface - n * depth * open, surface, along, across: 0.0 },
+                BedVert { p: left, surface, along, across: hl, bind: bind(left) },
+                BedVert { p: right, surface, along, across: -hr, bind: bind(right) },
+                BedVert { p: surface - n * depth * open, surface, along, across: 0.0, bind: bind(surface) },
             ]
         };
         let mut near_end = section(start);
@@ -755,6 +840,10 @@ struct Bed {
     deepest: f32,
     /// Seeds the streaks.
     seed: u32,
+    /// Whether the skin is skinned, so the bed carries `joints` and `weights`, one per vertex.
+    skinned: bool,
+    joints: Vec<[u16; 4]>,
+    weights: Vec<[f32; 4]>,
 }
 
 impl Bed {
@@ -772,6 +861,10 @@ impl Bed {
         let streak = wander(v.along * 0.35, self.seed, scale) / RAIL_WANDER;
         let wet = ((BED_WET_LIP + (BED_WET_FLOOR - BED_WET_LIP) * down) * (0.55 + 0.9 * streak)).clamp(0.0, 1.0);
         self.color.push([1.0 + (BED_BLOOD[0] - 1.0) * wet, 1.0 + (BED_BLOOD[1] - 1.0) * wet, 1.0 + (BED_BLOOD[2] - 1.0) * wet, 1.0]);
+        if let Some((joints, weights)) = v.bind {
+            self.joints.push(joints);
+            self.weights.push(weights);
+        }
         at
     }
 
@@ -795,12 +888,19 @@ impl Bed {
     }
 
     fn finish(self) -> Mesh {
+        // Every vertex of a skinned skin's bed is bound by construction; the length check is what
+        // keeps a vertex that somehow was not from pairing the wrong joints with every one after it.
+        let bound = self.skinned && self.joints.len() == self.pos.len() && self.weights.len() == self.pos.len();
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
         mesh.try_insert_attribute(Mesh::ATTRIBUTE_POSITION, self.pos).ok();
         mesh.try_insert_attribute(Mesh::ATTRIBUTE_NORMAL, self.nrm).ok();
         mesh.try_insert_attribute(Mesh::ATTRIBUTE_UV_0, self.uv0).ok();
         mesh.try_insert_attribute(Mesh::ATTRIBUTE_UV_1, self.uv1).ok();
         mesh.try_insert_attribute(Mesh::ATTRIBUTE_COLOR, self.color).ok();
+        if bound {
+            mesh.try_insert_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, VertexAttributeValues::Uint16x4(self.joints)).ok();
+            mesh.try_insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, self.weights).ok();
+        }
         mesh.try_insert_indices(Indices::U32(self.idx)).ok();
         mesh
     }
