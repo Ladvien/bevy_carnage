@@ -1,5 +1,13 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.56`: a foot that steps in blood tracks it** (`AG-129`). `GoreStep` is the footstep a game
+# raises for its sound; on the floor under it the sole lifts 30 % of the wet blood under its outline
+# (`WetCanvas::lift_uv`, never dried blood) and prints what it carried (`WetCanvas::print_uv`), a
+# boot's outline inked where it pressed and its tread holds blood, shedding 30 % a step so the prints
+# fade. The load is a public `Tread` on the foot. `capture_skinned --stroll` walks the mannequin
+# through a spill (`docs/skinned_stroll.gif`). The default skinned clip and tier 1 print the
+# digests they did.
+#
 # **`0.5.55`: every bruise on a limb ages** (`AG-128`). `Bruising` held one bruise, so a second
 # blow on the same mesh froze the first where it was. It now holds `sites`, one `BruiseSite` per
 # blow up to `MAX_BRUISES` (8), the oldest retiring past that, and every one is stepped. The
@@ -325,7 +333,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.55"
+version = "0.5.56"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

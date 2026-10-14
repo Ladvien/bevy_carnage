@@ -92,9 +92,11 @@ fn on_hit(
 | Resource | `WetSettings` | Nine dials: `drip_rate`, `spread_rate`, `dry_ticks`, `absorbency`, `max_canvas_updates_per_tick`, `humidity`, `film_depth_mm`, `so2`, `edge_samples`. |
 | Constant | `UV_SPAN_M` | How much world one UV unit is taken to be — see below. |
 | Constant | `MAX_DETAIL`, `DETAIL_EDGE` | The finest `new_detailed` draws (4), and where it draws a stain's edge (4 % of full coverage). |
+| Type | `Print` | A sole's outline on a canvas, for `lift_uv` and `print_uv`: length, width, heading, tread seed. |
+| Constant | `PRINT_CORE` | The share of full coverage a sole's print holds where it inks (0.6). |
 | Re-export | `StainShape`, `bevy_carnage::bloodstain` | The silhouette `paint_*` takes, and the blood model it comes from. |
 
-`WetCanvas`: `new`, `new_detailed`, `albedo`, `roughness`, `paint_uv`, `paint_uv_with`, `paint_world`, `paint_world_with`, `tick`, `flush`, `clear`, `digest`, `wetted_area`, plus the read-only `size`, `detail`, `amount_at`, `age_at`, `is_dirty`, `dirty_since`, `is_still`, `heap_bytes`, `image_bytes`. `clear` (0.5.48) wipes every drop of blood off in place, for a respawned or pooled surface: the digest is a fresh canvas's again and the images re-upload on the next flush.
+`WetCanvas`: `new`, `new_detailed`, `albedo`, `roughness`, `paint_uv`, `paint_uv_with`, `paint_world`, `paint_world_with`, `wick_uv`, `lift_uv`, `print_uv`, `tick`, `flush`, `clear`, `digest`, `wetted_area`, plus the read-only `size`, `detail`, `amount_at`, `age_at`, `is_dirty`, `dirty_since`, `is_still`, `heap_bytes`, `image_bytes`. `clear` (0.5.48) wipes every drop of blood off in place, for a respawned or pooled surface: the digest is a fresh canvas's again and the images re-upload on the next flush.
 
 ## The metallic-roughness image carries data, not just gloss
 
@@ -127,6 +129,23 @@ What it cannot do, and what it costs:
 - **A redraw per flush.** Measured on an x86_64 Linux host in release, at 128 and detail 4: 1.7 ms to redraw six drying stains of 10×10 texels, and 5.9 ms when a third of the canvas changed at once; at detail 2, 0.5 ms and 1.7 ms. The plugin's budget counts canvases, not milliseconds, so a game with many detailed canvases should lower `max_canvas_updates_per_tick`.
 
 A material that reads the canvas in its own shader, as the `flesh` feature's does, gains nothing from it and should keep `new`.
+
+## A sole on the canvas: `lift_uv` and `print_uv`
+
+Two calls for a foot on a floor (0.5.56), both over a `Print`'s outline: a squared heel, a narrow waist
+and a forefoot widest at the ball, sized in UV units as a `StainShape` is.
+
+- `lift_uv(uv, print, share, tick, settings)` takes `share` of the wet blood under the outline and
+  returns how much was there, as the mean coverage under it. **Dry blood is neither taken nor
+  counted**: dry paint does not move, here as in the passes. A texel left empty is age 0 again.
+- `print_uv(uv, print, load, tick)` inks the outline with `load` of a full print. Where the sole
+  pressed hardest and its tread holds blood, a texel takes `PRINT_CORE` of full coverage at a full
+  load and six tenths of that at none; the share of the outline that inks follows the load. Like
+  `wick_uv`, a texel takes the larger of what it held and what the print brings, so a print on a pool
+  adds nothing, and a texel it raises is fresh blood.
+
+Call `lift_uv` first for a step, or a sole picks its own print back up. The preset's `GoreStep` is
+this, on whichever floor is under the foot; see [`preset.md`](preset.md#footprints).
 
 ## Two things the caller owns, and one convention
 

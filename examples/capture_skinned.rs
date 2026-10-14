@@ -15,7 +15,9 @@
 //! hits at all. `--reset-at N` sends a `GoreReset` for the body and every dressed surface on frame
 //! `N`: once the canvases have uploaded, every frame after is the quiet run's, and so is the digest.
 //! `--blows` adds a second blow to the left shin, lower down, at frame 60: two bruises on one limb,
-//! both ageing.
+//! both ageing. `--stroll` takes no hits: the body walks along the floor instead of in place, through
+//! a spill of blood painted on the floor ahead of it at frame 0, and every foot it puts down is sent
+//! as a `GoreStep` — so it walks out of the spill leaving prints that fade, seen from the side.
 //!
 //! Writes `frame0000.png …` and prints one digest line; two runs must print the same line.
 //!
@@ -39,11 +41,11 @@ use std::time::Duration;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use bevy_carnage::preset::{ClothHoles, Gore, GoreClock, GorePlugin, GoreReset, HitKind};
-use bevy_carnage::wetmap::WetCanvas;
+use bevy_carnage::preset::{ClothHoles, Gore, GoreClock, GorePlugin, GoreReset, GoreStep, HitKind, Sole};
+use bevy_carnage::wetmap::{StainShape, WetCanvas};
 
 mod common;
-use common::mannequin::{self, Bone, Mannequin};
+use common::mannequin::{self, Bone, Mannequin, Part};
 use common::preset_scene;
 use common::recorder::Recorder;
 
@@ -59,9 +61,12 @@ fn main() {
             .map(|e| e.split(',').filter_map(|v| v.trim().parse::<f32>().ok()).collect::<Vec<_>>())
             .and_then(|v| (v.len() == 3).then(|| Vec3::new(v[0], v[1], v[2])))
     };
-    let at = point("--at").unwrap_or(Vec3::new(0.12, 0.93, 0.1));
+    let stroll = flag("--stroll");
+    // A stroll is seen from above and to the side, the whole path in frame and the prints facing up at it.
+    let at = point("--at").unwrap_or(if stroll { Vec3::new(0.05, 0.5, 0.05) } else { Vec3::new(0.12, 0.93, 0.1) });
     let camera = match point("--eye") {
         Some(eye) => Transform::from_translation(eye).looking_at(at, Vec3::Y),
+        None if stroll => Transform::from_xyz(-2.9, 2.75, 0.15).looking_at(at, Vec3::Y),
         None => mannequin::view(),
     };
     let Some(mut rec) = Recorder::new_with(800, 500, camera, &out, |app| {
@@ -71,11 +76,22 @@ fn main() {
         // burst of blood in the air; the digest cannot see it.
         #[cfg(feature = "vfx")]
         app.add_plugins(bevy_carnage::CarnageVfxPlugin);
+        // **A stroll's floor is 512 a side**, 5.9 mm a texel on the 3 m slab, where 256 ships: a print's
+        // heel, its arch's gap and its forefoot are a few centimetres each, and at 11.7 mm a texel the
+        // smoothing the shader reads the canvas with rounds them into one blob. A showcase's choice,
+        // as the mannequin's 256-texel skin is.
+        if flag("--stroll") {
+            app.insert_resource(bevy_carnage::preset::GoreDials { floor_canvas: 512, ..default() });
+        }
         app.add_plugins(GorePlugin)
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
             .insert_resource(Time::<Fixed>::from_hz(60.0))
-            .add_systems(Startup, setup)
-            .add_systems(Update, mannequin::animate);
+            .add_systems(Startup, setup);
+        if flag("--stroll") {
+            app.add_systems(Update, mannequin::stroll_animate);
+        } else {
+            app.add_systems(Update, mannequin::animate);
+        }
     }) else {
         return;
     };
@@ -97,11 +113,28 @@ fn main() {
     let blows = flag("--blows");
     let reset_at = common::arg("--reset-at").and_then(|n| n.parse::<u32>().ok());
     let mut aim = bevy::ecs::system::SystemState::<mannequin::Aim>::new(rec.world());
+    if stroll {
+        spill(rec.world());
+    }
+    // The last step a `GoreStep` was sent for.
+    let mut planted: Option<i64> = None;
     for frame in 0..FRAMES {
         {
             let world = rec.world();
+            if stroll {
+                let t = world.resource::<Time>().elapsed_secs();
+                let mut legs = world.query::<(Entity, &Part)>();
+                let feet: Vec<(Entity, Part)> = legs.iter(world).map(|(e, p)| (e, *p)).collect();
+                for (k, limb, at, heading) in mannequin::touchdowns(planted, t) {
+                    planted = Some(k);
+                    // Each foot is its leg's mesh, so the blood it carries is kept on the leg.
+                    if let Some((foot, _)) = feet.iter().find(|(_, p)| p.0 == limb) {
+                        world.write_message(GoreStep::new(*foot, at, heading).with_sole(Sole { length_m: 0.28, width_m: 0.09, tread: 3 }));
+                    }
+                }
+            }
             let hit = aim.get(world).ok().and_then(|aim| match frame {
-                _ if quiet => None,
+                _ if quiet || stroll => None,
                 60 if blows => aim.blow(Bone::LegLowL, 0.32, 0.04),
                 30 => aim.shot(Bone::ArmLowL, 0.13, 0.03, 7.0),
                 66 => aim.slash(Bone::LegUpR, 0.20, Vec3::new(0.8, -0.6, 0.0).normalize(), 0.07, 6.0),
@@ -151,6 +184,21 @@ fn breaking() -> bool {
 /// Whether `--shirt` was given: the mannequin wears a shirt.
 fn shirted() -> bool {
     flag("--shirt")
+}
+
+/// **A spill on the floor in the stroll's path**: three overlapping stains, half a metre across in
+/// all, painted wet on the slab's canvas where the body's second and third steps land.
+fn spill(world: &mut World) {
+    let tick = world.resource::<GoreClock>().0;
+    let mut slab = world.query_filtered::<(Entity, &Mesh3d, &GlobalTransform), With<preset_scene::Slab>>();
+    let Some((entity, handle, xf)) = slab.iter(world).next().map(|(e, m, x)| (e, m.0.clone(), *x)) else { return };
+    let Some(mesh) = world.resource::<Assets<Mesh>>().get(&handle).cloned() else { return };
+    let Some(mut wet) = world.get_mut::<WetCanvas>(entity) else { return };
+    // The slab is 3 m to a UV, so a stain's axes are its metres over three.
+    for (x, z, across, along, seed) in [(0.0, -0.86, 0.50, 0.44, 11), (0.13, -0.72, 0.26, 0.24, 12), (-0.12, -1.02, 0.30, 0.27, 13)] {
+        let shape = StainShape { major: across / 3.0, minor: along / 3.0, spines: 0, satellites: 0, direction: [1.0, 0.0], seed };
+        let _ = wet.paint_world(&mesh, &xf, Vec3::new(x, 1.0, z), Vec3::NEG_Y, &shape, tick);
+    }
 }
 
 /// Whether a bare flag was given.

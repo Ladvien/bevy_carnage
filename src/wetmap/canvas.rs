@@ -495,6 +495,92 @@ impl WetCanvas {
         }
     }
 
+    /// **A sole put down in blood picks some of it up**: take `share` of the wet blood under `print`'s
+    /// outline at `uv`, and return how much was there, as the mean coverage under the outline from `0`
+    /// to `1`. Dry blood is neither taken nor counted — **dry paint does not move** — so a sole crossing
+    /// an old, dried pool comes away clean. A texel left with nothing is age 0 again.
+    ///
+    /// Each texel gives up `share` of what it holds, rounded, so the pool keeps the sole's shape as a
+    /// lighter dent until its own spread fills it. Call it before [`print_uv`](Self::print_uv) for the
+    /// same step, or a sole would pick its own print back up and never walk it off.
+    pub fn lift_uv(&mut self, uv: Vec2, print: &Print, share: f32, tick: u32, s: &WetSettings) -> f32 {
+        let share = if share.is_finite() { share.clamp(0.0, 1.0) } else { 0.0 };
+        let span = s.dry_span();
+        let n = self.size as i64;
+        let (mut held, mut under) = (0u64, 0u64);
+        let mut touched = false;
+        let wet = &mut self.wet;
+        each_sole_texel(self.size, uv, print, |x, y, _, _, _| {
+            under += 1;
+            let Some(cell) = wet.get_mut((y * n + x) as usize) else {
+                return;
+            };
+            if cell.0 == 0 || !is_wet(cell.1, span) {
+                return;
+            }
+            held += u64::from(cell.0);
+            let take = byte(f32::from(cell.0) * share);
+            if take > 0 {
+                cell.0 = cell.0.saturating_sub(take);
+                if cell.0 == 0 {
+                    cell.1 = 0;
+                }
+                touched = true;
+            }
+        });
+        if touched {
+            self.quiet = None;
+            if self.dirty_since.is_none() {
+                self.dirty_since = Some(tick);
+            }
+        }
+        if under == 0 { 0.0 } else { held as f32 / (255.0 * under as f32) }
+    }
+
+    /// **A bloody sole put down**: ink `print`'s outline at `uv` with `load` of a full print — `1` for a
+    /// sole that has just left a pool, falling toward `0` as it walks the blood off.
+    ///
+    /// What inks is what the sole pressed hardest and what its tread holds blood in: the outline's
+    /// rim and the arch press less than the heel and the ball, and [`tread`] — a value noise fixed to the sole's own frame
+    /// and [`Print::seed`] — decides which patches give up blood first, so the share of the sole that
+    /// inks follows the load: a full load prints the whole sole save a few gaps at its rim, a half load
+    /// about half of it in patches, and a light one a scatter of flecks, and one shoe leaves the same
+    /// gaps every step. Where it inks, a texel holds [`PRINT_CORE`] of full coverage at a full load and
+    /// six tenths of that at none, so a fading print is paler as well as sparser, feathered over the
+    /// outline's last tenth. A texel takes the larger of what it held and what the print brings, so a
+    /// print on a pool adds nothing to it, and a texel it raises is fresh blood, age 0. The outline,
+    /// the pressure and the noise are this crate's own.
+    pub fn print_uv(&mut self, uv: Vec2, print: &Print, load: f32, tick: u32) {
+        let load = if load.is_finite() { load.clamp(0.0, 1.0) } else { 0.0 };
+        if load <= 0.0 {
+            return;
+        }
+        let n = self.size as i64;
+        let mut touched = false;
+        let (wet, live) = (&mut self.wet, &mut self.live);
+        each_sole_texel(self.size, uv, print, |x, y, reach, along, across| {
+            let pressed = load * (1.2 - 0.4 * smoothstep01((reach - 0.5) / 0.5)) * Print::arch(along);
+            let ink = smoothstep01((pressed - tread(along, across, print.seed)) * 6.0 + 0.5);
+            let feather = 1.0 - smoothstep01((reach - 0.9) / 0.1);
+            let target = byte(PRINT_CORE * (0.6 + 0.4 * load) * ink * feather * 255.0);
+            let Some(cell) = wet.get_mut((y * n + x) as usize) else {
+                return;
+            };
+            if target <= cell.0 {
+                return;
+            }
+            *cell = (target, 0);
+            touched = true;
+            *live = Some(live.map_or(Live::texel(x, y), |l| l.with(x, y)));
+        });
+        if touched {
+            self.quiet = None;
+            if self.dirty_since.is_none() {
+                self.dirty_since = Some(tick);
+            }
+        }
+    }
+
     /// The one stamp. `span` subsamples per texel axis; `1` is the shipped rasterisation to the byte.
     ///
     /// The mask is rasterised at `span` times the canvas resolution and box-filtered down, so a texel
@@ -1284,6 +1370,114 @@ fn weave(x: i64, y: i64, seed: u32) -> f32 {
         top + (bottom - top) * sy
     };
     (2.0 * octave(6, 0) + octave(2, 0x68E3_1DA4)) / 3.0
+}
+
+/// **A sole's outline on a canvas**, for [`WetCanvas::lift_uv`] and [`WetCanvas::print_uv`]: how long
+/// and how wide it is, in UV units at [`UV_SPAN_M`] as a [`StainShape`]'s axes are, and which way its
+/// toe points on the canvas.
+///
+/// The outline is a boot's: a squared heel block, a narrow waist under the arch, and a forefoot widest
+/// at the ball that narrows toward the arch and rounds at the toe. Symmetric about its long axis, so a
+/// left and a right print the same shape. The proportions are this crate's own.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Print {
+    /// Heel to toe, UV units.
+    pub length: f32,
+    /// Across the forefoot, UV units.
+    pub width: f32,
+    /// Heel to toe on the canvas; normalised where it is read, and `+v` if it is zero.
+    pub heading: [f32; 2],
+    /// The sole's tread: which of its patches give up blood first. Fixed to the sole, so every print
+    /// of one shoe leaves the same gaps.
+    pub seed: u32,
+}
+
+impl Print {
+    /// Where `(along, across)` — fractions of the length and of the width from the print's centre —
+    /// lies against the outline: under `1` inside, `1` on its edge.
+    fn reach(along: f32, across: f32) -> f32 {
+        // The heel: the back 27 % of the length, 72 % of the width, a superellipse of power three, so a
+        // block with rounded corners rather than an oval.
+        let (a, c) = (((along + 0.365) / 0.135).abs(), (across / 0.36).abs());
+        let heel = libm::cbrtf(a * a * a + c * c * c);
+        // The forefoot: the front 56 %, from 0.06 behind the middle to the toe, full width at the ball
+        // and three quarters of it where it meets the arch.
+        let toward_arch = ((0.14 - along) / 0.2).clamp(0.0, 1.0);
+        let (a, c) = ((along - 0.22) / 0.28, across / (0.5 * (1.0 - 0.25 * toward_arch)));
+        let forefoot = (a * a + c * c).sqrt();
+        // The waist joining them under the arch, 40 % of the width: a superellipse of power four,
+        // nearly a bar. Without it a print read as two drops, a heel and a ball.
+        let (a, c) = ((along + 0.145) / 0.11, across / 0.2);
+        let waist = ((a * a) * (a * a) + (c * c) * (c * c)).sqrt().sqrt();
+        heel.min(forefoot).min(waist)
+    }
+
+    /// **How hard the sole presses at `along`**, as a share of the heel's and the ball's: the arch
+    /// least, at `0.8`, rising to full over 4 % of the length either side of it — so the waist prints
+    /// with the rest from a full sole, and is the first to go as the sole runs dry.
+    fn arch(along: f32) -> f32 {
+        let into = smoothstep01((along + 0.27) / 0.04) * (1.0 - smoothstep01((along + 0.06) / 0.04));
+        1.0 - 0.2 * into
+    }
+}
+
+/// **The share of full coverage a sole's print holds where it inks**: `0.6`. A print is the film a
+/// sole carried, wiped off, never a pool, so it is lighter than the blood it walked out of. This
+/// crate's own number.
+pub const PRINT_CORE: f32 = 0.6;
+
+/// **Visit every texel `print`'s outline centred at `uv` covers** on a `size`² canvas, with how far
+/// out in the outline it lies ([`Print::reach`]) and where in the sole's frame: `along` toward the toe
+/// and `across`, both as fractions of the sole's length and width.
+fn each_sole_texel(size: u32, uv: Vec2, print: &Print, mut visit: impl FnMut(i64, i64, f32, f32, f32)) {
+    let sane = |v: f32| v.is_finite() && v > 0.0;
+    if !uv.is_finite() || !sane(print.length) || !sane(print.width) {
+        return;
+    }
+    let edge = size as f32;
+    let n = size as i64;
+    // In texels, and no larger than the canvas: a sole bigger than that is a caller's unit error.
+    let (len, wid) = ((print.length / UV_SPAN_M * edge).min(edge), (print.width / UV_SPAN_M * edge).min(edge));
+    let toe = Vec2::new(print.heading[0], print.heading[1]).normalize_or(Vec2::Y);
+    let reach = (0.5 * len.max(wid)).ceil() as i64 + 1;
+    let (cx, cy) = (uv.x.clamp(0.0, 1.0) * edge, uv.y.clamp(0.0, 1.0) * edge);
+    let (ix, iy) = (cx as i64, cy as i64);
+    for y in (iy - reach).max(0)..(iy + reach + 1).min(n) {
+        for x in (ix - reach).max(0)..(ix + reach + 1).min(n) {
+            let d = Vec2::new(x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+            let along = d.dot(toe) / len.max(1.0e-3);
+            let across = d.perp_dot(toe) / wid.max(1.0e-3);
+            let r = Print::reach(along, across);
+            if r < 1.0 {
+                visit(x, y, r, along, across);
+            }
+        }
+    }
+}
+
+/// **Which patches of a sole give up blood first**, in `[0, 1]`, low first: value noise in the sole's
+/// own frame, eighteen cells heel to toe and six across — about a lug of a boot's tread each — with a
+/// finer octave at a third of the weight, each lattice corner from [`crate::bloodstain::hash_f32`] of
+/// its cell and `seed`. In the sole's frame rather than the canvas's, so it moves and turns with the
+/// shoe. Fine, so that a fading print keeps its outline and goes pale and speckled: at eight cells
+/// heel to toe whole patches of a half-loaded sole went missing and the rest read as a stray blot.
+fn tread(along: f32, across: f32, seed: u32) -> f32 {
+    let octave = |cells_along: f32, cells_across: f32, salt: u32| -> f32 {
+        let (u, v) = ((along + 0.5) * cells_along, (across + 0.5) * cells_across);
+        let (gu, gv) = (u.floor(), v.floor());
+        let (fu, fv) = (u - gu, v - gv);
+        let corner = |i: f32, j: f32| {
+            let key = (i as i32 as u32).wrapping_mul(0x9E37_79B9) ^ (j as i32 as u32).wrapping_mul(0x85EB_CA6B) ^ seed.wrapping_add(salt);
+            crate::bloodstain::hash_f32(key)
+        };
+        let (su, sv) = (fu * fu * (3.0 - 2.0 * fu), fv * fv * (3.0 - 2.0 * fv));
+        let top = corner(gu, gv) + (corner(gu + 1.0, gv) - corner(gu, gv)) * su;
+        let bottom = corner(gu, gv + 1.0) + (corner(gu + 1.0, gv + 1.0) - corner(gu, gv + 1.0)) * su;
+        top + (bottom - top) * sv
+    };
+    // Two octaves of value noise bunch round a half; spread over 0.2 to 0.8, the share of a sole under
+    // any level is close to that level, so the share that inks follows the load.
+    smoothstep01(((2.0 * octave(18.0, 6.0, 0x51ED_270B) + octave(41.0, 13.0, 0x2C1B_3C6D)) / 3.0 - 0.2) / 0.6)
 }
 
 /// The cubic smoothstep over `[0, 1]`, clamped.

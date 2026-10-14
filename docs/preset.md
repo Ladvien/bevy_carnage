@@ -21,6 +21,7 @@ a plausible-looking result that is quietly wrong.
 | 8 | **Choose who owns the pieces: `GoreDials::spawn_fragments`.** `true` throws them ballistically to `GoreDials::floor_y`. A game with physics sets `false`, reads `GoreFractured`, gives each of its `pieces` a rigid body, and despawns or hides the body itself. | The preset's pieces are kinematic and fall to one plane. They will fight a physics engine. |
 | 9 | **Gate the bake on your own state.** The plugin adds its systems with no run condition. | The caller owns the schedule, everywhere in this crate. |
 | 10 | **Heal a character you reuse with `GoreReset`**, not by despawning and dressing it again: a respawn, a pooled enemy, a restarted round. Send it with the root, and once more with each floor or wall you want wiped. See [Healing, respawning and pooling](#healing-respawning-and-pooling). | Dressing builds every canvas and image again; a reset overwrites the bytes it already has, re-arms the bone handoff and puts a slashed skin's own mesh back. |
+| 11 | **Send a `GoreStep` from your footstep event**, one per foot per step, and dress the floors characters walk on at about 6 mm a texel. See [Footprints](#footprints). | The preset cannot tell when a foot lands. Without steps nobody tracks blood; on a coarse floor a print is two drops. |
 
 Tangents are handled for you since 0.5.10: a skin mesh without `ATTRIBUTE_TANGENT` gets them when it
 is dressed, because the crater's normal map needs them.
@@ -319,6 +320,52 @@ the clips are recorded on, two runs of `capture_skinned` with them on are byte-i
 frames, and two of `capture_skinned --through` differ inside the mist round each shot, by up to 8
 code values; on Apple silicon `capture_carnage`'s were not ([`DEMOS.md`](DEMOS.md)).
 
+## Footprints
+
+A foot put down in wet blood picks some of it up, and a foot carrying blood leaves a print where it
+next lands, fainter at every step until it has walked it off (0.5.56). The preset does not find feet
+or decide when one lands: your animation already raises a footstep for its sound, so send one
+`GoreStep` per foot per step from the same place:
+
+```rust,ignore
+writer.write(GoreStep::new(left_foot, sole_centre_on_the_ground, toe_direction).with_sole(Sole::BOOT));
+```
+
+`foot` is any entity, the same one for every step of one foot (its bone, or its mesh): the blood the
+sole carries is kept there as a `Tread`, public, so a game can read `Tread::load` to darken the shoe or
+play a wetter step. `at` is where the sole meets the ground; the floor it lands on is the nearest
+straight below a point `STEP_REACH_M` (0.25 m) above it. `Sole::BOOT` is 29 by 11 cm, and
+`Sole::tread` is any number fixed to one shoe: it picks which patches of the sole give up blood first,
+so one shoe leaves the same gaps every step.
+
+Each step, on that floor's wetmap:
+
+- **The sole lifts first.** It takes `TREAD_LIFT` (30 %) of the wet blood under its outline, which
+  leaves a lighter, sole-shaped dent in a pool for the pool's own spread to fill, and its load grows
+  by the mean coverage it stood in, to at most `1`. **Dried blood is neither taken nor counted**: a
+  sole crossing an old, dried pool comes away clean.
+- **Then it prints what it carried**, and sheds `TREAD_SHED` (30 %) of it. A print is a boot's
+  outline — a squared heel, a narrow waist, a forefoot widest at the ball — inked where the sole pressed
+  hardest and its tread holds blood: a full load prints all of it save a few gaps at the rim, half a
+  load about half of it, speckled, and the waist goes first. A fading print is paler as well as
+  sparser. So prints out of a pool fade geometrically, the sixth at about a sixth of the first.
+  Lifting before printing is what lets a sole walk its blood off; printed first, it would pick its
+  own wet print back up.
+- A print is wet blood like any other on the floor, and dries on the floor's clock.
+
+A tier that draws no blood or no decals takes no steps. `GoreReset` of the foot, or anything above
+it, wipes its `Tread`.
+
+**A print needs a floor fine enough to hold it**: about 6 mm a texel. A print's heel, waist and
+forefoot are a few centimetres each, and the shader reads the canvas through a B-spline that rounds
+anything a few texels across. On the demos' 3 m slab at the shipped 256 (11.7 mm a texel), a print
+read as a heel and a ball, two drops; at 512 (5.9 mm), as `capture_skinned --stroll` dresses it, the
+whole outline reads, seen from above and from the walker's side. Raise `GoreDials::floor_canvas`, or
+`Gore::with_canvas` on the floor, for the floors your characters walk on; the cost is the floor's
+texels, a tick of the rectangle its blood spans while any of it is wet.
+
+![The mannequin walks across the floor through a spill of blood and out the other side, leaving a line of bloody boot prints, left and right, each paler and more broken than the last](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_stroll.gif)
+
 ## Healing, respawning and pooling
 
 A character that respawns, a pooled enemy coming back, a round that restarts: send
@@ -328,7 +375,8 @@ or below it goes back to how it was dressed, on the next `FixedUpdate`, before t
 - its wetmap, flaymap and dermis canvases are cleared in place and re-uploaded clean, and a cloth's
   holes and slits are mended (`WetCanvas::clear`, `FlayCanvas::clear`, `DermisCanvas::clear`,
   `ClothHoles::clear`, each public for a game that keeps its own canvases);
-- its bleeding, bruising and soaking stop (`Wounds`, `Bruising` and a cloth's pending soaks go);
+- its bleeding, bruising and soaking stop (`Wounds`, `Bruising` and a cloth's pending soaks go), and
+  a foot's `Tread` is wiped;
 - a slashed skin draws its own mesh again, the shared handle it wore before the slash, and its wound
   bed is despawned;
 - the bone handoff is armed again, so the next wound to reach the cortex sends `BoneExposed`;
@@ -447,6 +495,8 @@ the player never sees up close, and the wrong one for the one they shoot.
   softbox above the camera and the pools mirror a dark wall. A pool at a light's own mirror angle
   still shows that light, as it should.
 - **A skin's roughness map and a crater's slope give way.** See *What a dressed skin keeps*.
+- **A sole prints blood but is not painted with it.** The blood a foot carries is a number on its
+  `Tread`, not a stain on the shoe; draw that from `Tread::load` if the camera comes close to feet.
 - **One gravity direction per canvas.** On a rigid mesh whose UV islands point different ways, blood
   runs correctly on the islands that agree with `gravity_uv`. A skinned part follows the pose at its
   wounds instead, and the same limit holds across the islands it has.

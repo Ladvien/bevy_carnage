@@ -551,6 +551,12 @@ The same mannequin with a plaster wall 1.2 m behind it (`preset_scene::spawn_wal
 
 `--blows` adds a blow lower down the left shin at frame 60 to the clip's own at frame 190, and `--eye 0.32,0.42,0.8 --at 0.095,0.3,0.05` frames the shins. Every bruise on a part ages (0.5.55); before, the second blow left the first where it was. At frame 250 the lower bruise has aged about 190 ticks, 3.8 h of model time, and the upper about 60, 1.2 h, and the older is the browner and darker of the two. Where they overlap the canvas multiplies the ratios each lays over the skin, so the overlap is darker than either; painted one over the other, the fresh one's faint margin was blended into the older one's core every step and left a pale serrated seam between them. The clip is frames 170–359 cropped to the shins. A bruise is drawn into the dermis canvas, which no digest folds, so `--blows` prints the default digest, `ac9ee874ea09f208`.
 
+### `capture_skinned --stroll` — bloody footprints
+
+![The mannequin walks across the floor through a spill of blood and out the other side, leaving a line of bloody boot prints, left and right, each paler and more broken than the last](skinned_stroll.gif)
+
+`--stroll` takes no hits. The mannequin walks along the floor instead of in place (`mannequin::stroll`: one leg stands straight while the other swings, the standing mid-sole held still and the hips carried over it, a step of 29 cm every 0.65 s), through a spill painted wet on the slab at frame 0, and every foot it puts down is sent as a `GoreStep` from `mannequin::touchdowns`, the closed form of the footstep event a game's animation raises (0.5.56). Its second and third steps land in the spill and lift blood from it; every step after prints what that foot carries and sheds 30 % of it, so the prints run from a whole boot sole — heel, waist and forefoot — to a pale scatter, left and right in turn. The slab is dressed at 512 a side for this clip, 5.9 mm a texel: at the shipped 256 the shader's smoothing rounds each print into a heel and a ball. The camera is above and to the side so the prints face it; `--eye 0,3.4,0.01 --at 0,0,0` looks straight down. `--stroll` prints its own digest, `8ebe761bcc8b4d83`.
+
 ## `tiers` — the player's violence setting
 
 ![The same scripted scene three times side by side: at the stylised tier a yellow spark marks each shot and nothing bleeds; at the blood tier the wounds bleed and pool on the floor and the body stays standing; at blood and gore the body comes apart and the guts spill](tiers.gif)
@@ -616,6 +622,10 @@ cargo run --release --example capture_skinned -- --through --out frames-skinned-
 mkdir -p frames-st && for n in $(seq 20 199); do
   cp "frames-skinned-through/frame$(printf %04d "$n").png" "frames-st/frame$(printf %04d $((n - 20))).png"; done
 WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-st docs/skinned_through.gif ""
+
+# `skinned_stroll.gif` is `capture_skinned --stroll`, all 360 frames.
+cargo run --release --example capture_skinned -- --stroll --out frames-skinned-stroll
+WIDTH=560 FPS=60 STRIDE=2 LEGEND=none tools/gif.sh frames-skinned-stroll docs/skinned_stroll.gif ""
 
 # `skinned_bruises.gif` is `capture_skinned --blows` on the shins, frames 170-359 cropped to them.
 cargo run --release --example capture_skinned -- --blows --eye 0.32,0.42,0.8 --at 0.095,0.3,0.05 --out frames-skinned-blows

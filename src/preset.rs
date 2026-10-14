@@ -59,7 +59,7 @@ use crate::cross_section::{CrossSectionPlugin, CrossSectionSettings, Layers, Reg
 use crate::flaymap::{BoneExposed, FlayCanvas, FlaySettings, FlaymapPlugin, Layer};
 use crate::laceration::{Gape, Laceration, LacerationBed, LacerationClock, LacerationPlugin, Tension};
 use crate::viscera::{GUT_ROUGHNESS, Mesentery, Strand, ViscSettings, VisceraPlugin, VisceraSystems, gut_image, spill, tube_mesh};
-use crate::wetmap::{StainShape, WetCanvas, WetSettings, WetmapPlugin};
+use crate::wetmap::{Print, StainShape, WetCanvas, WetSettings, WetmapPlugin};
 use crate::bloodstain::{BloodSettings, Wound as BloodWound, WoundKind, wound_seed};
 
 use crate::flesh::{FleshMaterial, FleshMode, FleshParams, FleshPlugin, FleshTables};
@@ -2016,12 +2016,13 @@ impl Plugin for GorePlugin {
             .init_resource::<GoreClock>()
             .add_message::<GoreHit>()
             .add_message::<GoreReset>()
+            .add_message::<GoreStep>()
             .add_message::<GoreFractured>()
             .add_systems(FixedUpdate, scene_gore.before(dress).in_set(GoreSystems))
             .configure_sets(FixedUpdate, GoreSystems.before(VisceraSystems))
             .add_systems(
                 FixedUpdate,
-                (advance_clock, dress, reset_gore, take_hits, throw_bodies, bleed, pour_cut_faces, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly)
+                (advance_clock, dress, reset_gore, take_hits, throw_bodies, bleed, pour_cut_faces, take_steps, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly)
                     .chain()
                     .in_set(GoreSystems),
             )
@@ -3048,10 +3049,88 @@ struct Broken;
 #[derive(Component)]
 struct Untorn(Handle<Mesh>);
 
+/// **A foot came down**: the footstep a game already raises for its sound, told to the gore. A sole
+/// put down in wet blood on a floor picks some of it up, and a sole carrying blood leaves a print,
+/// fainter at every step until it has walked it off — see [`Tread`]. Read once per tick, after the
+/// tick's bleeding, so a foot planted in the pool a wound is filling picks up this tick's blood.
+///
+/// The preset does not find feet or decide when one lands: a game's animation already knows, and a
+/// guess from the mesh would print a sliding foot or miss a planted one. Send one per foot per step.
+#[derive(Message, Clone, Copy, Debug)]
+pub struct GoreStep {
+    /// Whose sole it is. The blood it carries is kept on this entity as a [`Tread`], so name the same
+    /// entity for every step of one foot — its bone, or its mesh.
+    pub foot: Entity,
+    /// Where the sole meets the ground, world space: the print's centre. The floor it lands on is the
+    /// nearest straight below a point [`STEP_REACH_M`] above this, no further than that below it.
+    pub at: Vec3,
+    /// Heel to toe, world space; laid flat onto the floor.
+    pub heading: Vec3,
+    /// The sole's size and tread.
+    pub sole: Sole,
+}
+
+impl GoreStep {
+    /// A [`Sole::BOOT`] put down at `at`, toe toward `heading`.
+    pub fn new(foot: Entity, at: Vec3, heading: Vec3) -> Self {
+        Self { foot, at, heading, sole: Sole::BOOT }
+    }
+    /// The same step with another sole.
+    pub fn with_sole(mut self, sole: Sole) -> Self {
+        self.sole = sole;
+        self
+    }
+}
+
+/// **A sole**, for [`GoreStep`]: its size, and its tread.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sole {
+    /// Heel to toe, metres.
+    pub length_m: f32,
+    /// Across the forefoot, metres.
+    pub width_m: f32,
+    /// Which patches of it give up blood first: any number, the same for every step of one shoe, so
+    /// its prints leave the same gaps. Two shoes of a pair may share it; a print is symmetric.
+    pub tread: u32,
+}
+
+impl Sole {
+    /// An adult's boot, 29 by 11 cm. This crate's own figure.
+    pub const BOOT: Sole = Sole { length_m: 0.29, width_m: 0.11, tread: 0 };
+}
+
+/// **The blood on a foot's sole**, kept on the [`GoreStep::foot`] entity by the preset from its first
+/// step. Read it to drive a game's own look — a sound, or blood drawn on the shoe — and a
+/// [`GoreReset`] of the foot or anything above it wipes it.
+///
+/// `load` is how much of a full print the next step inks: a step in wet blood adds the mean coverage
+/// it stood in, up to `1`, and every step sheds [`TREAD_SHED`] of it onto the floor first, so prints
+/// out of a pool fade geometrically — the sixth is about a sixth of the first — and a sole that
+/// crossed only dried blood carries none.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Tread {
+    /// What the next print inks, `0` to `1`.
+    pub load: f32,
+}
+
+/// **The share of a sole's blood each print leaves**: `0.3`, so the sixth print out of a pool inks
+/// `0.7⁵ ≈ 0.17` of the first and the eighth is a scatter of flecks. This crate's own number: nothing
+/// published counts the steps a bloodied sole prints on a hard floor.
+pub const TREAD_SHED: f32 = 0.3;
+
+/// **The share of the wet blood under a sole a step takes up**: `0.3`. What it leaves is a lighter
+/// sole-shaped dent in the pool that the pool's own spread fills. This crate's own number.
+pub const TREAD_LIFT: f32 = 0.3;
+
+/// **How far above and below [`GoreStep::at`] a floor is looked for**: `0.25` m — a step lands on the
+/// floor under the foot, never on one a storey down. This crate's own number.
+pub const STEP_REACH_M: f32 = 0.25;
+
 /// **Heal a character, or wipe a surface, back to how it was dressed.** `entity` is a dressed surface
 /// or any ancestor of dressed surfaces, the way [`GoreHit::entity`] is: every surface at or below it
 /// is reset. Its canvases are cleared in place — blood, peeled tissue, bruises, burns, holes in its
-/// cloth — and the next flush uploads them clean; its bleeding, bruising and soaking stop; a slashed
+/// cloth — and the next flush uploads them clean; its bleeding, bruising and soaking stop, and a
+/// foot's [`Tread`] is wiped; a slashed
 /// skin draws its intact mesh again and its wound bed goes; a subject broken without spawning its
 /// pieces can break again. Nothing is reallocated, so a pooled or respawned character costs the
 /// bytes overwritten rather than a fresh dressing: every canvas and image built again.
@@ -3126,7 +3205,7 @@ fn reset_gore(
             if let Some(untorn) = untorn {
                 entity.try_insert(Mesh3d(untorn.0.clone()));
             }
-            entity.try_remove::<(Wounds, Bruising, Laceration, Untorn, Broken, ThrowNow, CutFaceBleed)>();
+            entity.try_remove::<(Wounds, Bruising, Laceration, Untorn, Broken, ThrowNow, CutFaceBleed, Tread)>();
         }
     }
 }
@@ -3554,6 +3633,79 @@ fn bleed(
     }
 }
 
+/// **Put down every [`GoreStep`]**: lift from the floor under the sole, then print what the sole
+/// carried, then carry what it lifted. Lifting first is what lets a sole walk its blood off: printed
+/// first, it would pick its own wet print back up and never fade.
+#[allow(clippy::too_many_arguments)]
+fn take_steps(
+    mut commands: Commands,
+    mut steps: MessageReader<GoreStep>,
+    clock: Res<GoreClock>,
+    dials: Res<GoreDials>,
+    wet_settings: Option<Res<WetSettings>>,
+    meshes: Res<Assets<Mesh>>,
+    treads: Query<&Tread>,
+    mut floors: Query<(Entity, &Gore, &Mesh3d, &GlobalTransform, &mut WetCanvas), With<FloorTag>>,
+    policy: Option<Res<GorePolicy>>,
+) {
+    let tick = clock.0;
+    let prints = policy.as_deref().is_none_or(|p| p.draws_blood() && p.blood_decals);
+    let edges = edge_settings(&dials, wet_settings.as_deref());
+    // Each foot's load as the tick's steps change it, in the order they were sent.
+    let mut carried: Vec<(Entity, f32)> = Vec::new();
+    for step in steps.read() {
+        if !prints || !step.at.is_finite() || !step.heading.is_finite() {
+            continue;
+        }
+        let held = carried
+            .iter()
+            .find(|(e, _)| *e == step.foot)
+            .map(|c| c.1)
+            .or_else(|| treads.get(step.foot).ok().map(|t| t.load))
+            .unwrap_or(0.0);
+        let toe = Vec3::new(step.heading.x, 0.0, step.heading.z).normalize_or_zero();
+        let from = step.at + Vec3::Y * STEP_REACH_M;
+        // The floor under the sole: the nearest a ray straight down meets within reach.
+        let mut under: Option<(Entity, Landing)> = None;
+        for (entity, _, mesh3d, xf, _) in &floors {
+            let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
+            let Some(landing) = ray_hit(mesh, xf, from, Vec3::NEG_Y) else { continue };
+            let drop = xf.transform_point(landing.point).distance(from);
+            if drop <= 2.0 * STEP_REACH_M && under.as_ref().is_none_or(|(_, best)| drop < best.t) {
+                under = Some((entity, Landing { t: drop, ..landing }));
+            }
+        }
+        let mut load = held;
+        if let Some((entity, landing)) = under
+            && let Ok((_, gore, mesh3d, xf, mut wet)) = floors.get_mut(entity)
+            && let Some(mesh) = meshes.get(&mesh3d.0)
+        {
+            // The toe's way on the canvas: where a ray a little toward it lands, or the opposite of
+            // where one a little back does, at a floor's edge.
+            let ahead = |sign: f32| ray_hit(mesh, xf, from + toe * (0.05 * sign), Vec3::NEG_Y).map(|l| (l.uv - landing.uv) * sign);
+            let heading = ahead(1.0).or_else(|| ahead(-1.0)).map_or(Vec2::ZERO, |d| d.normalize_or_zero());
+            let print = Print {
+                length: step.sole.length_m * gore.density(),
+                width: step.sole.width_m * gore.density(),
+                heading: heading.to_array(),
+                seed: step.sole.tread,
+            };
+            let picked = wet.lift_uv(landing.uv, &print, TREAD_LIFT, tick, &edges);
+            wet.print_uv(landing.uv, &print, held, tick);
+            load = (held * (1.0 - TREAD_SHED) + picked).clamp(0.0, 1.0);
+        }
+        match carried.iter_mut().find(|(e, _)| *e == step.foot) {
+            Some(c) => c.1 = load,
+            None => carried.push((step.foot, load)),
+        }
+    }
+    for (foot, load) in carried {
+        if let Ok(mut entity) = commands.get_entity(foot) {
+            entity.try_insert(Tread { load });
+        }
+    }
+}
+
 /// **Pour every cut face of a broken body onto the floor beneath it**, a pulse at a time, until its
 /// perfusion runs out ([`CutFaceBleed`]). Each pulse is a stain [`CUT_FACE_POUR`] of the radius a
 /// wound of the face's area paints, cast straight down from above the face's centre as the piece is
@@ -3866,6 +4018,7 @@ mod tests {
             .init_resource::<GoreClock>()
             .add_message::<GoreHit>()
             .add_message::<GoreReset>()
+            .add_message::<GoreStep>()
             .add_message::<GoreFractured>()
             .add_message::<BoneExposed>()
             .add_message::<Wounded>()
@@ -3873,7 +4026,7 @@ mod tests {
             .init_resource::<WetSettings>()
             .init_resource::<FlaySettings>()
             .add_systems(FixedUpdate, scene_gore.before(dress))
-            .add_systems(FixedUpdate, (advance_clock, dress, reset_gore, take_hits, throw_bodies, bleed, pour_cut_faces, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
+            .add_systems(FixedUpdate, (advance_clock, dress, reset_gore, take_hits, throw_bodies, bleed, pour_cut_faces, take_steps, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
         let images = app.world_mut().resource_mut::<Assets<Image>>().reserve_handle();
         app.world_mut().resource_mut::<FleshTables>().luts = images;
         app
@@ -4674,6 +4827,81 @@ mod tests {
         let (c, a) = burn_zone(Degree::First, 0.0);
         assert!(red(c) && a > 0.5, "a first-degree burn is {c:?} at {a}, not reddened");
         assert_eq!(burn_zone(Degree::None, 0.0).1, 0.0, "a burn of no degree shows");
+    }
+
+    /// **A sole walks the blood it stood in off in fading prints.** A 3 m floor holds a wet pool at
+    /// x = −1; a boot steps into it, then five times along +x on clean floor, one step a tick apart.
+    /// Every print holds blood and each holds less than the one before; the step into the pool took
+    /// blood out of it. Out of a pool left to dry first, or at a tier that draws no blood, the same
+    /// walk prints nothing.
+    #[test]
+    fn a_sole_walks_its_blood_off_in_fading_prints() {
+        // The print masses at x = −0.5 to 1.3, 0.45 m apart, and the floor's whole mass after the step in.
+        let walk = |into_pool: bool, dried: bool, tier: Option<crate::GoreTier>| -> (Vec<u32>, u32) {
+            let mut app = headless();
+            if let Some(tier) = tier {
+                app.insert_resource(GorePolicy::for_tier(tier));
+            }
+            if dried {
+                app.insert_resource(WetSettings { dry_ticks: 20, ..WetSettings::default() });
+            }
+            let plane = app.world_mut().resource_mut::<Assets<Mesh>>().add(Plane3d::new(Vec3::Y, Vec2::splat(1.5)).mesh().build());
+            let floor = app
+                .world_mut()
+                .spawn((Mesh3d(plane.clone()), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::floor().with_uv_per_metre(1.0 / 3.0)))
+                .id();
+            let foot = app.world_mut().spawn_empty().id();
+            app.world_mut().run_schedule(FixedUpdate);
+            let pool = StainShape { major: 0.5 / 3.0, minor: 0.5 / 3.0, spines: 0, satellites: 0, direction: [1.0, 0.0], seed: 7 };
+            let world = app.world_mut();
+            let mesh = world.resource::<Assets<Mesh>>().get(&plane).cloned();
+            if let (Some(mesh), Some(mut wet)) = (mesh, world.get_mut::<WetCanvas>(floor)) {
+                let painted = wet.paint_world(&mesh, &GlobalTransform::IDENTITY, Vec3::new(-1.0, 1.0, 0.0), Vec3::NEG_Y, &pool, 1);
+                assert!(painted.is_some(), "the pool missed the floor");
+            }
+            for _ in 0..(if dried { 40 } else { 1 }) {
+                app.world_mut().run_schedule(FixedUpdate);
+            }
+            let step = |app: &mut App, x: f32| {
+                app.world_mut().write_message(GoreStep::new(foot, Vec3::new(x, 0.0, 0.0), Vec3::X));
+                app.world_mut().run_schedule(FixedUpdate);
+            };
+            // Both runs tick alike, so only the step can tell their pools apart.
+            if into_pool {
+                step(&mut app, -1.0);
+            } else {
+                app.world_mut().run_schedule(FixedUpdate);
+            }
+            let Some(wet) = app.world().get::<WetCanvas>(floor) else { panic!("the floor has no wetmap") };
+            let n = wet.size();
+            let total: u32 = (0..n).flat_map(|ty| (0..n).map(move |tx| (tx, ty))).map(|(tx, ty)| u32::from(wet.amount_at(tx, ty))).sum();
+            let mut prints = Vec::new();
+            for x in [-0.5, -0.05, 0.4, 0.85, 1.3] {
+                step(&mut app, x);
+                let Some(wet) = app.world().get::<WetCanvas>(floor) else { panic!("the floor has no wetmap") };
+                // World x and z of a texel on the 3 m plane centred on the origin.
+                let mut mass = 0;
+                for ty in 0..n {
+                    for tx in 0..n {
+                        let (wx, wz) = (((tx as f32 + 0.5) / n as f32 - 0.5) * 3.0, ((ty as f32 + 0.5) / n as f32 - 0.5) * 3.0);
+                        if (x - 0.12..x + 0.12).contains(&wx) && wz.abs() < 0.1 {
+                            mass += u32::from(wet.amount_at(tx, ty));
+                        }
+                    }
+                }
+                prints.push(mass);
+            }
+            (prints, total)
+        };
+        let (prints, stepped_in) = walk(true, false, None);
+        assert!(prints.iter().all(|&m| m > 0), "a print held no blood: {prints:?}");
+        assert!(prints.windows(2).all(|w| w[1] < w[0]), "the prints did not fade step by step: {prints:?}");
+        let (_, stood_off) = walk(false, false, None);
+        assert!(stepped_in < stood_off, "the step into the pool took no blood out of it ({stepped_in} against {stood_off})");
+        let (dry, _) = walk(true, true, None);
+        assert!(dry.iter().all(|&m| m == 0), "a sole that crossed dried blood printed: {dry:?}");
+        let (clean, _) = walk(true, false, Some(crate::GoreTier::Stylised));
+        assert!(clean.iter().all(|&m| m == 0), "a tier that draws no blood printed steps: {clean:?}");
     }
 
     /// **Every bruise on a limb ages, not only the newest.** Two blows on one limb at two spots,

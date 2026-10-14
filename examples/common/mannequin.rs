@@ -168,6 +168,96 @@ pub fn animate(time: Res<Time>, mut joints: Query<(&Joint, &mut Transform)>) {
     }
 }
 
+/// **How long two steps of [`stroll`] take**, seconds: a slow, deliberate walk.
+pub const STROLL_PERIOD: f32 = 1.3;
+/// **The stance thigh's sweep either side of upright** in [`stroll`], radians: from `−` at touchdown,
+/// the foot ahead, to `+` at toe-off, the foot behind.
+pub const STROLL_SWING: f32 = 0.16;
+/// Where the first planted mid-sole stands along `+z`, metres from the root.
+pub const STROLL_START_Z: f32 = -1.3;
+/// The mid-sole under a straight leg, from the hip joint: the point a planted foot keeps still.
+const MID_SOLE: Vec3 = Vec3::new(0.0, 0.008 - 0.93, 0.04);
+/// The heel's, mid-sole's and ball's undersides from the hip joint: whichever is lowest is on the ground.
+const SOLE: [Vec3; 3] = [Vec3::new(0.0, 0.014 - 0.93, -0.06), MID_SOLE, Vec3::new(0.0, 0.02 - 0.93, 0.135)];
+/// The knee from the hip joint.
+const KNEE: Vec3 = Vec3::new(0.0, 0.50 - 0.93, 0.0);
+
+/// A point `p` of the leg, from the hip joint in the bind pose, with the thigh turned `thigh` and the
+/// knee `knee` about `x`.
+fn leg_point(thigh: f32, knee: f32, p: Vec3) -> Vec3 {
+    Quat::from_rotation_x(thigh) * (KNEE + Quat::from_rotation_x(knee) * (p - KNEE))
+}
+
+/// How far one step of [`stroll`] carries the body.
+fn stride() -> f32 {
+    leg_point(-STROLL_SWING, 0.0, MID_SOLE).z - leg_point(STROLL_SWING, 0.0, MID_SOLE).z
+}
+
+/// **A stroll along `+z`, `t` seconds in**: a rotation for every joint, and the hips' translation.
+/// One leg stands while the other swings, swapping every half [`STROLL_PERIOD`]. The standing leg is
+/// straight and its mid-sole does not move; the hips are carried over it, and set as low as keeps the
+/// lowest point of either sole on the ground, so the body rises over a straight leg and dips as the
+/// feet change. The arms swing against the legs.
+pub fn stroll(t: f32) -> ([Quat; 11], Vec3) {
+    let half = STROLL_PERIOD * 0.5;
+    let step = (t.max(0.0) / half).floor();
+    let u = t.max(0.0) / half - step;
+    let a = STROLL_SWING;
+    let stance = -a + 2.0 * a * u;
+    let lift = (core::f32::consts::PI * u).sin();
+    let swing = a - 2.0 * a * (u * u * (3.0 - 2.0 * u)) - 0.22 * lift;
+    let (stance_knee, swing_knee) = (0.03, 0.95 * lift);
+    let left_stands = (step as i64) % 2 == 0;
+    let ((thigh_l, knee_l), (thigh_r, knee_r)) =
+        if left_stands { ((stance, stance_knee), (swing, swing_knee)) } else { ((swing, swing_knee), (stance, stance_knee)) };
+    let planted = STROLL_START_Z + step * stride();
+    let hip_z = planted - leg_point(stance, stance_knee, MID_SOLE).z;
+    let lowest = SOLE
+        .iter()
+        .flat_map(|p| [leg_point(thigh_l, knee_l, *p).y, leg_point(thigh_r, knee_r, *p).y])
+        .fold(f32::MAX, f32::min);
+    let hip_y = 0.004 - lowest;
+    let rx = Quat::from_rotation_x;
+    let mut q = [Quat::IDENTITY; 11];
+    q[Bone::Spine as usize] = rx(0.05);
+    q[Bone::Head as usize] = rx(-0.05);
+    q[Bone::ArmUpL as usize] = rx(-1.6 * thigh_l) * Quat::from_rotation_z(0.06);
+    q[Bone::ArmUpR as usize] = rx(-1.6 * thigh_r) * Quat::from_rotation_z(-0.06);
+    q[Bone::ArmLowL as usize] = rx(-0.3);
+    q[Bone::ArmLowR as usize] = rx(-0.3);
+    q[Bone::LegUpL as usize] = rx(thigh_l);
+    q[Bone::LegLowL as usize] = rx(knee_l);
+    q[Bone::LegUpR as usize] = rx(thigh_r);
+    q[Bone::LegLowR as usize] = rx(knee_r);
+    // The leg joints hang 2 cm under the hips joint.
+    (q, Vec3::new(0.0, hip_y + (Bone::Hips.bind().y - Bone::LegUpL.bind().y), hip_z))
+}
+
+/// **Drive the skeleton through [`stroll`] from the clock**, as [`animate`] does the walk in place.
+pub fn stroll_animate(time: Res<Time>, mut joints: Query<(&Joint, &mut Transform)>) {
+    let (rotations, hips) = stroll(time.elapsed_secs());
+    for (joint, mut tf) in &mut joints {
+        tf.rotation = rotations[joint.0 as usize];
+        if joint.0 == Bone::Hips {
+            tf.translation = hips;
+        }
+    }
+}
+
+/// **Every foot [`stroll`] puts down after step `after` and by `t` seconds**: which leg, where its sole's
+/// centre will lie flat, root space, and which way its toe points. What a game's animation raises as
+/// a footstep event, here in closed form.
+pub fn touchdowns(after: Option<i64>, t: f32) -> Vec<(i64, Limb, Vec3, Vec3)> {
+    let now = (t.max(0.0) / (STROLL_PERIOD * 0.5)).floor() as i64;
+    (after.map_or(0, |a| a + 1)..=now)
+        .map(|k| {
+            let (limb, x) = if k % 2 == 0 { (Limb::LegL, Bone::LegUpL.bind().x) } else { (Limb::LegR, Bone::LegUpR.bind().x) };
+            // The sole's centre is a centimetre toe-ward of the mid-sole the stance keeps still.
+            (k, limb, Vec3::new(x, 0.0, STROLL_START_Z + k as f32 * stride() + 0.01), Vec3::Z)
+        })
+        .collect()
+}
+
 // ---- The meshes ------------------------------------------------------------------------------
 
 /// Sides of every tube. 24 reads round at the demos' framing.
