@@ -51,11 +51,16 @@ fn main() {
         if let Some(tier) = tier {
             // Before the plugin, which `init_resource`s the shipped one and so leaves this alone.
             app.insert_resource(GorePolicy::for_tier(tier));
-            if tier == GoreTier::Stylised {
-                // The game's half of a tier that draws no blood: a spark where it would have been.
+            // The game's half of a tier that draws no blood: a spark where it would have been. With
+            // `vfx` the crate throws that spark itself, as the substitute palette's burst.
+            if tier == GoreTier::Stylised && cfg!(not(feature = "vfx")) {
                 app.add_systems(Update, preset_scene::sparks);
             }
         }
+        // **Blood in the air**: the burst `CarnageVfxPlugin` throws from every wound the preset
+        // announces, in the substitute palette at a tier that draws no blood. The digest cannot see it.
+        #[cfg(feature = "vfx")]
+        app.add_plugins(bevy_carnage::CarnageVfxPlugin);
         app.add_plugins(GorePlugin)
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
             .insert_resource(Time::<Fixed>::from_hz(60.0))

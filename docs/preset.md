@@ -283,6 +283,34 @@ under a tier; it draws the spark at `Stylised` from the `Wounded` message, the w
   `GoreDials::open_wounds` (16), and a hit inside one reopens it. A wound leaves the list once its
   bleed has clotted.
 
+## Blood in the air
+
+The preset paints what blood leaves behind; what flies at the moment of the hit is particles, behind
+the `vfx` feature and in a plugin of their own, because they need a GPU with compute shaders (native,
+or WebGPU on the web — not WebGL2) and a headless harness must be able to leave them out:
+
+```rust,ignore
+app.add_plugins((GorePlugin, bevy_carnage::CarnageVfxPlugin));
+```
+
+That is all the wiring there is. `CarnageVfxPlugin` reads every `Wounded` the preset writes and throws
+the burst its pattern class calls for, at the wound, along its normal: a gunshot a spray and a puff of
+mist, an arterial wound a jet. **The mist is what a player reads as the hit** (0.5.51): the spray's
+droplets leave at the 8 to 40 m/s the paper measured and are out of a body-sized view within two
+frames, while the fine fraction stops within a few centimetres of the wound, as Stokes' law has a
+droplet tens of micrometres across do, and hangs there. So each gunshot puffs `MIST_PER_DROPLET` (3)
+soft discs per droplet of its spray, which grow to three times their size and fade over a quarter to
+half a second, in the colour the film model gives blood as thin as they are.
+
+**It follows the player's setting.** Where `GorePolicy::draws_blood` is false the same bursts are
+thrown in `CarnageSettings::substitute_srgb` instead (`CarnageEffects::substitute`): the same tick,
+place, direction and number, a yellow flash where the blood would have been. Before 0.5.51 the
+particles read no policy, and a game that turned blood off still sprayed it.
+
+Nothing here is read back: the particles are output, and no digest sees them. On the Linux machine
+the clips are recorded on, two runs of `capture_skinned` with them on are byte-identical in all 360
+frames; on Apple silicon `capture_carnage`'s were not ([`DEMOS.md`](DEMOS.md)).
+
 ## Healing, respawning and pooling
 
 A character that respawns, a pooled enemy coming back, a round that restarts: send

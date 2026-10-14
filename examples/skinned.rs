@@ -29,18 +29,21 @@ use common::mannequin::{self, Bone, Mannequin};
 use common::preset_scene::{self, Backdrop, Sheet, Slab, Sun};
 
 fn main() {
-    App::new()
-        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window { title: "bevy_carnage — skinned".into(), ..default() }),
-            ..default()
-        })))
-        .add_plugins(common::autopilot::Autopilot)
-        .add_plugins(GorePlugin)
-        .insert_resource(Time::<Fixed>::from_hz(60.0))
-        .add_systems(Startup, setup)
-        .add_systems(Update, (mannequin::animate, keys))
-        .configure_sets(FixedUpdate, GoreSystems)
-        .run();
+    let mut app = App::new();
+    app.add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window { title: "bevy_carnage — skinned".into(), ..default() }),
+        ..default()
+    })))
+    .add_plugins(common::autopilot::Autopilot)
+    .add_plugins(GorePlugin)
+    .insert_resource(Time::<Fixed>::from_hz(60.0))
+    .add_systems(Startup, setup)
+    .add_systems(Update, (mannequin::animate, keys))
+    .configure_sets(FixedUpdate, GoreSystems);
+    // Blood in the air, from every wound the preset announces.
+    #[cfg(feature = "vfx")]
+    app.add_plugins(bevy_carnage::CarnageVfxPlugin);
+    app.run();
 }
 
 fn setup(

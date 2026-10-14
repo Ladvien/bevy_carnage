@@ -24,18 +24,24 @@ mod common;
 use common::preset_scene::{self, Body, Part, Sheet, Slab, Sun};
 
 fn main() {
-    App::new()
-        .add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window { title: "bevy_carnage — preset".into(), ..default() }),
-            ..default()
-        })))
-        .add_plugins(common::autopilot::Autopilot)
-        .add_plugins(GorePlugin)
-        .insert_resource(Time::<Fixed>::from_hz(60.0))
-        .add_systems(Startup, setup)
-        .add_systems(Update, (keys, sweep, tier_key, preset_scene::sparks.run_if(|policy: Res<GorePolicy>| !policy.draws_blood())))
-        .configure_sets(FixedUpdate, GoreSystems)
-        .run();
+    let mut app = App::new();
+    app.add_plugins(common::autopilot::plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window { title: "bevy_carnage — preset".into(), ..default() }),
+        ..default()
+    })))
+    .add_plugins(common::autopilot::Autopilot)
+    .add_plugins(GorePlugin)
+    .insert_resource(Time::<Fixed>::from_hz(60.0))
+    .add_systems(Startup, setup)
+    .add_systems(Update, (keys, sweep, tier_key))
+    .configure_sets(FixedUpdate, GoreSystems);
+    // Blood in the air from every wound, and at a tier that draws none the same burst in the
+    // substitute palette. Without `vfx`, the game's own spark stands in for it.
+    #[cfg(feature = "vfx")]
+    app.add_plugins(bevy_carnage::CarnageVfxPlugin);
+    #[cfg(not(feature = "vfx"))]
+    app.add_systems(Update, preset_scene::sparks.run_if(|policy: Res<GorePolicy>| !policy.draws_blood()));
+    app.run();
 }
 
 #[derive(Component)]

@@ -36,11 +36,13 @@
 //! Both conditions are required, which is what [`despawn_finished_effects`] checks.
 
 use bevy::prelude::*;
+use bevy::asset::RenderAssetUsages;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_hanabi::{
-    AccelModifier, Attribute, ColorOverLifetimeModifier, EffectAsset, EffectSpawner, ExprWriter,
-    Gradient, HanabiPlugin, KillAabbModifier, LinearDragModifier, MotionIntegration, OrientMode,
-    OrientModifier, ParticleEffect, RoundModifier, ScalarType, SetAttributeModifier, SetPositionCone3dModifier,
-    SetVelocitySphereModifier, ShapeDimension, SimulationCondition, SimulationSpace,
+    AccelModifier, Attribute, ColorOverLifetimeModifier, EffectAsset, EffectMaterial, EffectSpawner, ExprWriter,
+    Gradient, HanabiPlugin, ImageSampleMapping, KillAabbModifier, LinearDragModifier, MotionIntegration, OrientMode,
+    OrientModifier, ParticleEffect, ParticleTextureModifier, RoundModifier, ScalarType, SetAttributeModifier,
+    SetPositionCone3dModifier, SetVelocitySphereModifier, ShapeDimension, SimulationCondition, SimulationSpace,
     SizeOverLifetimeModifier, SpawnerSettings,
 };
 
@@ -51,13 +53,30 @@ use crate::bloodstain::{BACK_SPATTER_SPEED, FORWARD_SPATTER_SPEED, PatternClass,
 use crate::wound::{Wound, WoundKind};
 use crate::{CarnageSettings, Wounded};
 
-/// The five blood effects, built once at startup.
+/// The blood effects, built once at startup: the four a wound throws, twice, and the ribbon.
 ///
-/// Five assets rather than one parameterised asset because a particle effect's **capacity and spawner
-/// are baked into the asset** and cannot be changed per instance — so "a burst of 300" and "a steady
-/// trickle" are necessarily different assets, not different settings on one.
+/// Separate assets rather than one parameterised asset because a particle effect's **capacity,
+/// spawner and colour ramp are baked into the asset** and cannot be changed per instance — so "a
+/// burst of 300" and "a steady trickle" are necessarily different assets, and so are a burst of blood
+/// and the same burst in the substitute palette.
 #[derive(Resource, Debug, Clone)]
 pub struct CarnageEffects {
+    /// The four a wound throws, in blood.
+    pub blood: Bursts,
+    /// **The same four in [`CarnageSettings::substitute_srgb`]**, thrown instead where the
+    /// [`GorePolicy`](crate::GorePolicy) draws no blood: the same emitter, at the same tick, in the
+    /// same direction and number, in a spark's colour.
+    pub substitute: Bursts,
+    /// The blood ribbon a flying gib drags behind it. One instance per chunk, each its own strand.
+    pub ribbon: Handle<EffectAsset>,
+    /// [`puff_image`], the soft disc the mist is drawn with. An instance of either `mist` needs it as
+    /// its [`EffectMaterial`], which the spawn system gives it.
+    pub puff: Handle<Image>,
+}
+
+/// The four effects a wound throws, in one [`Palette`].
+#[derive(Debug, Clone)]
+pub struct Bursts {
     /// The impact spray: many droplets, one burst, world space.
     pub spatter: Handle<EffectAsset>,
     /// The fine mist that hangs where the round went through.
@@ -66,8 +85,33 @@ pub struct CarnageEffects {
     pub spurt: Handle<EffectAsset>,
     /// The steady seep of a wound that has stopped pumping, in local space so it rides the fragment.
     pub seep: Handle<EffectAsset>,
-    /// The blood ribbon a flying gib drags behind it. One instance per chunk, each its own strand.
-    pub ribbon: Handle<EffectAsset>,
+}
+
+/// **What a burst is drawn in.** The droplets' size, speed, number and flight are the same in both;
+/// only the colour ramp differs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Palette {
+    /// The film model's blood, at the thickness of what each effect is made of: computed, never
+    /// authored.
+    Blood,
+    /// [`CarnageSettings::substitute_srgb`], the colour a tier that draws no blood substitutes for it.
+    Substitute,
+}
+
+impl Palette {
+    /// The palette's colour for an effect made of `film`, linear, as a ramp takes it.
+    ///
+    /// **Linear, because Hanabi blends in linear space.** This was `spectral::srgb` — the gamma-encoded
+    /// triple every *material* in this crate is authored in — and a particle gradient takes its values
+    /// as linear. Encoded values read as linear display lighter and greyer, so the spray rendered as
+    /// the dusty pink of round 1's R1-03 rather than as the blood the film model computes. Hanabi's own
+    /// examples convert with `to_linear()` before building a gradient for the same reason.
+    fn linear(self, s: &CarnageSettings, film: &Film) -> [f32; 3] {
+        match self {
+            Palette::Blood => crate::bloodstain::spectral::linear_srgb(film),
+            Palette::Substitute => s.substitute_srgb,
+        }
+    }
 }
 
 /// **How long an effect instance may live after its spawner finishes**, in this crate's own ticks.
@@ -86,37 +130,31 @@ pub struct EffectTtl(pub u32);
 /// `bloodstain`'s spray model uses the arterial saturation.
 const DROPLET_FILM: Film = Film { thickness_mm: 0.4, so2: crate::bloodstain::SO2_ARTERIAL, substrate: 0.2 };
 
-/// The droplet colour, computed once. 81 wavelengths of Kubelka–Munk is not something to pay per
-/// effect asset, and the answer is a function of a constant.
-///
-/// **Linear, because Hanabi blends in linear space.** This was `spectral::srgb` — the gamma-encoded
-/// triple every *material* in this crate is authored in — and a particle gradient takes its values
-/// as linear. Encoded values read as linear display lighter and greyer, so the spray rendered as the
-/// dusty pink of round 1's R1-03 rather than as the blood the film model computes. Hanabi's own
-/// examples convert with `to_linear()` before building a gradient for the same reason.
-static DROPLET_LINEAR: LazyLock<[f32; 3]> =
-    LazyLock::new(|| crate::bloodstain::spectral::linear_srgb(&DROPLET_FILM));
+/// **The film a puff of mist is.** The fine fraction is droplets a few tens of micrometres across, a
+/// lens a twentieth of a millimetre thick that lets most of what is behind it through, so the cloud is
+/// paler than the spray — the same model, at the thickness of what it is made of.
+const MIST_FILM: Film = Film { thickness_mm: 0.05, so2: crate::bloodstain::SO2_ARTERIAL, substrate: 0.2 };
 
 /// **The film a ribbon strand is.** A strand dragged off a flying gib is a running film rather than
 /// a lens, so it is thicker and venous — the same two dials, one model.
 const RIBBON_FILM: Film = Film { thickness_mm: 1.0, so2: crate::bloodstain::SO2_VENOUS, substrate: 0.2 };
 
-/// The strand colour, computed once and linear. See [`DROPLET_LINEAR`].
+/// The strand colour, computed once and linear, for the reason [`Palette::linear`] gives.
 static RIBBON_LINEAR: LazyLock<[f32; 3]> = LazyLock::new(|| crate::bloodstain::spectral::linear_srgb(&RIBBON_FILM));
 
-/// Blood, as a colour ramp: the droplet's own colour, fading to a darker, transparent clot.
+/// A droplet's colour over its life, from `colour` (linear), fading to a darker, transparent end.
 ///
-/// One gradient shared by four of the five effects, because blood is blood — the difference between a
-/// spurt and a seep is its rate and its speed, not its colour, and two nearly-identical gradients
-/// would drift apart the first time one was tweaked.
+/// One ramp shared by the four wound effects, because blood is blood — the difference between a spurt
+/// and a seep is its rate and its speed, not its colour, and two nearly-identical gradients would
+/// drift apart the first time one was tweaked. The substitute palette goes through the same ramp, so a
+/// spark fades as a droplet does.
 ///
-/// **The colour is [`DROPLET_FILM`]'s; only the *fade* is authored.** The two later keys scale that
-/// one colour down and take the alpha out, which is a lifetime curve rather than a claim about what
-/// blood looks like: a droplet thins and dries as it flies, and the crate has no spectral model of a
-/// droplet mid-flight to ask instead. The factors are the ratios the hand-authored ramp had.
-fn blood_gradient() -> Gradient<Vec4> {
-    let [r, g_, b] = *DROPLET_LINEAR;
-    let key = |scale: f32, alpha: f32| Vec4::new(r * scale, g_ * scale, b * scale, alpha);
+/// **The blood colour is [`DROPLET_FILM`]'s; only the *fade* is authored.** The two later keys scale
+/// that one colour down and take the alpha out, which is a lifetime curve rather than a claim about
+/// what blood looks like: a droplet thins and dries as it flies, and the crate has no spectral model of
+/// a droplet mid-flight to ask instead. The factors are the ratios the hand-authored ramp had.
+fn burst_gradient([r, g_, b]: [f32; 3], opacity: f32) -> Gradient<Vec4> {
+    let key = |scale: f32, alpha: f32| Vec4::new(r * scale, g_ * scale, b * scale, alpha * opacity);
     let mut g = Gradient::new();
     g.add_key(0.0, key(1.0, 1.0));
     g.add_key(0.55, key(0.645, 0.95));
@@ -124,13 +162,14 @@ fn blood_gradient() -> Gradient<Vec4> {
     g
 }
 
-/// The shared skeleton of every blood effect: a Y-axis cone of positions, a sphere of velocities
-/// fanned out through them, a randomised lifetime, gravity, drag, a kill volume, and blood-coloured
-/// billboards oriented along their own velocity.
+/// The shared skeleton of the four wound effects: a Y-axis cone of positions, a sphere of velocities
+/// fanned out through them, a randomised lifetime, gravity, drag, a kill volume, and billboards in the
+/// palette's colour — a hard-edged drop drawn out along its velocity, or for the mist a soft disc that
+/// faces the eye and spreads.
 ///
-/// **One builder, five callers.** The five effects genuinely differ in spawner, capacity, simulation
-/// space and a handful of numbers; everything else was identical five times over in the first draft,
-/// and five copies of a modifier stack is five places for a look fix to be applied four times.
+/// **One builder, four callers.** The effects genuinely differ in spawner, capacity, simulation space
+/// and a handful of numbers; everything else was identical five times over in the first draft, and
+/// five copies of a modifier stack is five places for a look fix to be applied four times.
 struct BloodEffect {
     name: &'static str,
     /// Cone half-width at the emitter, metres.
@@ -147,13 +186,25 @@ struct BloodEffect {
     drag_scale: f32,
     /// Billboard size, metres.
     size: f32,
+    /// How big a particle is at the end of its life, as a multiple of its start: `0` dwindles to
+    /// nothing, as a droplet that thins in flight does; above `1` it spreads, as a cloud does.
+    grow: f32,
+    /// A soft disc that faces the camera ([`puff_image`]), for a cloud, rather than a hard-edged drop
+    /// drawn out along its velocity.
+    soft: bool,
+    /// The ramp's alpha at birth, `1` for a droplet.
+    opacity: f32,
+    /// What it is made of, for its colour in [`Palette::Blood`].
+    film: Film,
+    /// How much of the settings' gravity it falls under, `1` for a droplet.
+    gravity_scale: f32,
     space: SimulationSpace,
     condition: SimulationCondition,
     spawner: SpawnerSettings,
 }
 
 impl BloodEffect {
-    fn build(self, s: &CarnageSettings) -> EffectAsset {
+    fn build(self, s: &CarnageSettings, palette: Palette) -> EffectAsset {
         let writer = ExprWriter::new();
 
         // Positions on the surface of a Y-axis cone: the spray's footprint at the wound.
@@ -199,9 +250,10 @@ impl BloodEffect {
             .expr(),
         );
 
-        // Shrink over life, from each droplet's own starting size: `size = F32_0 * (1 - age/lifetime)`
-        // clamped at zero, so a droplet dwindles instead of blinking out and every droplet keeps its
-        // own scale while doing it.
+        // Size over life, from each particle's own starting size:
+        // `size = F32_0 * (1 + (grow - 1) * age/lifetime)` clamped at zero, so a droplet (`grow` 0)
+        // dwindles instead of blinking out and a puff (`grow` above 1) spreads, each keeping its own
+        // scale while doing it.
         let update_size = SetAttributeModifier::new(
             Attribute::SIZE,
             writer
@@ -209,11 +261,12 @@ impl BloodEffect {
                 .mul(
                     writer
                         .lit(1.0)
-                        .sub(writer.attr(Attribute::AGE).div(writer.attr(Attribute::LIFETIME)))
+                        .add(writer.lit(self.grow - 1.0).mul(writer.attr(Attribute::AGE).div(writer.attr(Attribute::LIFETIME))))
                         .max(writer.lit(0.0)),
                 )
                 .expr(),
         );
+        let texture_slot = writer.lit(0u32).expr();
 
         // The kill volume is generous rather than tight: it exists so a droplet that escapes the
         // scene is reclaimed, not to clip the spray. Sized off the throw distance the fastest droplet
@@ -226,16 +279,22 @@ impl BloodEffect {
         // **The same gravity the CPU spatter model flies its droplets under**, so a particle and the
         // stain it corresponds to agree about where blood goes. Two gravities would put the visible
         // spray and the deterministic stain in different places.
-        let gravity = AccelModifier::constant(&mut module, Vec3::NEG_Y * s.blood.gravity);
+        let gravity = AccelModifier::constant(&mut module, Vec3::NEG_Y * s.blood.gravity * self.gravity_scale);
         let drag = LinearDragModifier::constant(&mut module, s.blood.drag * self.drag_scale);
         let kill = KillAabbModifier::new(kill_center, kill_half);
         // **A drop, not a square.** A bare billboard is a square quad, and a cloud of hundreds of
         // them read as pink confetti hanging round the body (visual pass round 1, R1-03). The
         // ellipse discards the corners in the fragment stage, so each droplet is a round drop.
         let round = RoundModifier::ellipse(&mut module);
+        if self.soft {
+            module.add_texture_slot("puff");
+        }
 
-        EffectAsset::new(s.effect_capacity, self.spawner, module)
-            .with_name(self.name)
+        let asset = EffectAsset::new(s.effect_capacity, self.spawner, module)
+            .with_name(match palette {
+                Palette::Blood => self.name.to_string(),
+                Palette::Substitute => format!("{}:substitute", self.name),
+            })
             .with_simulation_space(self.space)
             .with_simulation_condition(self.condition)
             .init(init_pos)
@@ -247,12 +306,39 @@ impl BloodEffect {
             .update(drag)
             .update(update_size)
             .update(kill)
-            .render(ColorOverLifetimeModifier::new(blood_gradient()))
+            .render(ColorOverLifetimeModifier::new(burst_gradient(palette.linear(s, &self.film), self.opacity)));
+        if self.soft {
+            // A cloud has no direction of travel worth showing; it faces the eye, its edge soft.
+            asset
+                .render(OrientModifier::new(OrientMode::FaceCameraPosition))
+                .render(ParticleTextureModifier { texture_slot, sample_mapping: ImageSampleMapping::ModulateOpacityFromR })
+        } else {
             // Along velocity, so a droplet reads as a streak in the direction it is travelling
             // rather than as a sphere — which is most of what makes a spray look fast.
-            .render(OrientModifier::new(OrientMode::AlongVelocity))
-            .render(round)
+            asset.render(OrientModifier::new(OrientMode::AlongVelocity)).render(round)
+        }
     }
+}
+
+/// **The soft disc the mist is drawn with**: 64 × 64, single channel, `(1 − r²)²` from the centre to
+/// nothing at the edge, which a particle reads as its opacity. Built from that formula, not loaded.
+pub fn puff_image() -> Image {
+    const N: u32 = 64;
+    let data: Vec<u8> = (0..N * N)
+        .map(|i| {
+            let (x, y) = ((i % N) as f32 + 0.5, (i / N) as f32 + 0.5);
+            let (dx, dy) = (x / N as f32 * 2.0 - 1.0, y / N as f32 * 2.0 - 1.0);
+            let r2 = (dx * dx + dy * dy).min(1.0);
+            ((1.0 - r2) * (1.0 - r2) * 255.0).round() as u8
+        })
+        .collect();
+    Image::new(
+        Extent3d { width: N, height: N, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        data,
+        TextureFormat::R8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    )
 }
 
 /// **The impact spray.** One burst, the full measured speed span, world space so it detaches from the
@@ -261,7 +347,7 @@ impl BloodEffect {
 /// `SpawnerSettings::once(1.0)` is a placeholder count: the per-instance [`EffectSpawner`] the spawn
 /// system inserts overrides it with the wound's own [`crate::droplet_count`], which is the only place
 /// that number can come from because it depends on the wound's area.
-pub fn spatter_burst(s: &CarnageSettings) -> EffectAsset {
+pub fn spatter_burst(s: &CarnageSettings, palette: Palette) -> EffectAsset {
     BloodEffect {
         name: "carnage:spatter",
         base_radius: 0.03,
@@ -278,33 +364,48 @@ pub fn spatter_burst(s: &CarnageSettings) -> EffectAsset {
         lifetime: [0.55, 1.30],
         drag_scale: 2.6,
         size: 0.030,
+        grow: 0.0,
+        soft: false,
+        opacity: 1.0,
+        film: DROPLET_FILM,
+        gravity_scale: 1.0,
         space: SimulationSpace::Global,
         condition: SimulationCondition::WhenVisible,
         spawner: SpawnerSettings::once(1.0.into()),
     }
-    .build(s)
+    .build(s, palette)
 }
 
-/// **The mist.** The fine fraction that leaves fastest and stops almost immediately — the paper's
-/// forward spatter at full speed against six times the drag, which is what makes a puff rather than a
-/// spray.
-pub fn mist_puff(s: &CarnageSettings) -> EffectAsset {
+/// **The mist: a puff that hangs where the round went in.** The fine fraction of a spray leaves at the
+/// paper's forward speed and still air stops it almost at once: a droplet 20 µm across relaxes in
+/// `ρd²/18μ`, about 1.3 ms, so even at 40 m/s it stops within 5 cm of the wound (Stokes) and hangs.
+/// So the mist is born in a cone 4 cm deep at the wound and spreads slowly from there, each puff a
+/// soft disc ([`puff_image`]) that grows to three times its size and fades over a quarter to half a
+/// second, barely falling, in the colour of a film as thin as its droplets ([`MIST_FILM`]). What a player reads as the hit is this cloud: the spray's
+/// droplets at 8 to 40 m/s are gone from a body-sized view within two frames.
+///
+/// The speeds, sizes, lifetimes, opacity and the twentieth of gravity are **tuned, not measured**; the
+/// stopping distance is what they were tuned to. An instance needs [`CarnageEffects::puff`] as its
+/// [`EffectMaterial`].
+pub fn mist_puff(s: &CarnageSettings, palette: Palette) -> EffectAsset {
     BloodEffect {
         name: "carnage:mist",
-        base_radius: 0.05,
+        base_radius: 0.03,
         height: 0.04,
-        speed: [
-            FORWARD_SPATTER_SPEED * s.blood.spatter_speed_scale,
-            FORWARD_SPATTER_SPEED * s.blood.spatter_speed_scale,
-        ],
-        lifetime: [0.10, 0.22],
-        drag_scale: 6.0,
-        size: 0.010,
+        speed: [0.4, 1.6],
+        lifetime: [0.25, 0.50],
+        drag_scale: 2.0,
+        size: 0.06,
+        grow: 3.0,
+        soft: true,
+        opacity: 0.3,
+        film: MIST_FILM,
+        gravity_scale: 0.05,
         space: SimulationSpace::Global,
         condition: SimulationCondition::WhenVisible,
         spawner: SpawnerSettings::once(1.0.into()),
     }
-    .build(s)
+    .build(s, palette)
 }
 
 /// **The arterial jet.** One burst per heartbeat, at the wound's own rate.
@@ -312,7 +413,7 @@ pub fn mist_puff(s: &CarnageSettings) -> EffectAsset {
 /// `SimulationCondition::Always` because an off-screen body must keep bleeding: a wound that pauses
 /// while the camera looks away and resumes when it looks back would be visibly wrong the moment the
 /// camera came back to a corpse that had bled for no time at all.
-pub fn arterial_spurt(s: &CarnageSettings) -> EffectAsset {
+pub fn arterial_spurt(s: &CarnageSettings, palette: Palette) -> EffectAsset {
     let period = if s.blood.spurt_bpm > 0.0 { 60.0 / s.blood.spurt_bpm } else { 1.0 };
     BloodEffect {
         name: "carnage:spurt",
@@ -327,16 +428,21 @@ pub fn arterial_spurt(s: &CarnageSettings) -> EffectAsset {
         lifetime: [0.60, 1.40],
         drag_scale: 1.8,
         size: 0.034,
+        grow: 0.0,
+        soft: false,
+        opacity: 1.0,
+        film: DROPLET_FILM,
+        gravity_scale: 1.0,
         space: SimulationSpace::Global,
         condition: SimulationCondition::Always,
         spawner: SpawnerSettings::burst(24.0.into(), period.into()),
     }
-    .build(s)
+    .build(s, palette)
 }
 
 /// **The seep.** A slow steady rate in **local** space, so it rides the fragment it is attached to
 /// instead of being left behind as the chunk tumbles.
-pub fn wound_seep(s: &CarnageSettings) -> EffectAsset {
+pub fn wound_seep(s: &CarnageSettings, palette: Palette) -> EffectAsset {
     BloodEffect {
         name: "carnage:seep",
         base_radius: 0.012,
@@ -348,11 +454,16 @@ pub fn wound_seep(s: &CarnageSettings) -> EffectAsset {
         lifetime: [0.5, 1.1],
         drag_scale: 2.0,
         size: 0.014,
+        grow: 0.0,
+        soft: false,
+        opacity: 1.0,
+        film: DROPLET_FILM,
+        gravity_scale: 1.0,
         space: SimulationSpace::Local,
         condition: SimulationCondition::Always,
         spawner: SpawnerSettings::rate(26.0.into()),
     }
-    .build(s)
+    .build(s, palette)
 }
 
 /// **How long one strand particle lives, seconds — and it must be a literal constant.**
@@ -470,7 +581,7 @@ pub fn gib_ribbon() -> EffectAsset {
         // Darkens and fades rather than turning blue like the upstream demo — this is blood. The
         // colour is [`DROPLET_FILM`]'s, thickened: a strand dragged off a gib is a running film
         // rather than a droplet, so it is the same optics at 1.0 mm and venous, and only the fade is
-        // authored. `blood_gradient` is not reusable here because a strand wants two keys, not three.
+        // authored. `burst_gradient` is not reusable here because a strand wants two keys, not three.
         .render(ColorOverLifetimeModifier::new(Gradient::linear(
             {
                 let [r, g, b] = *RIBBON_LINEAR;
@@ -563,20 +674,22 @@ impl Plugin for CarnageVfxPlugin {
     }
 }
 
-/// Build the five assets once, from whatever [`CarnageSettings`] is present at startup.
+/// Build the nine assets once, from whatever [`CarnageSettings`] is present at startup.
 fn build_effects(
     mut commands: Commands,
     mut assets: ResMut<Assets<EffectAsset>>,
+    mut images: ResMut<Assets<Image>>,
     settings: Res<CarnageSettings>,
 ) {
     let s = &*settings;
-    commands.insert_resource(CarnageEffects {
-        spatter: assets.add(spatter_burst(s)),
-        mist: assets.add(mist_puff(s)),
-        spurt: assets.add(arterial_spurt(s)),
-        seep: assets.add(wound_seep(s)),
-        ribbon: assets.add(gib_ribbon()),
-    });
+    let mut bursts = |palette: Palette| Bursts {
+        spatter: assets.add(spatter_burst(s, palette)),
+        mist: assets.add(mist_puff(s, palette)),
+        spurt: assets.add(arterial_spurt(s, palette)),
+        seep: assets.add(wound_seep(s, palette)),
+    };
+    let (blood, substitute) = (bursts(Palette::Blood), bursts(Palette::Substitute));
+    commands.insert_resource(CarnageEffects { blood, substitute, ribbon: assets.add(gib_ribbon()), puff: images.add(puff_image()) });
 }
 
 /// Spawn one burst per [`Wounded`] message.
@@ -588,17 +701,24 @@ fn build_effects(
 ///
 /// The aim is one operation: `Quat::from_rotation_arc(Vec3::Y, normal)`, because every asset is
 /// authored around local +Y.
+///
+/// **The player's setting decides the palette**, read as it is when the wound opens: where
+/// [`GorePolicy::draws_blood`](crate::GorePolicy::draws_blood) is false the same bursts are thrown
+/// from [`CarnageEffects::substitute`]. Before, this read no policy, and a game that turned blood off
+/// still sprayed it from every wound the preset announced.
 fn spawn_wound_effects(
     mut commands: Commands,
     mut wounded: MessageReader<Wounded>,
     effects: Option<Res<CarnageEffects>>,
     settings: Res<CarnageSettings>,
+    policy: Option<Res<crate::GorePolicy>>,
 ) {
     let Some(effects) = effects else {
         // The assets are built on `Startup`; a message in the same frame arrives before them. Warning
         // per message on a hot path would be worse than the one frame of missing blood.
         return;
     };
+    let bursts = if policy.as_deref().is_none_or(crate::GorePolicy::draws_blood) { &effects.blood } else { &effects.substitute };
     for w in wounded.read() {
         let wound = Wound {
             at: w.at,
@@ -627,33 +747,41 @@ fn spawn_wound_effects(
         let handles: &[(&Handle<EffectAsset>, u32)] = match w.class {
             // The percolation cone. A channel additionally hangs mist where the round went through.
             PatternClass::Impact => match w.kind {
-                WoundKind::Severance => &[(&effects.spatter, count)],
-                WoundKind::Channel => &[(&effects.spatter, count), (&effects.mist, count / 2)],
+                WoundKind::Severance => &[(&bursts.spatter, count)],
+                WoundKind::Channel => &[(&bursts.spatter, count), (&bursts.mist, count * MIST_PER_DROPLET)],
             },
             // One jet per systole: the spurt effect exists for exactly this and was previously
             // reachable only by a caller wiring it by hand.
-            PatternClass::ArterialSpurt => &[(&effects.spurt, count)],
+            PatternClass::ArterialSpurt => &[(&bursts.spurt, count)],
             // Flung tangentially from a moving tip — a spray, without the mist a bore leaves.
-            PatternClass::CastOff => &[(&effects.spatter, count)],
+            PatternClass::CastOff => &[(&bursts.spatter, count)],
             // Air-driven and fine: mist is the whole of it.
-            PatternClass::Expirated => &[(&effects.mist, count)],
+            PatternClass::Expirated => &[(&bursts.mist, count * MIST_PER_DROPLET)],
             // Gravity-fed. Both are seeps at different rates, and the marks they leave are decals
             // rather than particles — `crate::bloodstain::patterns::{drip_trail, transfer}` return stains.
-            PatternClass::DripTrail | PatternClass::Transfer => &[(&effects.seep, count / 4)],
+            PatternClass::DripTrail | PatternClass::Transfer => &[(&bursts.seep, count / 4)],
         };
         for (handle, n) in handles.iter().copied() {
             if n == 0 {
                 continue;
             }
-            commands.spawn((
+            let mut instance = commands.spawn((
                 ParticleEffect { handle: handle.clone(), prng_seed: Some(seed) },
                 EffectSpawner::new(&SpawnerSettings::once((n as f32).into())),
                 transform,
                 EffectTtl(TTL_TICKS),
             ));
+            if handle.id() == bursts.mist.id() {
+                instance.insert(EffectMaterial { images: vec![effects.puff.clone()] });
+            }
         }
     }
 }
+
+/// **How many puffs of mist a wound throws per droplet of its spray.** Tuned, not measured: the
+/// droplet count is the spray that stains, a few to a few dozen for a gunshot, and the mist is the
+/// unstained fine fraction, which at one puff a droplet was a handful of discs rather than a cloud.
+const MIST_PER_DROPLET: u32 = 3;
 
 /// **How long a one-shot instance is kept after its spawner finishes.**
 ///
@@ -777,20 +905,25 @@ fn fade_effects(
 mod tests {
     use super::*;
 
-    /// **The four droplet effects must build at the authored capacity**, which is a dial rather than
-    /// a literal because an asset's capacity is fixed when it is built and cannot be raised
-    /// afterwards.
+    /// **The four droplet effects must build at the authored capacity**, in either palette, which is
+    /// a dial rather than a literal because an asset's capacity is fixed when it is built and cannot be
+    /// raised afterwards.
     ///
     /// The ribbon is checked separately below: it deliberately does **not** read `effect_capacity`.
     #[test]
     fn the_droplet_effects_build_at_the_authored_capacity() {
         let s = CarnageSettings::default();
-        let built = [
-            ("spatter", spatter_burst(&s)),
-            ("mist", mist_puff(&s)),
-            ("spurt", arterial_spurt(&s)),
-            ("seep", wound_seep(&s)),
-        ];
+        let built: Vec<(&str, EffectAsset)> = [Palette::Blood, Palette::Substitute]
+            .into_iter()
+            .flat_map(|p| {
+                [
+                    ("spatter", spatter_burst(&s, p)),
+                    ("mist", mist_puff(&s, p)),
+                    ("spurt", arterial_spurt(&s, p)),
+                    ("seep", wound_seep(&s, p)),
+                ]
+            })
+            .collect();
         for (what, asset) in &built {
             assert_eq!(
                 asset.capacity(),
@@ -804,7 +937,7 @@ mod tests {
             built.iter().map(|(_, a)| a.name.as_str()).chain([ribbon.name.as_str()]).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 5, "two effects share a name, so they are not five effects");
+        assert_eq!(names.len(), 9, "two effects share a name, so they are not nine effects");
     }
 
     /// The five differ in the ways that make them five effects rather than one asset spawned five
@@ -813,17 +946,17 @@ mod tests {
     fn the_effects_differ_where_they_must() {
         let s = CarnageSettings::default();
         assert_eq!(
-            wound_seep(&s).simulation_space,
+            wound_seep(&s, Palette::Blood).simulation_space,
             SimulationSpace::Local,
             "the seep must ride the fragment it is on"
         );
         assert_eq!(
-            arterial_spurt(&s).simulation_condition,
+            arterial_spurt(&s, Palette::Blood).simulation_condition,
             SimulationCondition::Always,
             "an off-screen body must keep bleeding"
         );
         assert_eq!(
-            wound_seep(&s).simulation_condition,
+            wound_seep(&s, Palette::Blood).simulation_condition,
             SimulationCondition::Always,
             "and so must keep seeping"
         );
@@ -880,5 +1013,47 @@ mod tests {
             "the spurt asset pulses every {asset_period:.4}s but the schedule every \
              {schedule_period:.4}s — the blood and the model would disagree"
         );
+    }
+
+    /// **A tier that draws no blood throws the substitute.** The preset still announces every wound at
+    /// `Stylised`, so the game can confirm the hit; the particles it turns into are the same bursts in
+    /// `substitute_srgb`, and at a tier that draws blood they are blood. The same gunshot under each:
+    /// the spray and the mist it spawns are the one set's or the other's, never a mix.
+    #[test]
+    fn a_tier_that_draws_no_blood_throws_the_substitute() {
+        let thrown = |tier: Option<crate::GoreTier>| {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+                .init_asset::<EffectAsset>()
+                .init_asset::<Image>()
+                .init_resource::<CarnageSettings>()
+                .add_message::<Wounded>()
+                .add_systems(Startup, build_effects)
+                .add_systems(Update, spawn_wound_effects);
+            if let Some(tier) = tier {
+                app.insert_resource(crate::GorePolicy::for_tier(tier));
+            }
+            app.update();
+            app.world_mut().write_message(Wounded {
+                at: Vec3::new(0.0, 1.0, 0.0),
+                normal: Vec3::Z,
+                area: 2.0e-2,
+                severity: 1.0,
+                kind: WoundKind::Channel,
+                class: PatternClass::Impact,
+            });
+            app.update();
+            let mut q = app.world_mut().query::<&ParticleEffect>();
+            let spawned: Vec<AssetId<EffectAsset>> = q.iter(app.world()).map(|e| e.handle.id()).collect();
+            let effects = app.world().resource::<CarnageEffects>().clone();
+            (spawned, effects)
+        };
+        for (tier, substitute) in [(Some(crate::GoreTier::Stylised), true), (Some(crate::GoreTier::Blood), false), (None, false)] {
+            let (spawned, effects) = thrown(tier);
+            let (want, not) = if substitute { (&effects.substitute, &effects.blood) } else { (&effects.blood, &effects.substitute) };
+            assert!(!spawned.is_empty(), "the gunshot threw nothing at {tier:?}");
+            assert!(spawned.contains(&want.spatter.id()) && spawned.contains(&want.mist.id()), "at {tier:?} the spray is not the {} set's", if substitute { "substitute" } else { "blood" });
+            assert!(!spawned.contains(&not.spatter.id()) && !spawned.contains(&not.mist.id()), "at {tier:?} the other palette was thrown too");
+        }
     }
 }

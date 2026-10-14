@@ -65,7 +65,10 @@ fn main() {
     let Some(mut rec) = Recorder::new_with(800, 500, camera, &out, |app| {
         // **The clock is the frame, not the wall**, for the reason `capture_preset` gives: one sixtieth
         // per update and a 60 Hz fixed step is one tick per frame, and the animation reads the same
-        // clock, so frame 62 of one run is frame 62 of the next.
+        // clock, so frame 62 of one run is frame 62 of the next. With `vfx`, every wound throws its
+        // burst of blood in the air; the digest cannot see it.
+        #[cfg(feature = "vfx")]
+        app.add_plugins(bevy_carnage::CarnageVfxPlugin);
         app.add_plugins(GorePlugin)
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
             .insert_resource(Time::<Fixed>::from_hz(60.0))
