@@ -152,7 +152,7 @@ fn on_hit(
 | Constant | `UV_SPAN_M` | How much world one UV unit is taken to be — one metre. |
 | Re-export | `Layer`, `Layers`, `Region`, `Scale` | The tissue model, the blood model under it, and the four names in this crate's signatures. |
 
-`FlayCanvas`: `new`, `albedo`, `roughness`, `paint_uv`, `paint_world`, `shade`, `flush`, `digest`, `exposed_area`, plus the read-only `size`, `region`, `layers`, `depth_at`, `bone_texels`, `is_dirty`, `dirty_since`.
+`FlayCanvas`: `new`, `albedo`, `roughness`, `paint_uv`, `paint_world`, `shade`, `flush`, `clear`, `digest`, `exposed_area`, plus the read-only `size`, `region`, `layers`, `depth_at`, `bone_texels`, `is_dirty`, `dirty_since`. `clear` (0.5.48) heals every wound in place: the digest is a fresh canvas's again and the bone handoff is armed again, so the next wound to reach the cortex sends `BoneExposed` once more.
 
 ## Three things the caller owns
 

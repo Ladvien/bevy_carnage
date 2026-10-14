@@ -10,7 +10,9 @@
 //! the body in a sleeveless shirt: the two chest shots hole it and the wound is seen through the hole,
 //! with the blood the shirt soaks up around it. The holes are folded into the digest. `--through` puts
 //! a wall behind the body and every shot goes through it: an exit wound opens on the far side and its
-//! forward spatter lands on the wall and the floor behind, and runs down the wall.
+//! forward spatter lands on the wall and the floor behind, and runs down the wall. `--quiet` takes no
+//! hits at all. `--reset-at N` sends a `GoreReset` for the body and every dressed surface on frame
+//! `N`: once the canvases have uploaded, every frame after is the quiet run's, and so is the digest.
 //!
 //! Writes `frame0000.png …` and prints one digest line; two runs must print the same line.
 //!
@@ -34,11 +36,11 @@ use std::time::Duration;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use bevy_carnage::preset::{ClothHoles, GoreClock, GorePlugin, HitKind};
+use bevy_carnage::preset::{ClothHoles, Gore, GoreClock, GorePlugin, GoreReset, HitKind};
 use bevy_carnage::wetmap::WetCanvas;
 
 mod common;
-use common::mannequin::{self, Bone};
+use common::mannequin::{self, Bone, Mannequin};
 use common::preset_scene;
 use common::recorder::Recorder;
 
@@ -75,11 +77,16 @@ fn main() {
     let breaking = breaking();
     let through = flag("--through");
     let shirt = shirted();
+    // `--quiet` takes no hits; `--reset-at N` heals the body and wipes every surface on frame `N`,
+    // after which a run is the quiet one again, frame for frame.
+    let quiet = flag("--quiet");
+    let reset_at = common::arg("--reset-at").and_then(|n| n.parse::<u32>().ok());
     let mut aim = bevy::ecs::system::SystemState::<mannequin::Aim>::new(rec.world());
     for frame in 0..FRAMES {
         {
             let world = rec.world();
             let hit = aim.get(world).ok().and_then(|aim| match frame {
+                _ if quiet => None,
                 30 => aim.shot(Bone::ArmLowL, 0.13, 0.03, 7.0),
                 66 => aim.slash(Bone::LegUpR, 0.20, Vec3::new(0.8, -0.6, 0.0).normalize(), 0.07, 6.0),
                 100 => aim.iron(Bone::ArmLowR, 0.10, 0.035),
@@ -92,6 +99,13 @@ fn main() {
             if let Some(hit) = hit {
                 let hit = if through && matches!(hit.kind, HitKind::Impact { .. }) { hit.through() } else { hit };
                 world.write_message(hit);
+            }
+            if reset_at == Some(frame) {
+                let mut surfaces = world.query_filtered::<Entity, Or<(With<Mannequin>, With<Gore>)>>();
+                let all: Vec<Entity> = surfaces.iter(world).collect();
+                for entity in all {
+                    world.write_message(GoreReset::new(entity));
+                }
             }
         }
         rec.shoot();

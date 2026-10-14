@@ -94,7 +94,7 @@ fn on_hit(
 | Constant | `MAX_DETAIL`, `DETAIL_EDGE` | The finest `new_detailed` draws (4), and where it draws a stain's edge (4 % of full coverage). |
 | Re-export | `StainShape`, `bevy_carnage::bloodstain` | The silhouette `paint_*` takes, and the blood model it comes from. |
 
-`WetCanvas`: `new`, `new_detailed`, `albedo`, `roughness`, `paint_uv`, `paint_uv_with`, `paint_world`, `paint_world_with`, `tick`, `flush`, `digest`, `wetted_area`, plus the read-only `size`, `detail`, `amount_at`, `age_at`, `is_dirty`, `dirty_since`, `is_still`, `heap_bytes`, `image_bytes`.
+`WetCanvas`: `new`, `new_detailed`, `albedo`, `roughness`, `paint_uv`, `paint_uv_with`, `paint_world`, `paint_world_with`, `tick`, `flush`, `clear`, `digest`, `wetted_area`, plus the read-only `size`, `detail`, `amount_at`, `age_at`, `is_dirty`, `dirty_since`, `is_still`, `heap_bytes`, `image_bytes`. `clear` (0.5.48) wipes every drop of blood off in place, for a respawned or pooled surface: the digest is a fresh canvas's again and the images re-upload on the next flush.
 
 ## The metallic-roughness image carries data, not just gloss
 

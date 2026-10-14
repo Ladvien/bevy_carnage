@@ -360,6 +360,26 @@ impl WetCanvas {
         self.dirty_since.is_some()
     }
 
+    /// **Wipe every drop of blood off, keeping the canvas and its images.** The buffer, both images'
+    /// bytes and every pass's bookkeeping go back to what [`new_detailed`](Self::new_detailed) made,
+    /// so [`digest`](Self::digest) is a fresh canvas's again; the images are re-uploaded on the next
+    /// [`flush`](Self::flush), as of `tick`. Nothing is reallocated: a pooled character is cleaned for
+    /// the cost of overwriting its bytes, where despawning and redressing it builds every canvas and
+    /// image again.
+    pub fn clear(&mut self, tick: u32) {
+        let (base, rough) = (self.base_rgba, [0, self.base_rough, 0, 0]);
+        self.wet.fill((0, 0));
+        self.prev.fill((0, 0));
+        self.albedo_px.as_chunks_mut::<4>().0.fill(base);
+        self.rough_px.as_chunks_mut::<4>().0.fill(rough);
+        self.detail_albedo.as_chunks_mut::<4>().0.fill(base);
+        self.detail_rough.as_chunks_mut::<4>().0.fill(rough);
+        self.stale.fill(false);
+        self.quiet = None;
+        self.live = None;
+        self.dirty_since = Some(self.dirty_since.map_or(tick, |since| since.min(tick)));
+    }
+
     /// The tick at which this canvas first diverged from its images, or `None` when they agree.
     ///
     /// The plugin's upload budget sorts on this — oldest dirty first — so a canvas that has been

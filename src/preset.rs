@@ -1259,6 +1259,13 @@ impl DermisCanvas {
         }
     }
 
+    /// **Fade every bruise and burn**, keeping the canvas and its image: the bytes go back to a
+    /// fresh canvas's, re-uploaded on the next flush.
+    pub fn clear(&mut self) {
+        self.px.as_chunks_mut::<4>().0.fill([255, 255, 255, 0]);
+        self.dirty = true;
+    }
+
     /// Upload if anything changed.
     pub fn flush(&mut self, images: &mut Assets<Image>) {
         if !self.dirty {
@@ -1347,6 +1354,12 @@ impl ClothHoles {
     /// FNV-1a over the canvas's bytes: two runs that opened the same holes print the same number.
     pub fn digest(&self) -> u64 {
         self.canvas.px.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3))
+    }
+
+    /// **Mend every hole and slit**, keeping the canvas and its image. The material stays as the
+    /// first hole left it, a mask with nothing cut, which draws the cloth whole.
+    pub fn clear(&mut self) {
+        self.canvas.clear();
     }
 
     /// Whether any texel is open.
@@ -1840,12 +1853,13 @@ impl Plugin for GorePlugin {
         app.init_resource::<GoreDials>()
             .init_resource::<GoreClock>()
             .add_message::<GoreHit>()
+            .add_message::<GoreReset>()
             .add_message::<GoreFractured>()
             .add_systems(FixedUpdate, scene_gore.before(dress).in_set(GoreSystems))
             .configure_sets(FixedUpdate, GoreSystems.before(VisceraSystems))
             .add_systems(
                 FixedUpdate,
-                (advance_clock, dress, take_hits, throw_bodies, bleed, pour_cut_faces, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly)
+                (advance_clock, dress, reset_gore, take_hits, throw_bodies, bleed, pour_cut_faces, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly)
                     .chain()
                     .in_set(GoreSystems),
             )
@@ -2368,6 +2382,7 @@ fn take_hits(
         let xf = &xf;
         let skin: Option<SkinnedMesh> = skin.cloned();
         let Some(bind) = meshes.get(&mesh3d.0).cloned() else { continue };
+        let drawn_mesh = mesh3d.0.clone();
         // **Cast at the body as it is drawn.** A skinned mesh's asset is its bind pose, and the entity's
         // own transform plays no part in drawing it; the pose is what the player is aiming at. A rigid
         // mesh is the asset placed by its transform.
@@ -2682,6 +2697,12 @@ fn take_hits(
             let half = hit.radius_m / scale;
             let tension = Tension::default();
             let source = meshes.add(bind.clone());
+            // The mesh it wore before its first slash, which a reset puts back.
+            commands.entity(hit.entity).queue(move |mut e: EntityWorldMut| {
+                if !e.contains::<Untorn>() {
+                    e.insert(Untorn(drawn_mesh));
+                }
+            });
             // **The wound is torn into a mesh this entity owns.** The laceration rewrites the entity's
             // drawn mesh in place, and a loaded scene shares one mesh handle between every instance of
             // a character: torn through the shared handle, one slash opened the same gape on every
@@ -2847,6 +2868,94 @@ struct Piece {
 /// Marks a baked subject the preset broke without spawning its pieces, so it breaks once.
 #[derive(Component)]
 struct Broken;
+
+/// The mesh a slashed skin wore before its first slash: the shared handle a reset puts back, where
+/// the slash left the entity drawing a torn copy of its own.
+#[derive(Component)]
+struct Untorn(Handle<Mesh>);
+
+/// **Heal a character, or wipe a surface, back to how it was dressed.** `entity` is a dressed surface
+/// or any ancestor of dressed surfaces, the way [`GoreHit::entity`] is: every surface at or below it
+/// is reset. Its canvases are cleared in place — blood, peeled tissue, bruises, burns, holes in its
+/// cloth — and the next flush uploads them clean; its bleeding, bruising and soaking stop; a slashed
+/// skin draws its intact mesh again and its wound bed goes; a subject broken without spawning its
+/// pieces can break again. Nothing is reallocated, so a pooled or respawned character costs the
+/// bytes overwritten rather than a fresh dressing: every canvas and image built again.
+///
+/// **What it leaves.** What has left the body: thrown pieces, spilled guts, the stains it bled on a
+/// floor or a wall — reset a floor or a wall by sending its own entity, which clears its canvas. A body
+/// the preset broke into pieces has been despawned and cannot be reset. Hits read on the same tick
+/// land after the reset.
+#[derive(Message, Clone, Copy, Debug)]
+pub struct GoreReset {
+    /// The surface, or an ancestor of the surfaces, to reset.
+    pub entity: Entity,
+}
+
+impl GoreReset {
+    /// Reset `entity` and every dressed surface below it.
+    pub fn new(entity: Entity) -> Self {
+        Self { entity }
+    }
+}
+
+/// The state [`reset_gore`] clears on one surface.
+type Resettable<'a> = (
+    Option<&'a mut WetCanvas>,
+    Option<&'a mut FlayCanvas>,
+    Option<&'a mut DermisCanvas>,
+    Option<&'a mut ClothHoles>,
+    Option<&'a mut Soaking>,
+    Option<&'a Untorn>,
+);
+
+/// **Apply every [`GoreReset`]**, before the tick's hits.
+fn reset_gore(
+    mut commands: Commands,
+    mut resets: MessageReader<GoreReset>,
+    clock: Res<GoreClock>,
+    children: Query<&Children>,
+    beds: Query<(), With<LacerationBed>>,
+    mut surfaces: Query<Resettable>,
+) {
+    let tick = clock.0;
+    for reset in resets.read() {
+        let mut todo = vec![reset.entity];
+        while let Some(e) = todo.pop() {
+            if let Ok(below) = children.get(e) {
+                for child in below.iter() {
+                    // A wound's bed is the slash's, and goes with it.
+                    if beds.contains(child) {
+                        commands.entity(child).try_despawn();
+                    } else {
+                        todo.push(child);
+                    }
+                }
+            }
+            let Ok((wet, flay, dermis, holes, soaking, untorn)) = surfaces.get_mut(e) else { continue };
+            if let Some(mut wet) = wet {
+                wet.clear(tick);
+            }
+            if let Some(mut flay) = flay {
+                flay.clear(tick);
+            }
+            if let Some(mut dermis) = dermis {
+                dermis.clear();
+            }
+            if let Some(mut holes) = holes {
+                holes.clear();
+            }
+            if let Some(mut soaking) = soaking {
+                soaking.landings.clear();
+            }
+            let mut entity = commands.entity(e);
+            if let Some(untorn) = untorn {
+                entity.try_insert(Mesh3d(untorn.0.clone()));
+            }
+            entity.try_remove::<(Wounds, Bruising, Laceration, Untorn, Broken, ThrowNow, CutFaceBleed)>();
+        }
+    }
+}
 
 /// A runtime body whose pieces are made on the next tick — the meshes need `Assets<Mesh>`, which
 /// the hit loop does not hold.
@@ -3574,6 +3683,7 @@ mod tests {
             .init_resource::<GoreDials>()
             .init_resource::<GoreClock>()
             .add_message::<GoreHit>()
+            .add_message::<GoreReset>()
             .add_message::<GoreFractured>()
             .add_message::<BoneExposed>()
             .add_message::<Wounded>()
@@ -3581,7 +3691,7 @@ mod tests {
             .init_resource::<WetSettings>()
             .init_resource::<FlaySettings>()
             .add_systems(FixedUpdate, scene_gore.before(dress))
-            .add_systems(FixedUpdate, (advance_clock, dress, take_hits, throw_bodies, bleed, pour_cut_faces, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
+            .add_systems(FixedUpdate, (advance_clock, dress, reset_gore, take_hits, throw_bodies, bleed, pour_cut_faces, age_bruises, soak_cloth, tick_canvases, flush_dermis, fly).chain());
         let images = app.world_mut().resource_mut::<Assets<Image>>().reserve_handle();
         app.world_mut().resource_mut::<FleshTables>().sss = images;
         app
@@ -4663,6 +4773,69 @@ mod tests {
         let wounded = app.world().resource::<Messages<Wounded>>();
         let bone = app.world().resource::<Messages<BoneExposed>>();
         (wounded.get_cursor().read(wounded).copied().collect(), bone.get_cursor().read(bone).count())
+    }
+
+    /// **A reset body is as it was dressed, and heals for good.** A limb takes a shot to the bone, a
+    /// blow, a burn and a slash, and bleeds for half a second; one [`GoreReset`] later its three
+    /// canvases are byte for byte a freshly dressed limb's, nothing is bleeding, bruising or open, and
+    /// it draws its own shared mesh again where the slash had it drawing a torn copy, and the slash's
+    /// bed is gone. A second of ticks after that it is still clean, and a second shot to the bone
+    /// announces the bone again, which a handoff left spent would swallow.
+    #[test]
+    fn a_reset_body_is_as_it_was_dressed() {
+        let limb = |app: &mut App| {
+            let sphere = app.world_mut().resource_mut::<Assets<Mesh>>().add(Sphere::new(0.3).mesh().uv(24, 12));
+            let body = app.world_mut().spawn((Mesh3d(sphere.clone()), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Limb))).id();
+            app.world_mut().run_schedule(FixedUpdate);
+            (body, sphere)
+        };
+        let state = |app: &App, body: Entity| {
+            let w = app.world();
+            (
+                w.get::<WetCanvas>(body).map(|c| c.digest()),
+                w.get::<FlayCanvas>(body).map(|c| c.digest()),
+                w.get::<DermisCanvas>(body).map(|c| c.px.clone()),
+            )
+        };
+        let mut fresh = headless();
+        let (twin, _) = limb(&mut fresh);
+        let clean = state(&fresh, twin);
+
+        let mut app = headless();
+        let (body, sphere) = limb(&mut app);
+        let to_bone = |app: &mut App| app.world_mut().write_message(GoreHit::impact(body, Vec3::new(0.0, 0.05, 2.0), Vec3::NEG_Z, 0.03, 60.0));
+        to_bone(&mut app);
+        app.world_mut().write_message(GoreHit::blunt(body, Vec3::new(0.0, -0.12, 2.0), Vec3::NEG_Z, 0.04));
+        app.world_mut().write_message(GoreHit::burn(body, Vec3::new(0.12, 0.0, 2.0), Vec3::NEG_Z, 0.03, 150.0, 1.0));
+        app.world_mut().write_message(GoreHit::slash(body, Vec3::new(-0.1, 0.1, 2.0), Vec3::NEG_Z, Vec3::X, 0.05, 8.0));
+        for _ in 0..30 {
+            app.world_mut().run_schedule(FixedUpdate);
+        }
+        let w = app.world();
+        assert!(w.get::<Wounds>(body).is_some() && w.get::<Bruising>(body).is_some() && w.get::<Laceration>(body).is_some(), "the hits did not all land");
+        assert_ne!(state(&app, body), clean, "the hits changed nothing");
+        assert_ne!(w.get::<Mesh3d>(body).map(|m| m.0.id()), Some(sphere.id()), "the slash did not tear a copy");
+        // `headless` runs no `LacerationPlugin`, which is what lays a slash's bed: lay one by hand.
+        app.world_mut().spawn((LacerationBed, ChildOf(body)));
+        let beds = |app: &mut App| app.world_mut().query_filtered::<(), With<LacerationBed>>().iter(app.world()).count();
+        let bones = announced(&app).1;
+        assert_eq!(bones, 1, "the shot did not reach the bone");
+
+        app.world_mut().write_message(GoreReset::new(body));
+        app.world_mut().run_schedule(FixedUpdate);
+        let w = app.world();
+        assert_eq!(state(&app, body), clean, "a reset limb's canvases are not a fresh one's");
+        assert!(w.get::<Wounds>(body).is_none() && w.get::<Bruising>(body).is_none() && w.get::<Laceration>(body).is_none(), "a wound outlived the reset");
+        assert_eq!(w.get::<Mesh3d>(body).map(|m| m.0.id()), Some(sphere.id()), "the limb still draws the torn copy");
+        assert_eq!(beds(&mut app), 0, "the slash's bed outlived the reset");
+        for _ in 0..60 {
+            app.world_mut().run_schedule(FixedUpdate);
+        }
+        assert_eq!(state(&app, body), clean, "something kept bleeding after the reset");
+
+        to_bone(&mut app);
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(announced(&app).1, bones + 1, "the bone was not announced again after the reset");
     }
 
     /// **A tier that draws no blood still announces the hit, and paints nothing.** Reduction is

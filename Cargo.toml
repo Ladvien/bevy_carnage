@@ -1,5 +1,12 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.48`: a character can be healed** (`AG-121`). A game that respawned or pooled a dressed
+# character had to despawn it and dress it again, every canvas and image rebuilt. `GoreReset` heals one
+# in place: its canvases cleared and re-uploaded, its bleeding, bruises and soaks stopped, a slashed
+# skin's own mesh put back and its wound bed removed, the bone handoff armed again. `WetCanvas::clear`,
+# `FlayCanvas::clear`, `DermisCanvas::clear` and `ClothHoles::clear` are public. A reset run is the
+# hitless run again, frame for frame and digest for digest.
+#
 # **`0.5.47`: blood has a surface** (`AG-120`). Every film of blood the flesh material drew was flat,
 # one colour to its rim: a pool read as a red decal, and at a light's mirror angle it lit up whole as
 # a white sticker. The film's own depth now lifts the shading normal, so a pool's edge curves down
@@ -266,7 +273,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.47"
+version = "0.5.48"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

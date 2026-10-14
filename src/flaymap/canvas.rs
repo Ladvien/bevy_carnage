@@ -390,6 +390,23 @@ impl FlayCanvas {
         self.dirty_since.is_some()
     }
 
+    /// **Heal every wound, keeping the canvas and its images.** The depth buffer, the three images'
+    /// bytes and the bone handoff go back to what [`new`](Self::new) made, so [`digest`](Self::digest)
+    /// is a fresh canvas's again and the next wound to reach the cortex hands bone off again; the
+    /// images are re-uploaded on the next [`flush`](Self::flush), as of `tick`. Nothing is
+    /// reallocated.
+    pub fn clear(&mut self, tick: u32) {
+        let (base, rough) = (self.base_rgba, [0, self.base_rough, 0, 0]);
+        self.depth.fill(0);
+        self.albedo_px.as_chunks_mut::<4>().0.fill(base);
+        self.rough_px.as_chunks_mut::<4>().0.fill(rough);
+        self.normal_px.as_chunks_mut::<4>().0.fill([128, 128, 255, 255]);
+        self.bone_texels = 0;
+        self.bone_handed_off = false;
+        self.painted_at = tick;
+        self.dirty_since = Some(self.dirty_since.map_or(tick, |since| since.min(tick)));
+    }
+
     /// The tick at which this canvas first diverged from its images, or `None` when they agree.
     ///
     /// The plugin's upload budget sorts on this — oldest dirty first — so a canvas that has been

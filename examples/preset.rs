@@ -11,13 +11,13 @@
 //! | `3` | a hot iron on the right thigh — a burn whose degree the damage integral decides |
 //! | `4` | a slash across the left thigh — a laceration that bleeds and drips |
 //! | `T` | the player's gore setting: stylised (sparks, no blood), blood (no guts, nothing breaks), blood and gore |
-//! | `R` | reset |
+//! | `R` | heal the body and wipe what it bled on, in place (`GoreReset`); a body that broke is rebuilt |
 //!
 //! Every visual is the preset's and the flesh material's. Compare `carnage_web.rs`, which wired the
 //! same eight crates by hand until 0.4.0 and now stands on this same scene.
 
 use bevy::prelude::*;
-use bevy_carnage::preset::{GorePlugin, GoreSystems};
+use bevy_carnage::preset::{GorePlugin, GoreReset, GoreSystems};
 use bevy_carnage::{GorePolicy, GoreTier};
 
 mod common;
@@ -110,6 +110,7 @@ fn keys(
     mut images: ResMut<Assets<Image>>,
     parts: Query<(Entity, &Part)>,
     scene: Query<Entity, Or<(With<Body>, With<Sheet>, With<Slab>, With<Sun>)>>,
+    surfaces: Query<Entity, Or<(With<Body>, With<Sheet>, With<Slab>)>>,
     pieces: Query<
         Entity,
         Or<(With<bevy_carnage::preset::Flying>, With<bevy_carnage::preset::Gut>, With<bevy_carnage::preset::Standing>)>,
@@ -138,11 +139,22 @@ fn keys(
         commands.write_message(preset_scene::slash(leg));
     }
     if input.just_pressed(KeyCode::KeyR) {
-        for e in scene.iter().chain(pieces.iter()) {
+        for e in &pieces {
             commands.entity(e).despawn();
         }
         shots.0 = 0;
-        preset_scene::spawn(&mut commands, &mut meshes, &mut materials, &mut images);
+        // **A whole body heals in place**: a `GoreReset` for it and the surfaces it bled on. One the
+        // last shot broke has been despawned, so the scene is built again.
+        if parts.is_empty() {
+            for e in &scene {
+                commands.entity(e).despawn();
+            }
+            preset_scene::spawn(&mut commands, &mut meshes, &mut materials, &mut images);
+        } else {
+            for e in &surfaces {
+                commands.write_message(GoreReset::new(e));
+            }
+        }
     }
 }
 

@@ -20,6 +20,7 @@ a plausible-looking result that is quietly wrong.
 | 7 | **Aim `GoreHit` with a ray, and address it to the character.** `from` is the ray's origin in world space and `dir` its direction. If your physics reports a **contact point and its normal** instead, `GoreHit::impact_at(entity, point, normal, ..)` (or `.at_surface(point, normal)` on any hit) starts the ray `SURFACE_STAND_OFF` outside the point and sends it in. The preset re-casts it against what is drawn: the mesh, or, on a skinned mesh, the pose on screen. Since 0.5.22 `GoreHit::entity` may be **any ancestor of the dressed meshes**, so send the hit at whatever your physics found (the character, or the capsule's owner), and the preset hurts the nearest `Gore::skin` under it along the ray. A mesh with its own `Gore` is still hurt directly. | A physics hit point is not enough on its own. Send the ray your weapon fired, or one from just outside the surface along the hit normal reversed. Bevy's `MeshRayCast` tests a skinned mesh's bind pose, so it can miss a posed limb or find the wrong one. |
 | 8 | **Choose who owns the pieces: `GoreDials::spawn_fragments`.** `true` throws them ballistically to `GoreDials::floor_y`. A game with physics sets `false`, reads `GoreFractured`, gives each of its `pieces` a rigid body, and despawns or hides the body itself. | The preset's pieces are kinematic and fall to one plane. They will fight a physics engine. |
 | 9 | **Gate the bake on your own state.** The plugin adds its systems with no run condition. | The caller owns the schedule, everywhere in this crate. |
+| 10 | **Heal a character you reuse with `GoreReset`**, not by despawning and dressing it again: a respawn, a pooled enemy, a restarted round. Send it with the root, and once more with each floor or wall you want wiped. See [Healing, respawning and pooling](#healing-respawning-and-pooling). | Dressing builds every canvas and image again; a reset overwrites the bytes it already has, re-arms the bone handoff and puts a slashed skin's own mesh back. |
 
 Tangents are handled for you since 0.5.10: a skin mesh without `ATTRIBUTE_TANGENT` gets them when it
 is dressed, because the crater's normal map needs them.
@@ -277,6 +278,28 @@ under a tier; it draws the spark at `Stylised` from the `Wounded` message, the w
   a point on its mesh. A hit away from the open wounds opens another, up to
   `GoreDials::open_wounds` (16), and a hit inside one reopens it. A wound leaves the list once its
   bleed has clotted.
+
+## Healing, respawning and pooling
+
+A character that respawns, a pooled enemy coming back, a round that restarts: send
+`GoreReset::new(entity)` (0.5.48) with the character's root, or any dressed surface. Every surface at
+or below it goes back to how it was dressed, on the next `FixedUpdate`, before that tick's hits:
+
+- its wetmap, flaymap and dermis canvases are cleared in place and re-uploaded clean, and a cloth's
+  holes and slits are mended (`WetCanvas::clear`, `FlayCanvas::clear`, `DermisCanvas::clear`,
+  `ClothHoles::clear`, each public for a game that keeps its own canvases);
+- its bleeding, bruising and soaking stop (`Wounds`, `Bruising` and a cloth's pending soaks go);
+- a slashed skin draws its own mesh again, the shared handle it wore before the slash, and its wound
+  bed is despawned;
+- the bone handoff is armed again, so the next wound to reach the cortex sends `BoneExposed`;
+- a subject broken with `spawn_fragments` off can break again.
+
+Nothing is reallocated: the canvases and their images are the ones dressing made, so a reset costs
+the bytes it overwrites. Despawning the character and spawning it again builds every canvas and image
+once more. **What it leaves** is what has left the body: thrown pieces (`Flying`, `Standing`), spilled
+guts (`Gut`), and the stains on a floor, a sheet or a wall — send each of those surfaces its own
+`GoreReset` to wipe it, and despawn the pieces and guts. A body the preset broke into pieces has been
+despawned and is gone.
 
 ## What it costs
 
