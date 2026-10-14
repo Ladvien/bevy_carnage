@@ -1257,10 +1257,19 @@ struct Parted {
 /// dermis shows through — a bruise's colour over the same skin with nothing in it, so a skin tone
 /// stays the caller's — and `a` is how much of it shows. A peeled texel (the flaymap's `A`) hides
 /// it: the skin that carried it is gone.
+///
+/// **Bruises are redrawn, not repainted over themselves.** A bruise changes every model step, and
+/// several can overlap, so the canvas keeps what it holds apart from its bruises (`under`, made when the
+/// first is drawn) and [`DermisCanvas::draw_bruises`] rebuilds the bruises over it each time. Painted
+/// one over another, a bruise's faint margin was blended into its neighbour's core at every step and
+/// bleached a pale seam between them.
 #[derive(Component, Debug)]
 pub struct DermisCanvas {
     size: u32,
     px: Vec<u8>,
+    /// The canvas without its bruises — burns and anything else painted once — from the first bruise
+    /// on; `None` until then.
+    under: Option<Vec<u8>>,
     image: Handle<Image>,
     dirty: bool,
 }
@@ -1276,7 +1285,7 @@ impl DermisCanvas {
             bevy::render::render_resource::TextureFormat::Rgba8Unorm,
             bevy::asset::RenderAssetUsages::MAIN_WORLD | bevy::asset::RenderAssetUsages::RENDER_WORLD,
         );
-        Self { size, px: [255, 255, 255, 0].repeat((size as usize) * (size as usize)), image: images.add(image), dirty: false }
+        Self { size, px: [255, 255, 255, 0].repeat((size as usize) * (size as usize)), under: None, image: images.add(image), dirty: false }
     }
 
     /// The image the flesh material reads.
@@ -1289,9 +1298,10 @@ impl DermisCanvas {
         self.size
     }
 
-    /// The bytes this canvas holds in the main world apart from its image: the CPU copy of it.
+    /// The bytes this canvas holds in the main world apart from its image: the CPU copy of it, and of
+    /// it without its bruises once it has any.
     pub fn heap_bytes(&self) -> usize {
-        self.px.capacity()
+        self.px.capacity() + self.under.as_ref().map_or(0, Vec::capacity)
     }
 
     /// The size of the image it uploads, once; the main world and the GPU each hold a copy.
@@ -1304,48 +1314,54 @@ impl DermisCanvas {
     /// out to `radius_uv`. Alpha is taken as the max of what was there, so two injuries overlap rather
     /// than erase.
     pub fn paint_radial(&mut self, uv: Vec2, radius_uv: f32, mm_per_uv: f32, mut colour: impl FnMut(f32, Vec2) -> ([f32; 3], f32)) {
-        if !uv.is_finite() || !radius_uv.is_finite() || radius_uv <= 0.0 {
-            return;
-        }
-        let n = self.size as i64;
-        // Saturated casts, then clamped: a huge radius or an off-atlas UV from a caller's mesh must
-        // not overflow the bounds arithmetic below.
-        let r_px = ((radius_uv * self.size as f32).ceil() as i64).clamp(0, n);
-        let cx = ((uv.x * self.size as f32) as i64).clamp(-n, 2 * n);
-        let cy = ((uv.y * self.size as f32) as i64).clamp(-n, 2 * n);
-        for y in (cy - r_px).max(0)..(cy + r_px + 1).min(n) {
-            for x in (cx - r_px).max(0)..(cx + r_px + 1).min(n) {
-                let du = (x as f32 + 0.5) / self.size as f32 - uv.x;
-                let dv = (y as f32 + 0.5) / self.size as f32 - uv.y;
-                let r_uv = (du * du + dv * dv).sqrt();
-                if r_uv > radius_uv {
-                    continue;
-                }
-                let (c, a) = colour(r_uv * mm_per_uv, Vec2::new(du, dv).normalize_or_zero());
-                let a = if a.is_finite() { a.clamp(0.0, 1.0) } else { 0.0 };
-                if a <= 0.0 {
-                    continue;
-                }
-                let i = ((y * n + x) * 4) as usize;
-                if let Some(px) = self.px.get_mut(i..i + 4) {
-                    let old_a = px[3] as f32 / 255.0;
-                    let w = if a + old_a > 0.0 { a / (a + old_a) } else { 0.0 };
-                    for ch in 0..3 {
-                        let new = c[ch].clamp(0.0, 1.0);
-                        let old = px[ch] as f32 / 255.0;
-                        px[ch] = ((old + (new - old) * w) * 255.0).round() as u8;
-                    }
-                    px[3] = (a.max(old_a) * 255.0).round() as u8;
-                    self.dirty = true;
-                }
+        let size = self.size;
+        let mut blend = |px: &mut [u8], c: [f32; 3], a: f32| {
+            let old_a = px[3] as f32 / 255.0;
+            let w = if a + old_a > 0.0 { a / (a + old_a) } else { 0.0 };
+            for ch in 0..3 {
+                let new = c[ch].clamp(0.0, 1.0);
+                let old = px[ch] as f32 / 255.0;
+                px[ch] = ((old + (new - old) * w) * 255.0).round() as u8;
             }
+            px[3] = (a.max(old_a) * 255.0).round() as u8;
+        };
+        // A mark painted once belongs under the bruises too, or the next redraw would take it away.
+        if let Some(under) = self.under.as_mut() {
+            radial(under, size, uv, radius_uv, mm_per_uv, &mut colour, &mut blend);
         }
+        self.dirty |= radial(&mut self.px, size, uv, radius_uv, mm_per_uv, &mut colour, &mut blend);
+    }
+
+    /// **Redraw every bruise** over what the canvas holds without them: bruise `i` centred at
+    /// `centres[i]`, out to `radius_uv`, its field `colour(i, r_mm, dir)` as
+    /// [`paint_radial`](Self::paint_radial) takes one, composed by multiplying the ratios they lay over
+    /// the skin, `1 − a + a·c` per channel, so two that overlap darken it as their chromophores would
+    /// together and neither bleaches the other. Alpha is their union.
+    pub fn draw_bruises(&mut self, centres: &[Vec2], radius_uv: f32, mm_per_uv: f32, mut colour: impl FnMut(usize, f32, Vec2) -> ([f32; 3], f32)) {
+        let under = self.under.get_or_insert_with(|| self.px.clone());
+        self.px.copy_from_slice(under);
+        let mut multiply = |px: &mut [u8], c: [f32; 3], a: f32| {
+            let old_a = px[3] as f32 / 255.0;
+            let out_a = 1.0 - (1.0 - old_a) * (1.0 - a);
+            for ch in 0..3 {
+                let old_m = 1.0 - old_a + old_a * px[ch] as f32 / 255.0;
+                let new_m = 1.0 - a + a * c[ch].clamp(0.0, 1.0);
+                let rgb = if out_a > 0.0 { 1.0 - (1.0 - old_m * new_m) / out_a } else { 1.0 };
+                px[ch] = (rgb.clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+            px[3] = (out_a * 255.0).round() as u8;
+        };
+        for (i, uv) in centres.iter().enumerate() {
+            radial(&mut self.px, self.size, *uv, radius_uv, mm_per_uv, |r_mm, dir| colour(i, r_mm, dir), &mut multiply);
+        }
+        self.dirty = true;
     }
 
     /// **Fade every bruise and burn**, keeping the canvas and its image: the bytes go back to a
     /// fresh canvas's, re-uploaded on the next flush.
     pub fn clear(&mut self) {
         self.px.as_chunks_mut::<4>().0.fill([255, 255, 255, 0]);
+        self.under = None;
         self.dirty = true;
     }
 
@@ -1364,10 +1380,67 @@ impl DermisCanvas {
     }
 }
 
-/// **A bruise ageing under this entity's skin**, at one spot. The kernel is `crate::bloodstain::bruise`; the
-/// preset steps it on the fixed tick and repaints the dermis canvas when its colour moves.
-#[derive(Component, Debug)]
+/// **Visit every texel of a `size`² RGBA8 buffer within `radius_uv` of `uv`** with the field
+/// `colour(r_mm, dir)` gives there, handing `put` the texel and the colour and alpha, when the alpha is
+/// above zero. Whether anything was put.
+#[allow(clippy::too_many_arguments)]
+fn radial(
+    px: &mut [u8],
+    size: u32,
+    uv: Vec2,
+    radius_uv: f32,
+    mm_per_uv: f32,
+    mut colour: impl FnMut(f32, Vec2) -> ([f32; 3], f32),
+    mut put: impl FnMut(&mut [u8], [f32; 3], f32),
+) -> bool {
+    if !uv.is_finite() || !radius_uv.is_finite() || radius_uv <= 0.0 {
+        return false;
+    }
+    let n = size as i64;
+    // Saturated casts, then clamped: a huge radius or an off-atlas UV from a caller's mesh must not
+    // overflow the bounds arithmetic below.
+    let r_px = ((radius_uv * size as f32).ceil() as i64).clamp(0, n);
+    let cx = ((uv.x * size as f32) as i64).clamp(-n, 2 * n);
+    let cy = ((uv.y * size as f32) as i64).clamp(-n, 2 * n);
+    let mut any = false;
+    for y in (cy - r_px).max(0)..(cy + r_px + 1).min(n) {
+        for x in (cx - r_px).max(0)..(cx + r_px + 1).min(n) {
+            let du = (x as f32 + 0.5) / size as f32 - uv.x;
+            let dv = (y as f32 + 0.5) / size as f32 - uv.y;
+            let r_uv = (du * du + dv * dv).sqrt();
+            if r_uv > radius_uv {
+                continue;
+            }
+            let (c, a) = colour(r_uv * mm_per_uv, Vec2::new(du, dv).normalize_or_zero());
+            let a = if a.is_finite() { a.clamp(0.0, 1.0) } else { 0.0 };
+            if a <= 0.0 {
+                continue;
+            }
+            let i = ((y * n + x) * 4) as usize;
+            if let Some(texel) = px.get_mut(i..i + 4) {
+                put(texel, c, a);
+                any = true;
+            }
+        }
+    }
+    any
+}
+
+/// **The bruises ageing under this entity's skin**, each at its own spot, oldest first. The kernel is
+/// `crate::bloodstain::bruise`; the preset steps every one on the fixed tick and repaints the dermis
+/// canvas where its colour moves. Until 0.5.55 an entity held one, and a second blow started a new
+/// bruise while the first stopped ageing where it was, so a limb hit twice kept one bruise frozen
+/// beside one that darkened.
+#[derive(Component, Debug, Default)]
 pub struct Bruising {
+    /// Every bruise still ageing, oldest first, at most [`MAX_BRUISES`].
+    pub sites: Vec<BruiseSite>,
+}
+
+/// **One bruise**: where on the canvas, the kernel, and the fractional model steps carried between
+/// ticks.
+#[derive(Debug)]
+pub struct BruiseSite {
     /// Where on the canvas.
     pub uv: Vec2,
     /// The kernel.
@@ -1375,6 +1448,12 @@ pub struct Bruising {
     /// Fractional model steps carried between ticks.
     pub carry: f32,
 }
+
+/// **How many bruises one entity ages at once**: 8. A blow past that retires the oldest, which keeps
+/// the colour it had reached. A bound, not a model: each bruise is a kernel stepped and a patch of the
+/// canvas repainted every model step, and a limb beaten more than eight times has few texels left
+/// that are not already bruised.
+pub const MAX_BRUISES: usize = 8;
 
 /// **Blood soaking into this cloth** from one landing: the Lucas–Washburn front (`crate::bloodstain::wick`)
 /// widens the stain over the seconds after it lands.
@@ -2537,7 +2616,19 @@ fn take_hits(
                 pool_diameter_mm: (hit.radius_m * 2.0 * 1000.0).clamp(2.0, 100.0),
                 ..crate::bloodstain::bruise::Params::default()
             };
-            commands.entity(hit.entity).try_insert(Bruising { uv, bruise: crate::bloodstain::Bruise::new(params), carry: 0.0 });
+            let site = BruiseSite { uv, bruise: crate::bloodstain::Bruise::new(params), carry: 0.0 };
+            // **Added, not swapped**: every bruise already under the skin keeps ageing. In hit order,
+            // so two blows in one tick land in the order they were sent.
+            commands.entity(hit.entity).queue(move |mut e: EntityWorldMut| {
+                if let Some(mut bruising) = e.get_mut::<Bruising>() {
+                    if bruising.sites.len() >= MAX_BRUISES {
+                        bruising.sites.remove(0);
+                    }
+                    bruising.sites.push(site);
+                } else {
+                    e.insert(Bruising { sites: vec![site] });
+                }
+            });
         }
 
         // A burn: Jackson's three zones round the contact, as far in as the degree reached — see
@@ -3512,26 +3603,34 @@ fn pour_cut_faces(
     }
 }
 
-/// **Age every bruise** by the dial's hours per tick and repaint its dermis when a model step lands.
+/// **Age every bruise** by the dial's hours per tick and repaint its dermis when a model step lands,
+/// oldest first, so where two overlap the younger is painted last.
 fn age_bruises(
     dials: Res<GoreDials>,
     mut bruised: Query<(&Gore, &mut Bruising, &mut DermisCanvas)>,
 ) {
     let per_tick = dials.bruise_hours_per_tick.max(0.0) / crate::bloodstain::bruise::STEP_H;
     for (gore, mut bruising, mut dermis) in &mut bruised {
-        bruising.carry += per_tick;
-        let steps = bruising.carry.floor() as u32;
-        if steps == 0 {
+        let mut stepped = false;
+        for site in &mut bruising.sites {
+            site.carry += per_tick;
+            let steps = site.carry.floor() as u32;
+            if steps > 0 {
+                site.carry -= steps as f32;
+                site.bruise.advance(steps);
+                stepped = true;
+            }
+        }
+        if !stepped {
             continue;
         }
-        bruising.carry -= steps as f32;
-        bruising.bruise.advance(steps);
         let mm_per_uv = 1000.0 / gore.density().max(1.0e-6);
         let radius_uv = crate::bloodstain::bruise::RADIUS_MM / mm_per_uv;
-        let uv = bruising.uv;
-        let shells = bruise_shells(&bruising.bruise);
-        let margin = Margin::at(uv, BRUISE_SALT);
-        dermis.paint_radial(uv, radius_uv * (1.0 + BRUISE_WOBBLE), mm_per_uv, |r_mm, dir| bruise_texel(&shells, margin, r_mm, dir));
+        let centres: Vec<Vec2> = bruising.sites.iter().map(|site| site.uv).collect();
+        let looks: Vec<_> = bruising.sites.iter().map(|site| (bruise_shells(&site.bruise), Margin::at(site.uv, BRUISE_SALT))).collect();
+        dermis.draw_bruises(&centres, radius_uv * (1.0 + BRUISE_WOBBLE), mm_per_uv, |i, r_mm, dir| {
+            looks.get(i).map_or(([1.0; 3], 0.0), |(shells, margin)| bruise_texel(shells, *margin, r_mm, dir))
+        });
     }
 }
 
@@ -4577,6 +4676,68 @@ mod tests {
         assert_eq!(burn_zone(Degree::None, 0.0).1, 0.0, "a burn of no degree shows");
     }
 
+    /// **Every bruise on a limb ages, not only the newest.** Two blows on one limb at two spots,
+    /// thirty ticks apart, then thirty ticks more: both bruises are still ageing, the first older than
+    /// the second by the thirty ticks between them, to within one model step. Until 0.5.55 the second
+    /// blow replaced the first, which stopped where it was. Past [`MAX_BRUISES`] the oldest retires.
+    #[test]
+    fn every_bruise_on_a_limb_ages() {
+        let mut app = headless();
+        let sphere = app.world_mut().resource_mut::<Assets<Mesh>>().add(Sphere::new(0.3).mesh().uv(24, 12));
+        let body = app.world_mut().spawn((Mesh3d(sphere), Transform::IDENTITY, GlobalTransform::IDENTITY, Gore::skin(Region::Limb))).id();
+        app.world_mut().run_schedule(FixedUpdate);
+        let blow = |app: &mut App, x: f32, y: f32| app.world_mut().write_message(GoreHit::blunt(body, Vec3::new(x, y, 2.0), Vec3::NEG_Z, 0.04));
+        let ticks = |app: &mut App, n: u32| (0..n).for_each(|_| app.world_mut().run_schedule(FixedUpdate));
+        blow(&mut app, -0.1, 0.0);
+        ticks(&mut app, 30);
+        blow(&mut app, 0.1, 0.05);
+        ticks(&mut app, 30);
+        let hours: Vec<f32> = app.world().get::<Bruising>(body).map(|b| b.sites.iter().map(|s| s.bruise.hours()).collect()).unwrap_or_default();
+        assert_eq!(hours.len(), 2, "the limb holds {} bruises, not the two it took", hours.len());
+        let between = 30.0 * app.world().resource::<GoreDials>().bruise_hours_per_tick;
+        assert!(hours[1] > 0.0, "the second bruise did not age: {hours:?}");
+        assert!(
+            (hours[0] - hours[1] - between).abs() <= crate::bloodstain::bruise::STEP_H + 1.0e-4,
+            "the first bruise is {} h older than the second, not the {between} h between the blows: {hours:?}",
+            hours[0] - hours[1]
+        );
+        for i in 0..10 {
+            blow(&mut app, -0.15 + 0.03 * i as f32, -0.1);
+        }
+        ticks(&mut app, 1);
+        let held = app.world().get::<Bruising>(body).map(|b| b.sites.len()).unwrap_or(0);
+        assert_eq!(held, MAX_BRUISES, "twelve blows left {held} bruises ageing");
+    }
+
+    /// **Overlapping bruises darken the skin together, redraw after redraw, and a burn survives them.**
+    /// A solid bruise laying a ratio of 0.5 and a faint one laying 0.9 at a fifth's strength, drawn
+    /// over each other twenty times as twenty model steps would: where both reach, the skin is
+    /// multiplied by `0.5 · 0.98`, no lighter and no darker on the twentieth than the first. Painted
+    /// one over another, the faint one's margin was blended into the solid one's core every step and
+    /// bleached a seam. A burn painted between redraws is still there after the next.
+    #[test]
+    fn overlapping_bruises_darken_together_and_a_burn_survives_their_redraws() {
+        let mut images = Assets::<Image>::default();
+        let mut dermis = DermisCanvas::new(&mut images, 64);
+        let centres = [Vec2::new(0.4, 0.5), Vec2::new(0.6, 0.5)];
+        let field = |i: usize, _r_mm: f32, _dir: Vec2| if i == 0 { ([0.5; 3], 1.0) } else { ([0.9; 3], 0.2) };
+        // The ratio a texel multiplies the skin's red by.
+        let shown = |d: &DermisCanvas, x: usize, y: usize| {
+            let i = (y * 64 + x) * 4;
+            let a = d.px[i + 3] as f32 / 255.0;
+            1.0 - a + a * d.px[i] as f32 / 255.0
+        };
+        for _ in 0..20 {
+            dermis.draw_bruises(&centres, 0.15, 1.0, field);
+        }
+        let both = shown(&dermis, 32, 32);
+        assert!((both - 0.5 * 0.98).abs() < 0.01, "where both bruises reach the skin is multiplied by {both}, not 0.49");
+        assert!((shown(&dermis, 22, 32) - 0.5).abs() < 0.01, "where only the solid one reaches it is {}", shown(&dermis, 22, 32));
+        dermis.paint_radial(Vec2::new(0.2, 0.2), 0.05, 1.0, |_, _| ([0.3; 3], 1.0));
+        dermis.draw_bruises(&centres, 0.15, 1.0, field);
+        assert!((shown(&dermis, 12, 12) - 0.3).abs() < 0.01, "the burn was redrawn away: {}", shown(&dermis, 12, 12));
+    }
+
     /// **A bruise is a blotch, not a disc, and its colour is still the model's.** A day-old 40 mm
     /// bruise, read round its centre: at one radius inside its front some directions are a third
     /// denser than others, and how far it reaches differs by a fifth between directions; past where
@@ -4666,7 +4827,7 @@ mod tests {
             app.world_mut().run_schedule(FixedUpdate);
         }
         assert!(app.world().get::<Wounds>(bruised).is_none() && app.world().get::<Wounds>(burnt).is_none(), "neither bleeds");
-        let hours = app.world().get::<Bruising>(bruised).map(|b| b.bruise.hours()).unwrap_or(0.0);
+        let hours = app.world().get::<Bruising>(bruised).and_then(|b| b.sites.first()).map(|b| b.bruise.hours()).unwrap_or(0.0);
         assert!(hours >= 6.0, "the bruise aged {hours} h");
         let dermis = app.world().get::<DermisCanvas>(bruised).map(|d| d.px.clone()).unwrap_or_default();
         let (mut warmth, mut n) = (0.0f32, 0u32);

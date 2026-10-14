@@ -170,7 +170,10 @@ renderer asks for. Nothing is asked of the game. Put `Gore` on the skinned mesh 
   A bruise is the model's colour over an outline off round by up to `BRUISE_WOBBLE` and a density
   mottled by `BRUISE_MOTTLE` (0.5.44). Its hue is the model's and goes where the model goes: a dull
   darkening in its first hours, bilirubin's orange from about a day of model time on, which
-  `GoreDials::bruise_hours_per_tick` (0.02 h) puts twenty seconds into a fight at 60 Hz.
+  `GoreDials::bruise_hours_per_tick` (0.02 h) puts twenty seconds into a fight at 60 Hz. Every bruise
+  on a part ages (0.5.55), up to `MAX_BRUISES` (8), the oldest retiring past that; where two overlap
+  they darken the skin together, each redrawn over what the part holds without its bruises every
+  model step, so neither bleaches the other.
 - **The atlas density is measured from the pose**, because the scale of a rigged character lives in
   its joints, not in the mesh entity.
 - **A skin with no pose yet is not cast at the bind pose.** While the joints have no transform, or
@@ -204,6 +207,10 @@ records it.
 the windowed demo fires one through the chest.
 
 ![The mannequin walks in front of a plaster wall; a shot through the raised forearm and two through the chest throw a cone of fine spatter onto the wall behind, each drop its own small stain](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_through.gif)
+
+`capture_skinned --blows` lands a second blow on the left shin, and both bruises age.
+
+![Close on the mannequin's left shin as it walks: one brown bruise mid-shin, then a blow just below the knee raises a paler one above it; both darken as they age, and where they overlap they are darker still](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_bruises.gif)
 
 ![The mannequin walks with its left arm raised; a heavy shot to the chest breaks it mid-stride into pieces that keep the pose, the raised arm up and the legs mid-step, before they fall and settle among its guts](https://raw.githubusercontent.com/Ladvien/bevy_carnage/main/docs/skinned_break.gif)
 
@@ -309,7 +316,8 @@ particles read no policy, and a game that turned blood off still sprayed it.
 
 Nothing here is read back: the particles are output, and no digest sees them. On the Linux machine
 the clips are recorded on, two runs of `capture_skinned` with them on are byte-identical in all 360
-frames; on Apple silicon `capture_carnage`'s were not ([`DEMOS.md`](DEMOS.md)).
+frames, and two of `capture_skinned --through` differ inside the mist round each shot, by up to 8
+code values; on Apple silicon `capture_carnage`'s were not ([`DEMOS.md`](DEMOS.md)).
 
 ## Healing, respawning and pooling
 
@@ -439,8 +447,6 @@ the player never sees up close, and the wrong one for the one they shoot.
   softbox above the camera and the pools mirror a dark wall. A pool at a light's own mirror angle
   still shows that light, as it should.
 - **A skin's roughness map and a crater's slope give way.** See *What a dressed skin keeps*.
-- **One ageing bruise per mesh entity.** A second blow on the same entity starts a new bruise, and
-  the first stops ageing where it was. Wounds have no such limit.
 - **One gravity direction per canvas.** On a rigid mesh whose UV islands point different ways, blood
   runs correctly on the islands that agree with `gravity_uv`. A skinned part follows the pose at its
   wounds instead, and the same limit holds across the islands it has.

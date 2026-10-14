@@ -14,6 +14,8 @@
 //! forward spatter lands on the wall and the floor behind, and runs down the wall. `--quiet` takes no
 //! hits at all. `--reset-at N` sends a `GoreReset` for the body and every dressed surface on frame
 //! `N`: once the canvases have uploaded, every frame after is the quiet run's, and so is the digest.
+//! `--blows` adds a second blow to the left shin, lower down, at frame 60: two bruises on one limb,
+//! both ageing.
 //!
 //! Writes `frame0000.png …` and prints one digest line; two runs must print the same line.
 //!
@@ -92,6 +94,7 @@ fn main() {
     // `--quiet` takes no hits; `--reset-at N` heals the body and wipes every surface on frame `N`,
     // after which a run is the quiet one again, frame for frame.
     let quiet = flag("--quiet");
+    let blows = flag("--blows");
     let reset_at = common::arg("--reset-at").and_then(|n| n.parse::<u32>().ok());
     let mut aim = bevy::ecs::system::SystemState::<mannequin::Aim>::new(rec.world());
     for frame in 0..FRAMES {
@@ -99,6 +102,7 @@ fn main() {
             let world = rec.world();
             let hit = aim.get(world).ok().and_then(|aim| match frame {
                 _ if quiet => None,
+                60 if blows => aim.blow(Bone::LegLowL, 0.32, 0.04),
                 30 => aim.shot(Bone::ArmLowL, 0.13, 0.03, 7.0),
                 66 => aim.slash(Bone::LegUpR, 0.20, Vec3::new(0.8, -0.6, 0.0).normalize(), 0.07, 6.0),
                 100 => aim.iron(Bone::ArmLowR, 0.10, 0.035),

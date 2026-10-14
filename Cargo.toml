@@ -1,5 +1,13 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.55`: every bruise on a limb ages** (`AG-128`). `Bruising` held one bruise, so a second
+# blow on the same mesh froze the first where it was. It now holds `sites`, one `BruiseSite` per
+# blow up to `MAX_BRUISES` (8), the oldest retiring past that, and every one is stepped. The
+# dermis canvas redraws them each model step over what it holds without them
+# (`DermisCanvas::draw_bruises`), multiplying the ratios they lay over the skin, so two that overlap
+# darken together: painted one over the other, they met at a pale seam. `capture_skinned --blows`
+# shows two on one shin (`docs/skinned_bruises.gif`). Every digest holds.
+#
 # **`0.5.54`: the flesh material fits a scene with an environment map, on the web** (`AG-127`). The
 # material sampled fifteen textures in its fragment stage, and a camera's `EnvironmentMapLight`
 # adds two, past the sixteen WebGL2 and wgpu's default limits allow: its pipeline failed to build
@@ -317,7 +325,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.54"
+version = "0.5.55"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
