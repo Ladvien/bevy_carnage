@@ -169,6 +169,39 @@ fn lifted_normal(N: vec3<f32>, P: vec3<f32>, dh: vec2<f32>) -> vec3<f32> {
     return N * FILM_MAX_TILT_COS + side * sqrt(1.0 - FILM_MAX_TILT_COS * FILM_MAX_TILT_COS);
 }
 
+// **How many directions and how far a crater's floor looks for its walls.** Eight directions, each
+// out to 1, 3, 7 and 15 texels: on the mannequin's 256-texel skins, 3.6 mm a texel, that is 54 mm,
+// past the rim of a 30 mm wound.
+const CAVITY_DIRS: u32 = 8u;
+const CAVITY_STEPS: u32 = 4u;
+
+// **How much of the room a point in a crater sees**, `[0, 1]`: one minus the mean, over
+// `CAVITY_DIRS` directions, of the sine of the highest wall it sees that way. In a section across a
+// hollow, the cosine-weighted share of a point's view that clears both walls is
+// `1 − (sin h₁ + sin h₂) / 2` for their elevations `h₁, h₂` (the crossed-strings result a wound bed's
+// lips and floor are lit by), and the mean over directions is that, all the way round. The walls are
+// the flaymap's own depth, `depth_mm` here against the depth at each tap, `mm_per_uv` the canvas's
+// size on the body. It leaves out the light the walls throw back.
+fn crater_light(uv: vec2<f32>, depth_mm: f32, mm_per_uv: f32) -> f32 {
+    let size = vec2<f32>(textureDimensions(pbr_bindings::metallic_roughness_texture));
+    let mm_per_texel = mm_per_uv / max(size.x, 1.0);
+    var seen = 0.0;
+    for (var i = 0u; i < CAVITY_DIRS; i = i + 1u) {
+        let a = (f32(i) + 0.5) * (2.0 * PI / f32(CAVITY_DIRS));
+        let dir = vec2<f32>(cos(a), sin(a));
+        var wall = 0.0;
+        for (var k = 0u; k < CAVITY_STEPS; k = k + 1u) {
+            let texels = f32((2u << k) - 1u);
+            let tap = textureSampleLevel(pbr_bindings::metallic_roughness_texture, pbr_bindings::metallic_roughness_sampler, uv + dir * texels / size, 0.0).r;
+            let rise = depth_mm - tap * flesh.cut.y;
+            let run = texels * mm_per_texel;
+            wall = max(wall, rise / max(sqrt(rise * rise + run * run), 1.0e-6));
+        }
+        seen += wall;
+    }
+    return clamp(1.0 - seen / f32(CAVITY_DIRS), 0.0, 1.0);
+}
+
 @fragment
 fn fragment(
     in: VertexOutput,
@@ -187,6 +220,7 @@ fn fragment(
     var film_n = pbr_input.N;            // the normal of a film's own surface
     var film_cn = pbr_input.clearcoat_N; // and of the coat on it
     var film_dh = vec2<f32>(0.0);        // how fast the film's surface rises across the screen
+    var flay_mm_per_uv = 0.0;            // the flaymap's size on the body, for a crater's walls
 #ifdef VERTEX_UVS_A
     if (flags & FLAG_WET) != 0u {
         // Smooth inside, and its rim drawn crisp at `WET_EDGE`: a film's edge is a line, and the
@@ -243,6 +277,12 @@ fn fragment(
         let flat = pbr_bindings::material.base_color.rgb;
         let authored = pbr_input.material.base_color.rgb;
         pbr_input.material.base_color = vec4<f32>(canvas + (1.0 - peeled) * (authored - flat), pbr_input.material.base_color.a);
+#ifndef PREPASS_PIPELINE
+        // The canvas's size on the body, millimetres per UV, from how far the surface and its UV move
+        // across a pixel. Taken here, where the flags are uniform: a derivative cannot be taken in
+        // the per-pixel branch that uses it.
+        flay_mm_per_uv = length(fwidth(pbr_input.world_position.xyz)) / max(length(fwidth(in.uv)), 1.0e-9) * flesh.sss.y;
+#endif
     }
     // What lies under intact skin: a bruise's chromophores or a burn's eschar modulate the skin's
     // own colour (the map is a ratio, linear), and go with the skin when it is peeled. On cloth the
@@ -389,6 +429,17 @@ fn fragment(
         // light terms too.
         out.color = vec4<f32>(out.color.rgb + extra * strength * view_bindings::view.exposure, out.color.a);
     }
+
+#ifdef VERTEX_UVS_A
+    // ---- A crater is lit through its mouth. -------------------------------------------------
+    // Every light term, the coat's and the subsurface's with them: a crater's floor sees the room
+    // only between its walls (`crater_light`). Drawn as open skin, a wound pooled with blood was a
+    // flat red decal whatever its depth.
+    if (flags & FLAG_FLAY) != 0u && mode == MODE_CANVAS && depth_frac > 0.0 {
+        let lit = crater_light(in.uv, depth_frac * flesh.cut.y, flay_mm_per_uv);
+        out.color = vec4<f32>(out.color.rgb * lit, out.color.a);
+    }
+#endif
 
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
 #endif

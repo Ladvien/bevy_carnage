@@ -1,5 +1,12 @@
 [package]
 name = "bevy_carnage"
+# **`0.5.52`: a crater is lit through its mouth** (`AG-125`). The flesh material lit a flaymap crater
+# as if it were open skin, so a wound pooled with blood was one red to its middle however deep it
+# went. Each texel below the skin now finds the crater's walls in the flaymap's own depth, eight
+# ways out to 15 texels, and every light term on it is multiplied by `1 − mean(sin h)`, the share of
+# the room it sees between them. `FleshParams::cut.y` carries the layer span. Shader only; every
+# digest holds; WebGL2 checked again.
+#
 # **`0.5.51`: a hit reads in the air, and follows the player's setting** (`AG-124`). The preset's
 # wounds put blood on surfaces and nothing in the air at the moment of the hit; `CarnageVfxPlugin`
 # turns every announced wound into a burst, but its mist was a few hard 1 cm dots flying at 40 m/s,
@@ -296,7 +303,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.51"
+version = "0.5.52"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

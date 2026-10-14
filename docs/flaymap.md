@@ -73,6 +73,8 @@ Bevy reads exactly two channels out of a metallic-roughness texture — **green*
 
 So `R · span_mm / 255` is the millimetres of tissue gone and `A` is the wound's own mask — the two things a caller's shader would otherwise have to infer from the colour, which cannot be done, because flayed muscle and a red shirt are the same red. A subsurface term, a wetness boost or a rim darkening can be driven off the image the `StandardMaterial` is already sampling, with no second texture and no second upload. Both are **output**: the depth buffer stays the authority and nothing here reads a pixel back.
 
+The crate's own flesh material does exactly that (0.5.52): it reads `R` around each peeled texel to find the crater's walls and lights the floor only by the share of the room it can see between them, so a deep crater darkens toward its middle. See `bevy_carnage::flesh`.
+
 ## The digest
 
 `digest()` folds the depth buffer and **nothing else** — not the pixels. `shade` is a pure function of that buffer, the layer table and the settings, so folding the pixels as well would hash the same information twice and would make a palette tweak read as a simulation divergence. The frozen golden is `the_scripted_wound_is_frozen`, and moving that number is a deliberate act.

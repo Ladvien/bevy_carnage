@@ -64,6 +64,16 @@
 //! film's clear coat. Off by default; the preset's broken pieces wear it since 0.5.38, where a bare fat
 //! band read as cheese, and its skins' craters since 0.5.42, where a crater was a ring of bare fat.
 //!
+//! **A crater is lit through its mouth** (0.5.52). In [`FleshMode::Canvas`], a texel below the skin
+//! looks out over the flaymap's own depth in eight directions, to 1, 3, 7 and 15 texels, for the
+//! highest wall it sees each way, and every light term on it — diffuse, coat, subsurface — is
+//! multiplied by `1 − mean(sin h)`: the cosine-weighted share of its view that clears the walls, the
+//! same crossed-strings result a laceration's bed is lit by. The walls are measured in millimetres,
+//! the depth from the canvas's `R` channel over [`FleshParams::cut`]`.y` (the layer span) and the
+//! canvas's size on the body from screen-space derivatives of the position and the UV. A deep
+//! crater's floor darkens and its rim keeps its red; drawn as open skin, a crater pooled with blood
+//! was the same red to its middle whatever its depth. It leaves out light the walls throw back.
+//!
 //! # Determinism
 //!
 //! Both lookup tables are pure functions of their inputs, computed with `libm` so two machines bake
@@ -181,9 +191,11 @@ pub struct FleshParams {
     pub sss: Vec4,
     /// `x` the thickest film of blood exposed tissue wears, mm: a cut face in [`FleshMode::Cap`], and
     /// a crater's walls where the skin is peeled in [`FleshMode::Canvas`]; `0` (as
-    /// [`FleshParams::for_layers`] ships) draws the tissue bare. `y`, `z` and `w` are unused. The film
-    /// is `x` from half the layer span below the skin down, and a quarter of it at the skin, so the
-    /// rim's fat shows through. See [`FleshParams::with_cut_film`].
+    /// [`FleshParams::for_layers`] ships) draws the tissue bare. The film is `x` from half the layer
+    /// span below the skin down, and a quarter of it at the skin, so the rim's fat shows through. See
+    /// [`FleshParams::with_cut_film`]. `y` the layer span, mm — the depth a flaymap's `R` channel reads
+    /// `1` at — which a crater's walls are measured in when the shader works out how much light
+    /// reaches its floor. `z` and `w` are unused.
     pub cut: Vec4,
 }
 
@@ -209,7 +221,7 @@ impl FleshParams {
             bands: Vec4::new(s[1] / span, s[2] / span, s[3] / span, s[4] / span),
             wet: Vec4::new(0.3, 0.3, 2.0, SO2_VENOUS),
             sss: Vec4::new(1.0, mm_per_unit, mode.code(), 0.0),
-            cut: Vec4::ZERO,
+            cut: Vec4::new(0.0, span, 0.0, 0.0),
         }
     }
 
