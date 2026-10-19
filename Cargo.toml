@@ -1,5 +1,10 @@
 [package]
 name = "bevy_carnage"
+# **`0.7.0`: a skinned body breaks where its skeleton is** (`AG-139`). `fracture_skeleton` cuts a rigidly
+# skinned body's meshes into one piece per group of joints, once, and declares a bond at each joint where two
+# pieces meet (`BondGraph::declared`), so the region queries and `BondGraph::islands` that work on a cell
+# fracture work on a skeleton. A triangle spanning two groups is refused (`SkeletalRefusal::SplitTriangle`).
+#
 # **`0.6.0`: Bevy 0.20** (`AG-138`). The standalone repo is the source of truth from here; `vfx` is off by
 # default and cannot build until bevy_hanabi publishes for Bevy 0.20. The two shaders are WESL now
 # (`flesh.wesl`, `flesh_prepass.wesl`); `Cuboid` and `Sphere` live in `bevy::shape`. `cargo test` passes except
@@ -385,7 +390,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"

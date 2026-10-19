@@ -17,6 +17,7 @@ mod order;
 mod policy;
 mod proxy;
 mod severance;
+mod skeleton;
 mod soup;
 mod tree;
 mod v3;
@@ -54,6 +55,7 @@ pub use policy::{
 };
 pub use proxy::ProxyCell;
 pub use severance::{Reach, capsule, directional, radial, spread, swept_triangle};
+pub use skeleton::{JointGroup, JointLink, SkeletalFracture, SkeletalPiece, SkeletalRefusal, fracture_skeleton};
 pub use tree::{FragmentId, FragmentTree, TreeNode};
 #[cfg(feature = "vfx")]
 pub use vfx::{

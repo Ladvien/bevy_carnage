@@ -230,6 +230,52 @@ impl BondGraph {
         BondGraph { bonds, incident, centers, members: ids }
     }
 
+    /// **A graph whose bonds the caller declares**, for fragments that do not share faces: a skinned
+    /// body's bones meet at joints, not over coplanar polygons, so [`BondGraph::of`] would report each
+    /// bone as its own island.
+    ///
+    /// `centers` are the fragments' `(id, centre)` pairs and `capacity` the number of ids, as in
+    /// [`BondGraph::of`]; an id at or past `capacity`, or one listed twice (the first wins), is left
+    /// out. A bond with `a >= b`, an end at or past `capacity`, or the same `(a, b)` as an earlier one
+    /// is dropped, the first wins. The bonds come out sorted by `(a, b)`, so the graph is a function of
+    /// what was declared and not of the order it was declared in.
+    ///
+    /// **`area` is the caller's, and unitless on a declared bond**: nothing here measures a face, and a
+    /// query that weighs bonds by area (none in this crate does) would be weighing the caller's own
+    /// number.
+    pub fn declared(centers: &[(FragmentId, Vec3)], bonds: Vec<Bond>, capacity: usize) -> BondGraph {
+        let mut slots: Vec<Option<Vec3>> = vec![None; capacity];
+        let mut ids: Vec<FragmentId> = Vec::with_capacity(centers.len());
+        for &(id, center) in centers {
+            let Some(slot) = slots.get_mut(id.index()) else { continue };
+            if slot.is_none() {
+                *slot = Some(center);
+                ids.push(id);
+            }
+        }
+        // SORT-OK: FragmentIds by the whole value, listed once each by the guard above.
+        ids.sort_unstable();
+
+        let mut seen: std::collections::HashSet<(FragmentId, FragmentId)> = std::collections::HashSet::new();
+        let mut kept: Vec<Bond> = bonds
+            .into_iter()
+            .filter(|bond| bond.a < bond.b && bond.b.index() < capacity && seen.insert((bond.a, bond.b)))
+            .collect();
+        // SORT-OK: `(a, b)` is unique per bond by the `seen` guard, so the key is total.
+        kept.sort_unstable_by_key(|bond| (bond.a, bond.b));
+
+        let mut incident = vec![Vec::new(); capacity];
+        for (i, bond) in kept.iter().enumerate() {
+            let id = BondId(i as u32);
+            for end in [bond.a, bond.b] {
+                if let Some(slot) = incident.get_mut(end.index()) {
+                    slot.push(id);
+                }
+            }
+        }
+        BondGraph { bonds: kept, incident, centers: slots, members: ids }
+    }
+
     /// The frontier this graph covers, in ascending id order.
     pub fn members(&self) -> &[FragmentId] {
         &self.members
