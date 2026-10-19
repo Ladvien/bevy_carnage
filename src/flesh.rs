@@ -61,7 +61,7 @@
 //!
 //! **A film's edge is a line.** The wet map is read as a cubic B-spline in four bilinear taps (Sigg &
 //! Hadwiger, *GPU Gems 2*, ch. 20), not one bilinear tap, and its rim is drawn crisp at 4 % of the
-//! canvas's film depth (`WET_EDGE` in `flesh.wgsl`, own number), sharpened over one pixel's change
+//! canvas's film depth (`WET_EDGE` in `flesh.wesl`, own number), sharpened over one pixel's change
 //! in the smoothed amount. A bilinear read of a canvas whose texels are wet or not drew every rim as
 //! the texels' staircase, soft and fringed; the spline's level set is a curve, so a run ends in a
 //! round drop and a pool in a smooth line however far the canvas is magnified. Since 0.5.36.
@@ -317,13 +317,13 @@ impl FleshExtension {
 
 impl MaterialExtension for FleshExtension {
     fn fragment_shader() -> ShaderRef {
-        ShaderRef::Path(AssetPath::parse("embedded://bevy_carnage/flesh.wgsl"))
+        ShaderRef::Path(AssetPath::parse("embedded://bevy_carnage/flesh.wesl"))
     }
 
     /// Bevy's own prepass plus a cloth's holes, so a hole is cut from the depth prepass and the
     /// shadow maps as well as from the colour.
     fn prepass_fragment_shader() -> ShaderRef {
-        ShaderRef::Path(AssetPath::parse("embedded://bevy_carnage/flesh_prepass.wgsl"))
+        ShaderRef::Path(AssetPath::parse("embedded://bevy_carnage/flesh_prepass.wesl"))
     }
 }
 
@@ -392,8 +392,8 @@ pub struct FleshSystems;
 
 impl Plugin for FleshPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "flesh.wgsl");
-        embedded_asset!(app, "flesh_prepass.wgsl");
+        embedded_asset!(app, "flesh.wesl");
+        embedded_asset!(app, "flesh_prepass.wesl");
         app.init_resource::<FleshTables>()
             .add_plugins(MaterialPlugin::<FleshMaterial>::default())
             .add_systems(Startup, bake_tables.in_set(FleshSystems));

@@ -403,7 +403,8 @@ mod tests {
     use crate::CutSettings;
     use crate::mesh::fracture_mesh;
     use crate::proxy::ProxyCell;
-    use bevy::math::{Mat4, Vec3, primitives::Cuboid};
+    use bevy::math::{Mat4, Vec3};
+    use bevy::shape::Cuboid;
     use isomesh::validate::check_determinism;
     /// A cuboid and the single convex cell that is exactly its own shape.
     ///

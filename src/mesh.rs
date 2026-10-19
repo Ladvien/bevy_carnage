@@ -860,7 +860,7 @@ impl Fracture {
 mod tests {
     use super::*;
     use crate::proxy::ProxyCell;
-    use bevy::math::primitives::Cuboid;
+    use bevy::shape::Cuboid;
 
     fn cube_soup() -> Soup {
         let mut s = Soup::default();

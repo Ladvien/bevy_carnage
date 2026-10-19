@@ -14,7 +14,7 @@ use bevy::app::{App, TaskPoolPlugin};
 use bevy::asset::{AssetPlugin, Assets};
 use bevy::ecs::component::Component;
 use bevy::image::{Image, ImagePlugin};
-use bevy::math::primitives::Sphere;
+use bevy::shape::Sphere;
 use bevy::math::{Vec2, Vec3};
 use bevy::mesh::{Mesh, Meshable, PrimitiveTopology};
 use bevy::transform::components::GlobalTransform;

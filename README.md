@@ -158,7 +158,8 @@ fn on_death(cache: Res<FractureCache>, subject: &FractureSubject) {
 You do not need an `App` to use the fracture itself. `fracture_mesh` is the whole pipeline with no assets and no ECS — meshes in, meshes out:
 
 ```rust
-use bevy::math::{Mat4, Vec3, primitives::Cuboid};
+use bevy::math::{Mat4, Vec3};
+use bevy::shape::Cuboid;
 use bevy::mesh::Mesh;
 use bevy_carnage::{CutSettings, ProxyCell, fracture_mesh};
 

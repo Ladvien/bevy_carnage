@@ -14,7 +14,8 @@
 //!
 //! Run: `cargo run -p bevy_carnage --example fracture_cube`
 
-use bevy::math::{Mat4, Vec3, primitives::Cuboid};
+use bevy::math::{Mat4, Vec3};
+use bevy::shape::Cuboid;
 use bevy::mesh::Mesh;
 use bevy_carnage::{Bore, BondSet, CutSettings, FragmentGeometry, ProxyCell, fracture_mesh};
 

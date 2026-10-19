@@ -1,5 +1,10 @@
 [package]
 name = "bevy_carnage"
+# **`0.6.0`: Bevy 0.20** (`AG-138`). The standalone repo is the source of truth from here; `vfx` is off by
+# default and cannot build until bevy_hanabi publishes for Bevy 0.20. The two shaders are WESL now
+# (`flesh.wesl`, `flesh_prepass.wesl`); `Cuboid` and `Sphere` live in `bevy::shape`. `cargo test` passes except
+# `preset::tests::a_wound_stains_the_floor_beneath_it`, which fails the same way on 0.5.64 under Bevy 0.19.
+#
 # **`0.5.64`: a drop in flight is a streak** (`AG-137`). The spray drew every droplet as a disc as
 # wide as it was long, and read as red dots round the wound. A droplet is drawn its width plus
 # `vfx::DROPLET_STREAK_S` (1/90 s) of its flight along its velocity, and the spray's widths are
@@ -380,7 +385,7 @@ name = "bevy_carnage"
 # `0.1.1` was documentation only: `0.1.0`'s README was packaged before the publish-prep edits landed and
 # told a reader on crates.io that the crate is "not on crates.io". A published version cannot be
 # amended, so that correction shipped as a patch release. No code changed between those two.
-version = "0.5.64"
+version = "0.6.0"
 edition = "2024"
 description = "Deterministic runtime gore for Bevy: plane-cut a character's own meshes into watertight-capped chunks, bore bullet channels through them, and drive blood, spatter and impact feel off the wounds that result."
 license = "MIT OR Apache-2.0"
@@ -399,7 +404,7 @@ exclude = ["docs/*.gif"]
 # The bake reads whatever scene a subject loads and writes `Mesh` assets back, so it needs the asset
 # arena, the mesh types, PBR's material handle for the detached part, the ECS/app to be a plugin at all,
 # and `log` for the loud refusals that are this crate's answer to bad input.
-bevy = { version = "0.19.0", default-features = false, features = [
+bevy = { version = "0.20.0", default-features = false, features = [
     "bevy_asset",   # Assets<Mesh>, Handle<T>, AssetId<T>, AssetPath, RenderAssetUsages
     "bevy_mesh",    # Mesh, Mesh3d, Indices, PrimitiveTopology, VertexAttributeValues
     "bevy_pbr",     # StandardMaterial / MeshMaterial3d — the detached part keeps its own material
@@ -513,7 +518,7 @@ bevy_hanabi = { version = "0.19", default-features = false, features = ["3d"], o
 # umbrella here, where it cannot reach a consumer's dependency graph. `tests/leaf.rs` reads
 # `[dependencies]` only, deliberately.
 [dev-dependencies]
-bevy = { version = "0.19.0" }
+bevy = { version = "0.20.0" }
 # **A RON parser, for one test and one reason.** `FractureSettings` is `deny_unknown_fields` with every
 # field required, so adding a dial breaks every authored file that enumerated the others — at load time,
 # which no compile catches. `a_config_written_before_ejecta_soften_still_loads` pins that against the
@@ -530,10 +535,10 @@ ron = { version = "0.12" }
 # (`bevy_render-0.19.0/src/settings.rs` selects `Backends::BROWSER_WEBGPU` on wasm when both are on),
 # so these modules are WebGPU-only and `web/play.html` gates on an adapter before importing them.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-bevy = { version = "0.19", default-features = false, features = ["web", "webgpu"] }
+bevy = { version = "0.20", default-features = false, features = ["web", "webgpu"] }
 
 [features]
-default = ["serde", "vfx", "flesh"]
+default = ["serde", "flesh"]
 
 # **The pixel half.** `FleshMaterial`, an `ExtendedMaterial<StandardMaterial, _>` with an embedded
 # WGSL, its two CPU-baked tables and the `libm` that bakes them. On by default and **wasm-safe**: it

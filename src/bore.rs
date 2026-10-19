@@ -548,7 +548,8 @@ mod tests {
     use crate::bond::{BondGraph, BondSet};
     use crate::mesh::fracture_mesh;
     use crate::soup::signed_dist;
-    use bevy::math::{Mat4, Vec3, primitives::Cuboid};
+    use bevy::math::{Mat4, Vec3};
+    use bevy::shape::Cuboid;
     use bevy::mesh::{Mesh, VertexAttributeValues};
 
     /// A 1×2×1 cuboid and the single convex cell that is exactly its own shape.

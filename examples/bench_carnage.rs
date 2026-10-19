@@ -49,7 +49,8 @@
 use std::cmp::Ordering;
 use std::time::{Duration, Instant};
 
-use bevy::math::{Mat4, Vec3, primitives::Cuboid};
+use bevy::math::{Mat4, Vec3};
+use bevy::shape::Cuboid;
 use bevy::mesh::{Mesh, VertexAttributeValues};
 use bevy_carnage::{
     Bleed, BloodSettings, Bore, CarnageSettings, CutSettings, Droplet, Ejecta, FragmentGeometry,

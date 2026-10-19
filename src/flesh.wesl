@@ -3,7 +3,7 @@
 // Forward path only. In the prepass this writes the ordinary gbuffer; the wrap term is a
 // post-lighting correction and a deferred lighting pass would not see it.
 
-#import bevy_pbr::{
+import bevy_pbr::render::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_bindings,
     pbr_functions::alpha_discard,
@@ -12,19 +12,18 @@
     mesh_view_types,
     mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT,
     shadows,
-}
+};
 
-#ifdef PREPASS_PIPELINE
-#import bevy_pbr::{
-    prepass_io::{VertexOutput, FragmentOutput},
-    pbr_deferred_functions::deferred_output,
-}
-#else
-#import bevy_pbr::{
+@if(PREPASS_PIPELINE)
+import bevy_pbr::{
+    prepass::io::{VertexOutput, FragmentOutput},
+    deferred::functions::deferred_output,
+};
+@else
+import bevy_pbr::render::{
     forward_io::{VertexOutput, FragmentOutput},
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
-}
-#endif
+};
 
 struct FleshParams {
     bands: vec4<f32>,
@@ -33,16 +32,16 @@ struct FleshParams {
     cut: vec4<f32>,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> flesh: FleshParams;
+@group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> flesh: FleshParams;
 // Both tables in one image (`flesh::luts`): the subsurface table in its top-left corner, the blood
 // table in its last four rows. One image because every texture here counts against the sixteen a stage
 // may sample on WebGL2, and a camera's environment map takes two more.
-@group(#{MATERIAL_BIND_GROUP}) @binding(101) var flesh_luts: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(101) var flesh_luts: texture_2d<f32>;
 // One sampler for all four: linear, clamped, level zero — see `FleshExtension`.
-@group(#{MATERIAL_BIND_GROUP}) @binding(102) var flesh_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(104) var wet_map: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(105) var flay_map: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(106) var dermis_map: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(102) var flesh_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(104) var wet_map: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(105) var flay_map: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(106) var dermis_map: texture_2d<f32>;
 
 const MODE_CAP: f32 = 0.0;
 const MODE_CANVAS: f32 = 1.0;
@@ -265,7 +264,7 @@ fn fragment(
     var film_cn = pbr_input.clearcoat_N; // and of the coat on it
     var film_dh = vec2<f32>(0.0);        // how fast the film's surface rises across the screen
     var flay_mm_per_uv = 0.0;            // the flaymap's size on the body, for a crater's walls
-#ifdef VERTEX_UVS_A
+@if(VERTEX_UVS_A) {
     if (flags & FLAG_WET) != 0u {
         // Smooth inside, and its rim drawn crisp at `WET_EDGE`: a film's edge is a line, and the
         // B-spline alone would leave a soft skirt a texel wide. `fwidth` is the smoothed amount's
@@ -275,7 +274,7 @@ fn fragment(
         let aa = max(fwidth(w.r), 1.0e-4);
         amount = w.r * clamp((w.r - WET_EDGE) / aa + 0.5, 0.0, 1.0);
         wetness = w.a;
-#ifndef PREPASS_PIPELINE
+@if(!PREPASS_PIPELINE) {
         // **A film has a surface.** Its depth, smooth to its second derivative, is a height above
         // what it lies on, and that height tilts the normal: a pool's edge curves down to the floor
         // and catches the light as a meniscus does, a run stands up off the skin, and a pool's
@@ -312,7 +311,7 @@ fn fragment(
             let span = mix(FILM_SMALL_RELIEF, 1.0, smoothstep(FILM_SPAN_LOW, FILM_SPAN_HIGH, around / max(w.r, 0.05)));
             film_dh = vec2<f32>(dot(slope, uv_x), dot(slope, uv_y)) * lift * span;
         }
-#endif
+}
     }
     if (flags & FLAG_FLAY) != 0u {
         // The canvas's roughness image is in the base's metallic-roughness slot (see
@@ -330,12 +329,12 @@ fn fragment(
         let flat = pbr_bindings::material.base_color.rgb;
         let authored = pbr_input.material.base_color.rgb;
         pbr_input.material.base_color = vec4<f32>(canvas + (1.0 - peeled) * (authored - flat), pbr_input.material.base_color.a);
-#ifndef PREPASS_PIPELINE
+@if(!PREPASS_PIPELINE) {
         // The canvas's size on the body, millimetres per UV, from how far the surface and its UV move
         // across a pixel. Taken here, where the flags are uniform: a derivative cannot be taken in
         // the per-pixel branch that uses it.
         flay_mm_per_uv = length(fwidth(pbr_input.world_position.xyz)) / max(length(fwidth(in.uv)), 1.0e-9) * flesh.sss.y;
-#endif
+}
     }
     // What lies under intact skin: a bruise's chromophores or a burn's eschar modulate the skin's
     // own colour (the map is a ratio, linear), and go with the skin when it is peeled. On cloth the
@@ -353,7 +352,7 @@ fn fragment(
             pbr_input.material.base_color = vec4<f32>(pbr_input.material.base_color.rgb * ratio, pbr_input.material.base_color.a);
         }
     }
-#ifndef PREPASS_PIPELINE
+@if(!PREPASS_PIPELINE) {
     // **Blood in a crater lies level.** It fills a hollow the skin was peeled from, so the relief
     // is a film's on intact skin and none of it shows over a peeled texel; lifted there, the clots of
     // a crater seen close stood up as cobbles with dark crevices between them.
@@ -362,13 +361,13 @@ fn fragment(
         film_n = lifted_normal(pbr_input.N, pbr_input.world_position.xyz, dh);
         film_cn = lifted_normal(pbr_input.clearcoat_N, pbr_input.world_position.xyz, dh);
     }
-#endif
-#endif
-#ifdef VERTEX_UVS_B
+}
+}
+@if(VERTEX_UVS_B) {
     if mode == MODE_CAP {
         depth_frac = in.uv_b.x;
     }
-#endif
+}
     // ---- Exposed tissue, wet with its own blood (`FleshParams::cut`). ------------------------
     // A cut face, and a crater's walls where the skin is peeled. Thickest where the vessels are, in
     // the muscle, by the tissue's own depth below the skin (`UV_1.x` on a cap, the flaymap's depth on
@@ -381,12 +380,12 @@ fn fragment(
     var cut_coat = 0.0;
     var exposed = 0.0;
     var rim = 0.0;
-#ifdef VERTEX_UVS_B
+@if(VERTEX_UVS_B) {
     if mode == MODE_CAP {
         exposed = 1.0;
         rim = 0.25;
     }
-#endif
+}
     if mode == MODE_CANVAS {
         exposed = peeled;
         rim = GRAZE_FILM * smoothstep(0.0, GRAZE_RAMP, depth_frac);
@@ -434,12 +433,13 @@ fn fragment(
     pbr_input.material.clearcoat = coat;
     pbr_input.material.clearcoat_perceptual_roughness = flesh.wet.y;
 
-    pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
+    pbr_input.material.base_color = alpha_discard(pbr_input.material.flags, pbr_input.material.alpha_cutoff, pbr_input.material.base_color);
 
-#ifdef PREPASS_PIPELINE
+@if(PREPASS_PIPELINE)
     let out = deferred_output(in, pbr_input);
-#else
+@if(!PREPASS_PIPELINE)
     var out: FragmentOutput;
+@if(!PREPASS_PIPELINE) {
     out.color = apply_pbr_lighting(pbr_input);
 
     // ---- Subsurface: the wrap the diffusion profile adds past the terminator. -----------------
@@ -484,7 +484,7 @@ fn fragment(
         out.color = vec4<f32>(out.color.rgb + extra * strength * view_bindings::view.exposure, out.color.a);
     }
 
-#ifdef VERTEX_UVS_A
+@if(VERTEX_UVS_A) {
     // ---- A crater is lit through its mouth. -------------------------------------------------
     // Every light term, the coat's and the subsurface's with them: a crater's floor sees the room
     // only between its walls (`crater_light`). Drawn as open skin, a wound pooled with blood was a
@@ -493,10 +493,10 @@ fn fragment(
         let lit = crater_light(in.uv, depth_frac * flesh.cut.y, flay_mm_per_uv);
         out.color = vec4<f32>(out.color.rgb * lit, out.color.a);
     }
-#endif
+}
 
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
-#endif
+}
 
     return out;
 }
