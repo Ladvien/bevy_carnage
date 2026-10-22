@@ -8,8 +8,12 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,17 +21,9 @@ env:
 jobs:
   build:
     name: build (standalone) + test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, big]
     steps:
       - uses: actions/checkout@v4
-
-      # Bevy's Linux build needs ALSA / udev / windowing dev headers even though nothing here opens a
-      # window. No GPU is used: every test in this crate is CPU geometry.
-      - name: Install Bevy build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -43,8 +39,9 @@ jobs:
       # A plain `cargo build` takes no dev-dependencies, so it compiles exactly the feature set a
       # consumer gets. It is the only step here that checks the crate is actually usable.
       - name: Build with only the declared features
-        run: cargo build --release
+        run: cargo build
 
+      # No GPU is used: every test in this crate is CPU geometry.
       - name: Test
         run: cargo test
 
